@@ -80,6 +80,7 @@ interface Conversation {
   updatedAt: string;
   note: string;
   closingSource?: 'ai' | 'manual' | null;
+  salesOutcome?: 'pending' | 'ai_won' | 'manual_won' | 'cancelled';
 }
 
 interface Stats {
@@ -87,6 +88,7 @@ interface Stats {
   closings: number;
   ai_closings?: number;
   manual_closings?: number;
+  cancelled?: number;
   handovers: number;
   closed_today: number;
   date: string;
@@ -117,6 +119,8 @@ export default function PanelPage() {
   const setConversationStatus = useMutation(api.state.setConversationStatusFromN8n);
   const markNotClosing = useMutation(api.state.markConversationNotClosing);
   const markClosing = useMutation(api.state.markConversationClosing);
+  const markCancelled = useMutation(api.state.markConversationCancelled);
+  const undoCancelled = useMutation(api.state.undoConversationCancelled);
   const deleteOrder = useMutation(api.state.deleteConversationOrder);
   const setGlobalAiEnabled = useMutation(api.settings.setGlobalAiEnabled);
 
@@ -132,6 +136,7 @@ export default function PanelPage() {
     closings: statsData?.closings ?? 0,
     ai_closings: statsData?.ai_closings ?? 0,
     manual_closings: statsData?.manual_closings ?? 0,
+    cancelled: statsData?.cancelled ?? 0,
     handovers: statsData?.handovers ?? 0,
     closed_today: statsData?.closed_today ?? 0,
     date: statsData?.date ?? '',
@@ -162,17 +167,37 @@ export default function PanelPage() {
     await markNotClosing({
       phone: conversation.phone,
       order_id: conversation.order_id,
-      note: 'not closing / corrected by CS',
+      note: 'marked not won by CS',
     });
     setActionLoading(null);
   };
 
-  const closingManual = async (conversation: Conversation) => {
+  const markWonManual = async (conversation: Conversation) => {
     setActionLoading(conversation.phone + ':mark-closing');
     await markClosing({
       phone: conversation.phone,
       order_id: conversation.order_id,
-      note: 'manual closing by CS',
+      note: 'marked won by CS',
+    });
+    setActionLoading(null);
+  };
+
+  const cancelOrder = async (conversation: Conversation) => {
+    setActionLoading(conversation.phone + ':mark-cancelled');
+    await markCancelled({
+      phone: conversation.phone,
+      order_id: conversation.order_id,
+      note: 'customer cancelled',
+    });
+    setActionLoading(null);
+  };
+
+  const undoCancelOrder = async (conversation: Conversation) => {
+    setActionLoading(conversation.phone + ':undo-cancelled');
+    await undoCancelled({
+      phone: conversation.phone,
+      order_id: conversation.order_id,
+      note: 'cancel undone by CS',
     });
     setActionLoading(null);
   };
@@ -219,7 +244,7 @@ export default function PanelPage() {
   const queueItems: Array<{ key: QueueKey; label: string; count: number }> = [
     { key: 'active', label: 'Active', count: active.length },
     { key: 'handover', label: 'Handover', count: handover.length },
-    { key: 'closed', label: 'Closed Today', count: closed.length },
+    { key: 'closed', label: 'Archived Today', count: closed.length },
     { key: 'all', label: 'All', count: conversations.length },
   ];
 
@@ -233,23 +258,30 @@ export default function PanelPage() {
         tone: 'text-sky-400',
       },
       {
-        label: 'AI closings',
+        label: 'AI won',
         value: stats.ai_closings ?? Math.max(stats.closings - (stats.manual_closings ?? 0), 0),
         detail: 'Detected by AI',
         icon: CheckCircle2,
         tone: 'text-emerald-400',
       },
       {
-        label: 'Manual closings',
+        label: 'Manual won',
         value: stats.manual_closings ?? 0,
         detail: 'Marked by CS',
         icon: CheckCircle2,
         tone: 'text-sky-400',
       },
       {
-        label: 'AI CR',
+        label: 'Cancelled',
+        value: stats.cancelled ?? 0,
+        detail: 'Customer cancelled',
+        icon: CircleAlert,
+        tone: 'text-destructive',
+      },
+      {
+        label: 'Win rate',
         value: `${crAI}%`,
-        detail: 'Total closings / orders',
+        detail: 'Won / orders',
         icon: BarChart3,
         tone: crAI > 100 ? 'text-destructive' : 'text-emerald-400',
       },
@@ -275,9 +307,9 @@ export default function PanelPage() {
         tone: 'text-sky-400',
       },
       {
-        label: 'Closed today',
+        label: 'Archived today',
         value: stats.closed_today,
-        detail: 'Marked finished',
+        detail: 'Chat archived',
         icon: Clock3,
         tone: 'text-muted-foreground',
       },
@@ -381,7 +413,7 @@ export default function PanelPage() {
           <div className="space-y-6 p-4 md:p-6">
             <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
               {loading
-                ? Array.from({ length: 8 }).map((_, index) => <MetricSkeleton key={index} />)
+                ? Array.from({ length: 9 }).map((_, index) => <MetricSkeleton key={index} />)
                 : cards.map((card) => <MetricCard key={card.label} {...card} />)}
             </section>
 
@@ -397,8 +429,10 @@ export default function PanelPage() {
                   searchQuery={searchQuery}
                   selectedQueue={selectedQueue}
                   onDeleteOrder={setPendingDelete}
-                  onMarkClosing={closingManual}
+                  onMarkCancelled={cancelOrder}
+                  onMarkClosing={markWonManual}
                   onNotClosing={notClosing}
+                  onUndoCancelled={undoCancelOrder}
                   onOpenDetail={setSelectedConversation}
                   onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
                   onResumeAI={(conversation) => setStatus(conversation.phone, 'active', undefined, conversation.order_id)}
@@ -416,7 +450,7 @@ export default function PanelPage() {
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <ReadinessRow label="n8n State Manager" value="Connected" ok />
-                    <ReadinessRow label="Closing dedup" value="order_id" ok />
+                    <ReadinessRow label="Outcome dedup" value="order_id" ok />
                     <ReadinessRow label="Global AI switch" value={globalEnabled ? 'Enabled' : 'Disabled'} ok={globalEnabled} />
                     <Separator />
                     <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
@@ -432,9 +466,10 @@ export default function PanelPage() {
                   </CardHeader>
                   <CardContent className="space-y-2 text-sm text-muted-foreground">
                     <Formula label="Orders" value="unique phone + product" />
-                    <Formula label="AI Closing" value="AI detected" />
-                    <Formula label="Manual Closing" value="CS marked" />
-                    <Formula label="CR AI" value="total closings / orders" />
+                    <Formula label="AI Won" value="AI detected" />
+                    <Formula label="Manual Won" value="CS marked" />
+                    <Formula label="Cancelled" value="CS marked" />
+                    <Formula label="Win rate" value="won / orders" />
                     <Formula label="Handover rate" value="current handovers / orders" />
                   </CardContent>
                 </Card>
@@ -448,7 +483,9 @@ export default function PanelPage() {
         conversation={selectedConversation}
         onNotClosing={notClosing}
         onDeleteOrder={setPendingDelete}
-        onMarkClosing={closingManual}
+        onMarkCancelled={cancelOrder}
+        onMarkClosing={markWonManual}
+        onUndoCancelled={undoCancelOrder}
         onOpenChange={(open) => {
           if (!open) setSelectedConversation(null);
         }}
@@ -519,6 +556,7 @@ function ConversationPanel({
   searchQuery,
   selectedQueue,
   onDeleteOrder,
+  onMarkCancelled,
   onMarkClosing,
   onNotClosing,
   onOpenDetail,
@@ -527,6 +565,7 @@ function ConversationPanel({
   onSelesai,
   onSearchChange,
   onSelectQueue,
+  onUndoCancelled,
 }: {
   title: string;
   description: string;
@@ -537,6 +576,7 @@ function ConversationPanel({
   searchQuery: string;
   selectedQueue: QueueKey;
   onDeleteOrder: (conversation: Conversation) => void;
+  onMarkCancelled: (conversation: Conversation) => void;
   onMarkClosing: (conversation: Conversation) => void;
   onNotClosing: (conversation: Conversation) => void;
   onOpenDetail: (conversation: Conversation) => void;
@@ -545,6 +585,7 @@ function ConversationPanel({
   onSelesai: (conversation: Conversation) => void;
   onSearchChange: (value: string) => void;
   onSelectQueue: (queue: QueueKey) => void;
+  onUndoCancelled: (conversation: Conversation) => void;
 }) {
   return (
     <Card>
@@ -631,9 +672,9 @@ function ConversationPanel({
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={conversation.status} />
-                      {conversation.closingSource && (
+                      {conversation.salesOutcome && conversation.salesOutcome !== 'pending' && (
                         <div className="mt-1">
-                          <ClosingBadge source={conversation.closingSource} />
+                          <OutcomeBadge outcome={conversation.salesOutcome} />
                         </div>
                       )}
                       {conversation.note && (
@@ -675,7 +716,7 @@ function ConversationPanel({
                             Pause AI
                           </Button>
                         )}
-                        {!conversation.closingSource && (
+                        {conversation.salesOutcome !== 'cancelled' && !conversation.closingSource && (
                           <Button
                             disabled={actionLoading === conversation.phone + ':mark-closing'}
                             onClick={() => onMarkClosing(conversation)}
@@ -683,7 +724,26 @@ function ConversationPanel({
                             variant="secondary"
                           >
                             <CheckCircle2 className="size-3.5" />
-                            Mark Closing
+                            Mark Won
+                          </Button>
+                        )}
+                        {conversation.salesOutcome === 'cancelled' ? (
+                          <Button
+                            disabled={actionLoading === conversation.phone + ':undo-cancelled'}
+                            onClick={() => onUndoCancelled(conversation)}
+                            size="sm"
+                            variant="secondary"
+                          >
+                            Undo Cancel
+                          </Button>
+                        ) : (
+                          <Button
+                            disabled={actionLoading === conversation.phone + ':mark-cancelled'}
+                            onClick={() => onMarkCancelled(conversation)}
+                            size="sm"
+                            variant="outline"
+                          >
+                            Mark Cancelled
                           </Button>
                         )}
                         {conversation.status === 'handover' && (
@@ -714,7 +774,7 @@ function ConversationPanel({
                               size="sm"
                               variant="outline"
                             >
-                              Not Closing
+                              Mark Not Won
                             </Button>
                           </>
                         ) : (
@@ -725,7 +785,7 @@ function ConversationPanel({
                             variant="destructive"
                           >
                             <CheckCircle2 className="size-3.5" />
-                            Close Chat
+                            Archive
                           </Button>
                         )}
                         <Button
@@ -755,21 +815,25 @@ function ConversationDetailSheet({
   actionLoading,
   onOpenChange,
   onDeleteOrder,
+  onMarkCancelled,
   onMarkClosing,
   onPauseAI,
   onResumeAI,
   onSelesai,
   onNotClosing,
+  onUndoCancelled,
 }: {
   conversation: Conversation | null;
   actionLoading: string | null;
   onOpenChange: (open: boolean) => void;
   onDeleteOrder: (conversation: Conversation) => void;
+  onMarkCancelled: (conversation: Conversation) => void;
   onMarkClosing: (conversation: Conversation) => void;
   onPauseAI: (conversation: Conversation) => void;
   onResumeAI: (conversation: Conversation) => void;
   onSelesai: (conversation: Conversation) => void;
   onNotClosing: (conversation: Conversation) => void;
+  onUndoCancelled: (conversation: Conversation) => void;
 }) {
   const messages = useQuery(
     api.messages.listMessages,
@@ -789,9 +853,9 @@ function ConversationDetailSheet({
                 </div>
                 <StatusBadge status={conversation.status} />
               </div>
-              {conversation.closingSource && (
+              {conversation.salesOutcome && conversation.salesOutcome !== 'pending' && (
                 <div className="mt-3">
-                  <ClosingBadge source={conversation.closingSource} />
+                  <OutcomeBadge outcome={conversation.salesOutcome} />
                 </div>
               )}
             </SheetHeader>
@@ -873,14 +937,31 @@ function ConversationDetailSheet({
                   Pause AI
                 </Button>
               )}
-              {!conversation.closingSource && (
+              {conversation.salesOutcome !== 'cancelled' && !conversation.closingSource && (
                 <Button
                   disabled={actionLoading === conversation.phone + ':mark-closing'}
                   onClick={() => onMarkClosing(conversation)}
                   variant="secondary"
                 >
                   <CheckCircle2 className="size-4" />
-                  Mark Closing
+                  Mark Won
+                </Button>
+              )}
+              {conversation.salesOutcome === 'cancelled' ? (
+                <Button
+                  disabled={actionLoading === conversation.phone + ':undo-cancelled'}
+                  onClick={() => onUndoCancelled(conversation)}
+                  variant="secondary"
+                >
+                  Undo Cancel
+                </Button>
+              ) : (
+                <Button
+                  disabled={actionLoading === conversation.phone + ':mark-cancelled'}
+                  onClick={() => onMarkCancelled(conversation)}
+                  variant="outline"
+                >
+                  Mark Cancelled
                 </Button>
               )}
               {conversation.status === 'handover' && (
@@ -908,7 +989,7 @@ function ConversationDetailSheet({
                     onClick={() => onNotClosing(conversation)}
                     variant="outline"
                   >
-                    Not Closing
+                    Mark Not Won
                   </Button>
                 </>
               )}
@@ -919,7 +1000,7 @@ function ConversationDetailSheet({
                   variant="destructive"
                 >
                   <CheckCircle2 className="size-4" />
-                  Close Chat
+                  Archive
                 </Button>
               )}
               <Button
@@ -1006,10 +1087,14 @@ function StatusBadge({ status }: { status: Conversation['status'] }) {
   return <Badge className="border-emerald-500/30 text-emerald-400" variant="outline">active</Badge>;
 }
 
-function ClosingBadge({ source }: { source: 'ai' | 'manual' }) {
+function OutcomeBadge({ outcome }: { outcome: 'ai_won' | 'manual_won' | 'cancelled' }) {
+  if (outcome === 'cancelled') {
+    return <Badge className="border-destructive/30 text-destructive" variant="outline">cancelled</Badge>;
+  }
+
   return (
-    <Badge className={source === 'manual' ? 'border-sky-500/30 text-sky-400' : 'border-emerald-500/30 text-emerald-400'} variant="outline">
-      {source === 'manual' ? 'manual closing' : 'AI closing'}
+    <Badge className={outcome === 'manual_won' ? 'border-sky-500/30 text-sky-400' : 'border-emerald-500/30 text-emerald-400'} variant="outline">
+      {outcome === 'manual_won' ? 'manual won' : 'AI won'}
     </Badge>
   );
 }

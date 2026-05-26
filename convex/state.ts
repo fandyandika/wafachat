@@ -28,12 +28,14 @@ function emptyStats(date: string) {
     closings: 0,
     aiClosings: 0,
     manualClosings: 0,
+    cancelled: 0,
     handovers: 0,
     closedToday: 0,
     orderKeys: [] as string[],
     closingKeys: [] as string[],
     aiClosingKeys: [] as string[],
     manualClosingKeys: [] as string[],
+    cancelledKeys: [] as string[],
     handoverKeys: [] as string[],
     closedKeys: [] as string[],
     updatedAt: Date.now(),
@@ -55,8 +57,8 @@ async function getOrCreateStats(ctx: { db: any }, date = getJakartaDate()): Prom
 async function patchStatsWithKey(
   ctx: { db: any },
   args: {
-    field: "orders" | "closings" | "handovers" | "closedToday";
-    keyField: "orderKeys" | "closingKeys" | "handoverKeys" | "closedKeys";
+    field: "orders" | "closings" | "handovers" | "closedToday" | "cancelled";
+    keyField: "orderKeys" | "closingKeys" | "handoverKeys" | "closedKeys" | "cancelledKeys";
     key: string;
     date?: string;
     remove?: boolean;
@@ -377,6 +379,12 @@ export const markConversationNotClosing = mutation({
       key: transitionKey,
       remove: true,
     });
+    await patchStatsWithKey(ctx, {
+      field: "cancelled",
+      keyField: "cancelledKeys",
+      key: transitionKey,
+      remove: true,
+    });
 
     await ctx.db.patch(conversation._id, {
       status: "active",
@@ -402,6 +410,117 @@ export const markConversationNotClosing = mutation({
       previousStatus,
       note: nextNote,
       _action: "not_closing",
+    };
+  },
+});
+
+export const markConversationCancelled = mutation({
+  args: {
+    phone: v.string(),
+    order_id: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+
+    if (!conversation) {
+      return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_cancelled" };
+    }
+
+    const transitionKey = makeTransitionKey({
+      orderId: args.order_id,
+      phone: args.phone,
+      conversation,
+    });
+    const nextNote = args.note ?? "customer cancelled";
+
+    await patchClosingStatsWithKey(ctx, {
+      key: transitionKey,
+      remove: true,
+    });
+    await patchStatsWithKey(ctx, {
+      field: "cancelled",
+      keyField: "cancelledKeys",
+      key: transitionKey,
+    });
+
+    await ctx.db.patch(conversation._id, {
+      note: nextNote,
+      updatedAt: now,
+    });
+
+    await ctx.db.insert("events", {
+      conversationId: conversation._id,
+      orderId: conversation.orderId,
+      customerPhone: conversation.customerPhone,
+      type: "order_cancelled",
+      actor: "cs",
+      metadata: { key: transitionKey, note: nextNote },
+      createdAt: now,
+    });
+
+    return {
+      success: true,
+      phone: conversation.customerPhone,
+      order_id: conversation.orderId,
+      status: conversation.status,
+      note: nextNote,
+      _action: "mark_cancelled",
+    };
+  },
+});
+
+export const undoConversationCancelled = mutation({
+  args: {
+    phone: v.string(),
+    order_id: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+
+    if (!conversation) {
+      return { success: false, error: "conversation not found", phone: args.phone, _action: "undo_cancelled" };
+    }
+
+    const transitionKey = makeTransitionKey({
+      orderId: args.order_id,
+      phone: args.phone,
+      conversation,
+    });
+    const nextNote = args.note ?? "cancel undone by CS";
+
+    await patchStatsWithKey(ctx, {
+      field: "cancelled",
+      keyField: "cancelledKeys",
+      key: transitionKey,
+      remove: true,
+    });
+
+    await ctx.db.patch(conversation._id, {
+      note: nextNote,
+      updatedAt: now,
+    });
+
+    await ctx.db.insert("events", {
+      conversationId: conversation._id,
+      orderId: conversation.orderId,
+      customerPhone: conversation.customerPhone,
+      type: "cancel_undone",
+      actor: "cs",
+      metadata: { key: transitionKey, note: nextNote },
+      createdAt: now,
+    });
+
+    return {
+      success: true,
+      phone: conversation.customerPhone,
+      order_id: conversation.orderId,
+      status: conversation.status,
+      note: nextNote,
+      _action: "undo_cancelled",
     };
   },
 });
@@ -499,6 +618,12 @@ export const deleteConversationOrder = mutation({
       remove: true,
     });
     await patchClosingStatsWithKey(ctx, {
+      key: transitionKey,
+      remove: true,
+    });
+    await patchStatsWithKey(ctx, {
+      field: "cancelled",
+      keyField: "cancelledKeys",
       key: transitionKey,
       remove: true,
     });
@@ -641,6 +766,7 @@ export const listConversations = query({
       const manualClosing = Boolean(stats?.manualClosingKeys?.includes(transitionKey));
       const aiClosing = Boolean(stats?.aiClosingKeys?.includes(transitionKey));
       const totalClosing = Boolean(stats?.closingKeys?.includes(transitionKey));
+      const cancelled = Boolean(stats?.cancelledKeys?.includes(transitionKey));
 
       return {
         conversationId: conversation._id,
@@ -660,6 +786,7 @@ export const listConversations = query({
         order_id: conversation.orderId,
         updatedAt: new Date(conversation.updatedAt).toISOString(),
         note: conversation.note,
+        salesOutcome: cancelled ? "cancelled" : manualClosing ? "manual_won" : aiClosing || totalClosing ? "ai_won" : "pending",
         closingSource: manualClosing ? "manual" : aiClosing || totalClosing ? "ai" : null,
       };
     }));
@@ -683,6 +810,7 @@ export const getDailyStats = query({
         closings: 0,
         ai_closings: 0,
         manual_closings: 0,
+        cancelled: 0,
         handovers: 0,
         closed_today: 0,
         _action: "get_stats",
@@ -696,6 +824,7 @@ export const getDailyStats = query({
       closings: stats.closings,
       ai_closings: stats.aiClosings ?? Math.max(stats.closings - (stats.manualClosings ?? 0), 0),
       manual_closings: stats.manualClosings ?? 0,
+      cancelled: stats.cancelled ?? 0,
       handovers: stats.handovers,
       closed_today: stats.closedToday,
       _action: "get_stats",
