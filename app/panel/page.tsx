@@ -16,9 +16,11 @@ import {
   PauseCircle,
   PlayCircle,
   RefreshCw,
+  Search,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  Trash2,
   UsersRound,
 } from 'lucide-react';
 
@@ -77,15 +79,20 @@ interface Conversation {
   order_id?: string;
   updatedAt: string;
   note: string;
+  closingSource?: 'ai' | 'manual' | null;
 }
 
 interface Stats {
   orders: number;
   closings: number;
+  ai_closings?: number;
+  manual_closings?: number;
   handovers: number;
   closed_today: number;
   date: string;
 }
+
+type QueueKey = 'active' | 'handover' | 'closed' | 'all';
 
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, active: true },
@@ -100,12 +107,17 @@ export default function PanelPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState('');
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
+  const [selectedQueue, setSelectedQueue] = useState<QueueKey>('active');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
 
   const conversationsData = useQuery(api.state.listConversations, { includeClosed: true });
   const statsData = useQuery(api.state.getDailyStats, {});
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
   const setConversationStatus = useMutation(api.state.setConversationStatusFromN8n);
   const markNotClosing = useMutation(api.state.markConversationNotClosing);
+  const markClosing = useMutation(api.state.markConversationClosing);
+  const deleteOrder = useMutation(api.state.deleteConversationOrder);
   const setGlobalAiEnabled = useMutation(api.settings.setGlobalAiEnabled);
 
   useEffect(() => {
@@ -118,6 +130,8 @@ export default function PanelPage() {
   const stats: Stats = {
     orders: statsData?.orders ?? 0,
     closings: statsData?.closings ?? 0,
+    ai_closings: statsData?.ai_closings ?? 0,
+    manual_closings: statsData?.manual_closings ?? 0,
     handovers: statsData?.handovers ?? 0,
     closed_today: statsData?.closed_today ?? 0,
     date: statsData?.date ?? '',
@@ -153,11 +167,61 @@ export default function PanelPage() {
     setActionLoading(null);
   };
 
+  const closingManual = async (conversation: Conversation) => {
+    setActionLoading(conversation.phone + ':mark-closing');
+    await markClosing({
+      phone: conversation.phone,
+      order_id: conversation.order_id,
+      note: 'manual closing by CS',
+    });
+    setActionLoading(null);
+  };
+
+  const confirmDeleteOrder = async () => {
+    if (!pendingDelete) return;
+    setActionLoading(pendingDelete.phone + ':delete');
+    await deleteOrder({
+      phone: pendingDelete.phone,
+      order_id: pendingDelete.order_id,
+    });
+    if (selectedConversation?.order_id === pendingDelete.order_id) {
+      setSelectedConversation(null);
+    }
+    setPendingDelete(null);
+    setActionLoading(null);
+  };
+
   const active = conversations.filter((conversation) => conversation.status === 'active');
   const handover = conversations.filter((conversation) => conversation.status === 'handover');
   const closed = conversations.filter((conversation) => conversation.status === 'closed');
   const crAI = stats.orders > 0 ? Math.round((stats.closings / stats.orders) * 100) : 0;
   const handoverRate = stats.orders > 0 ? Math.round((handover.length / stats.orders) * 100) : 0;
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const rowsByQueue = {
+    active,
+    handover,
+    closed,
+    all: conversations,
+  };
+  const visibleRows = rowsByQueue[selectedQueue].filter((conversation) => {
+    if (!normalizedSearch) return true;
+    return [
+      conversation.customerName,
+      conversation.phone,
+      conversation.order_id,
+      conversation.productName,
+      conversation.products,
+      conversation.note,
+    ]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(normalizedSearch));
+  });
+  const queueItems: Array<{ key: QueueKey; label: string; count: number }> = [
+    { key: 'active', label: 'Active', count: active.length },
+    { key: 'handover', label: 'Handover', count: handover.length },
+    { key: 'closed', label: 'Closed Today', count: closed.length },
+    { key: 'all', label: 'All', count: conversations.length },
+  ];
 
   const cards = useMemo(
     () => [
@@ -170,15 +234,22 @@ export default function PanelPage() {
       },
       {
         label: 'AI closings',
-        value: stats.closings,
-        detail: 'Deduped by order ID',
+        value: stats.ai_closings ?? Math.max(stats.closings - (stats.manual_closings ?? 0), 0),
+        detail: 'Detected by AI',
         icon: CheckCircle2,
         tone: 'text-emerald-400',
       },
       {
+        label: 'Manual closings',
+        value: stats.manual_closings ?? 0,
+        detail: 'Marked by CS',
+        icon: CheckCircle2,
+        tone: 'text-sky-400',
+      },
+      {
         label: 'AI CR',
         value: `${crAI}%`,
-        detail: 'Closing / orders',
+        detail: 'Total closings / orders',
         icon: BarChart3,
         tone: crAI > 100 ? 'text-destructive' : 'text-emerald-400',
       },
@@ -310,55 +381,31 @@ export default function PanelPage() {
           <div className="space-y-6 p-4 md:p-6">
             <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
               {loading
-                ? Array.from({ length: 7 }).map((_, index) => <MetricSkeleton key={index} />)
+                ? Array.from({ length: 8 }).map((_, index) => <MetricSkeleton key={index} />)
                 : cards.map((card) => <MetricCard key={card.label} {...card} />)}
             </section>
 
             <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
               <div className="space-y-6">
-                {handover.length > 0 && (
-                  <ConversationPanel
-                    title="Needs CS attention"
-                    description="Handover conversations should be handled manually."
-                    rows={handover}
-                    actionLoading={actionLoading}
-                    loading={loading}
-                    highlighted
-                    onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
-                    onResumeAI={(conversation) => setStatus(conversation.phone, 'active', undefined, conversation.order_id)}
-                    onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
-                    onNotClosing={notClosing}
-                    onOpenDetail={setSelectedConversation}
-                  />
-                )}
-
                 <ConversationPanel
-                  title="Active conversations"
-                  description="Current non-closed conversations synced from n8n State Manager."
-                  rows={active}
+                  title="Conversation queue"
+                  description="Search, triage, and act on support-AI conversations."
+                  queueItems={queueItems}
+                  rows={visibleRows}
                   actionLoading={actionLoading}
                   loading={loading}
+                  searchQuery={searchQuery}
+                  selectedQueue={selectedQueue}
+                  onDeleteOrder={setPendingDelete}
+                  onMarkClosing={closingManual}
+                  onNotClosing={notClosing}
+                  onOpenDetail={setSelectedConversation}
                   onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
                   onResumeAI={(conversation) => setStatus(conversation.phone, 'active', undefined, conversation.order_id)}
                   onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
-                  onNotClosing={notClosing}
-                  onOpenDetail={setSelectedConversation}
+                  onSearchChange={setSearchQuery}
+                  onSelectQueue={setSelectedQueue}
                 />
-
-                {closed.length > 0 && (
-                  <ConversationPanel
-                    title="Closed today"
-                    description="Finished conversations. Reactivate if Done was clicked by mistake."
-                    rows={closed}
-                    actionLoading={actionLoading}
-                    loading={loading}
-                    onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
-                    onResumeAI={(conversation) => setStatus(conversation.phone, 'active', 'reactivated by CS', conversation.order_id)}
-                    onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
-                    onNotClosing={notClosing}
-                    onOpenDetail={setSelectedConversation}
-                  />
-                )}
               </div>
 
               <aside className="space-y-4">
@@ -385,8 +432,9 @@ export default function PanelPage() {
                   </CardHeader>
                   <CardContent className="space-y-2 text-sm text-muted-foreground">
                     <Formula label="Orders" value="unique phone + product" />
-                    <Formula label="Closing AI" value="unique order_id" />
-                    <Formula label="CR AI" value="closings / orders" />
+                    <Formula label="AI Closing" value="AI detected" />
+                    <Formula label="Manual Closing" value="CS marked" />
+                    <Formula label="CR AI" value="total closings / orders" />
                     <Formula label="Handover rate" value="current handovers / orders" />
                   </CardContent>
                 </Card>
@@ -399,12 +447,20 @@ export default function PanelPage() {
         actionLoading={actionLoading}
         conversation={selectedConversation}
         onNotClosing={notClosing}
+        onDeleteOrder={setPendingDelete}
+        onMarkClosing={closingManual}
         onOpenChange={(open) => {
           if (!open) setSelectedConversation(null);
         }}
         onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
         onResumeAI={(conversation) => setStatus(conversation.phone, 'active', undefined, conversation.order_id)}
         onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
+      />
+      <ConfirmDeleteDialog
+        conversation={pendingDelete}
+        loading={Boolean(pendingDelete && actionLoading === pendingDelete.phone + ':delete')}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={confirmDeleteOrder}
       />
     </div>
   );
@@ -456,40 +512,79 @@ function MetricSkeleton() {
 function ConversationPanel({
   title,
   description,
+  queueItems,
   rows,
   actionLoading,
   loading,
-  highlighted = false,
+  searchQuery,
+  selectedQueue,
+  onDeleteOrder,
+  onMarkClosing,
+  onNotClosing,
+  onOpenDetail,
   onPauseAI,
   onResumeAI,
   onSelesai,
-  onNotClosing,
-  onOpenDetail,
+  onSearchChange,
+  onSelectQueue,
 }: {
   title: string;
   description: string;
+  queueItems: Array<{ key: QueueKey; label: string; count: number }>;
   rows: Conversation[];
   actionLoading: string | null;
   loading: boolean;
-  highlighted?: boolean;
+  searchQuery: string;
+  selectedQueue: QueueKey;
+  onDeleteOrder: (conversation: Conversation) => void;
+  onMarkClosing: (conversation: Conversation) => void;
+  onNotClosing: (conversation: Conversation) => void;
+  onOpenDetail: (conversation: Conversation) => void;
   onPauseAI: (conversation: Conversation) => void;
   onResumeAI: (conversation: Conversation) => void;
   onSelesai: (conversation: Conversation) => void;
-  onNotClosing: (conversation: Conversation) => void;
-  onOpenDetail: (conversation: Conversation) => void;
+  onSearchChange: (value: string) => void;
+  onSelectQueue: (queue: QueueKey) => void;
 }) {
   return (
-    <Card className={cn(highlighted && 'border-amber-500/30 bg-amber-500/5')}>
+    <Card>
       <CardHeader>
         <div>
           <CardTitle className="text-base">{title}</CardTitle>
           <CardDescription>{description}</CardDescription>
         </div>
         <CardAction>
-          <Badge variant={highlighted ? 'outline' : 'secondary'}>{rows.length}</Badge>
+          <Badge variant="secondary">{rows.length}</Badge>
         </CardAction>
       </CardHeader>
       <CardContent>
+        <div className="mb-4 space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {queueItems.map((item) => (
+              <Button
+                aria-pressed={selectedQueue === item.key}
+                key={item.key}
+                onClick={() => onSelectQueue(item.key)}
+                size="sm"
+                variant={selectedQueue === item.key ? 'default' : 'outline'}
+              >
+                {item.label}
+                <Badge className="ml-1" variant={selectedQueue === item.key ? 'secondary' : 'outline'}>
+                  {item.count}
+                </Badge>
+              </Button>
+            ))}
+          </div>
+          <div className="relative max-w-md">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <input
+              className="h-10 w-full rounded-lg border bg-background pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-primary"
+              onChange={(event) => onSearchChange(event.target.value)}
+              placeholder="Search name, phone, order ID, product..."
+              value={searchQuery}
+            />
+          </div>
+        </div>
         {loading ? (
           <div className="space-y-2">
             <Skeleton className="h-10 w-full" />
@@ -505,7 +600,7 @@ function ConversationPanel({
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border">
+          <div className="max-h-[560px] overflow-auto rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -536,6 +631,11 @@ function ConversationPanel({
                     </TableCell>
                     <TableCell>
                       <StatusBadge status={conversation.status} />
+                      {conversation.closingSource && (
+                        <div className="mt-1">
+                          <ClosingBadge source={conversation.closingSource} />
+                        </div>
+                      )}
                       {conversation.note && (
                         <div className="mt-1 max-w-[180px] truncate text-xs text-muted-foreground">{conversation.note}</div>
                       )}
@@ -573,6 +673,17 @@ function ConversationPanel({
                           >
                             <PauseCircle className="size-3.5" />
                             Pause AI
+                          </Button>
+                        )}
+                        {!conversation.closingSource && (
+                          <Button
+                            disabled={actionLoading === conversation.phone + ':mark-closing'}
+                            onClick={() => onMarkClosing(conversation)}
+                            size="sm"
+                            variant="secondary"
+                          >
+                            <CheckCircle2 className="size-3.5" />
+                            Mark Closing
                           </Button>
                         )}
                         {conversation.status === 'handover' && (
@@ -614,9 +725,18 @@ function ConversationPanel({
                             variant="destructive"
                           >
                             <CheckCircle2 className="size-3.5" />
-                            Done
+                            Close Chat
                           </Button>
                         )}
+                        <Button
+                          disabled={actionLoading === conversation.phone + ':delete'}
+                          onClick={() => onDeleteOrder(conversation)}
+                          size="sm"
+                          variant="outline"
+                        >
+                          <Trash2 className="size-3.5" />
+                          Delete
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -634,6 +754,8 @@ function ConversationDetailSheet({
   conversation,
   actionLoading,
   onOpenChange,
+  onDeleteOrder,
+  onMarkClosing,
   onPauseAI,
   onResumeAI,
   onSelesai,
@@ -642,6 +764,8 @@ function ConversationDetailSheet({
   conversation: Conversation | null;
   actionLoading: string | null;
   onOpenChange: (open: boolean) => void;
+  onDeleteOrder: (conversation: Conversation) => void;
+  onMarkClosing: (conversation: Conversation) => void;
   onPauseAI: (conversation: Conversation) => void;
   onResumeAI: (conversation: Conversation) => void;
   onSelesai: (conversation: Conversation) => void;
@@ -665,6 +789,11 @@ function ConversationDetailSheet({
                 </div>
                 <StatusBadge status={conversation.status} />
               </div>
+              {conversation.closingSource && (
+                <div className="mt-3">
+                  <ClosingBadge source={conversation.closingSource} />
+                </div>
+              )}
             </SheetHeader>
 
             <div className="flex-1 space-y-5 overflow-y-auto p-5">
@@ -744,6 +873,16 @@ function ConversationDetailSheet({
                   Pause AI
                 </Button>
               )}
+              {!conversation.closingSource && (
+                <Button
+                  disabled={actionLoading === conversation.phone + ':mark-closing'}
+                  onClick={() => onMarkClosing(conversation)}
+                  variant="secondary"
+                >
+                  <CheckCircle2 className="size-4" />
+                  Mark Closing
+                </Button>
+              )}
               {conversation.status === 'handover' && (
                 <Button
                   disabled={actionLoading === conversation.phone + ':active'}
@@ -780,14 +919,69 @@ function ConversationDetailSheet({
                   variant="destructive"
                 >
                   <CheckCircle2 className="size-4" />
-                  Done
+                  Close Chat
                 </Button>
               )}
+              <Button
+                disabled={actionLoading === conversation.phone + ':delete'}
+                onClick={() => onDeleteOrder(conversation)}
+                variant="outline"
+              >
+                <Trash2 className="size-4" />
+                Delete Order
+              </Button>
             </div>
           </>
         )}
       </SheetContent>
     </Sheet>
+  );
+}
+
+function ConfirmDeleteDialog({
+  conversation,
+  loading,
+  onCancel,
+  onConfirm,
+}: {
+  conversation: Conversation | null;
+  loading: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!conversation) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-md rounded-lg border bg-popover p-5 text-popover-foreground shadow-lg">
+        <div className="flex items-start gap-3">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
+            <Trash2 className="size-5" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold">Delete order?</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              This removes the order, conversation, chat history, and related today counters from Convex. This cannot be
+              undone from the panel.
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 rounded-lg border bg-muted/30 p-3 text-sm">
+          <div className="font-medium">{conversation.customerName || 'Unknown'}</div>
+          <div className="mt-1 font-mono text-xs text-muted-foreground">{conversation.order_id || conversation.phone}</div>
+          <div className="mt-1 text-muted-foreground">{conversation.productName || '-'}</div>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <Button disabled={loading} onClick={onCancel} variant="outline">
+            Cancel
+          </Button>
+          <Button disabled={loading} onClick={onConfirm} variant="destructive">
+            <Trash2 className="size-4" />
+            Delete Order
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -810,6 +1004,14 @@ function StatusBadge({ status }: { status: Conversation['status'] }) {
   }
 
   return <Badge className="border-emerald-500/30 text-emerald-400" variant="outline">active</Badge>;
+}
+
+function ClosingBadge({ source }: { source: 'ai' | 'manual' }) {
+  return (
+    <Badge className={source === 'manual' ? 'border-sky-500/30 text-sky-400' : 'border-emerald-500/30 text-emerald-400'} variant="outline">
+      {source === 'manual' ? 'manual closing' : 'AI closing'}
+    </Badge>
+  );
 }
 
 function ReadinessRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {

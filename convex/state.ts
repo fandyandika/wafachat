@@ -26,10 +26,14 @@ function emptyStats(date: string) {
     date,
     orders: 0,
     closings: 0,
+    aiClosings: 0,
+    manualClosings: 0,
     handovers: 0,
     closedToday: 0,
     orderKeys: [] as string[],
     closingKeys: [] as string[],
+    aiClosingKeys: [] as string[],
+    manualClosingKeys: [] as string[],
     handoverKeys: [] as string[],
     closedKeys: [] as string[],
     updatedAt: Date.now(),
@@ -65,6 +69,45 @@ async function patchStatsWithKey(
   await ctx.db.patch(stats._id, {
     [args.keyField]: nextKeys,
     [args.field]: nextKeys.length,
+    updatedAt: Date.now(),
+  });
+}
+
+async function patchClosingStatsWithKey(
+  ctx: { db: any },
+  args: {
+    key: string;
+    source?: "ai" | "manual";
+    date?: string;
+    remove?: boolean;
+  },
+) {
+  const stats = await getOrCreateStats(ctx, args.date);
+  const closingKeys = unique(stats.closingKeys ?? []);
+  const aiClosingKeys = unique(stats.aiClosingKeys ?? []);
+  const manualClosingKeys = unique(stats.manualClosingKeys ?? []);
+
+  const nextClosingKeys = args.remove ? closingKeys.filter((key) => key !== args.key) : unique([...closingKeys, args.key]);
+  const nextAiClosingKeys =
+    args.remove
+      ? aiClosingKeys.filter((key) => key !== args.key)
+      : args.source === "manual"
+        ? aiClosingKeys
+        : unique([...aiClosingKeys, args.key]);
+  const nextManualClosingKeys =
+    args.remove
+      ? manualClosingKeys.filter((key) => key !== args.key)
+      : args.source === "manual"
+        ? unique([...manualClosingKeys, args.key])
+        : manualClosingKeys;
+
+  await ctx.db.patch(stats._id, {
+    closingKeys: nextClosingKeys,
+    closings: nextClosingKeys.length,
+    aiClosingKeys: nextAiClosingKeys,
+    aiClosings: nextAiClosingKeys.length,
+    manualClosingKeys: nextManualClosingKeys,
+    manualClosings: nextManualClosingKeys.length,
     updatedAt: Date.now(),
   });
 }
@@ -324,20 +367,16 @@ export const markConversationNotClosing = mutation({
     const previousStatus = conversation.status;
 
     await patchStatsWithKey(ctx, {
-      field: "closings",
-      keyField: "closingKeys",
+      field: "closedToday",
+      keyField: "closedKeys",
       key: transitionKey,
       remove: true,
     });
 
-    if (previousStatus === "closed") {
-      await patchStatsWithKey(ctx, {
-        field: "closedToday",
-        keyField: "closedKeys",
-        key: transitionKey,
-        remove: true,
-      });
-    }
+    await patchClosingStatsWithKey(ctx, {
+      key: transitionKey,
+      remove: true,
+    });
 
     await ctx.db.patch(conversation._id, {
       status: "active",
@@ -367,6 +406,140 @@ export const markConversationNotClosing = mutation({
   },
 });
 
+export const markConversationClosing = mutation({
+  args: {
+    phone: v.string(),
+    order_id: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+
+    if (!conversation) {
+      return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_closing" };
+    }
+
+    const transitionKey = makeTransitionKey({
+      orderId: args.order_id,
+      phone: args.phone,
+      conversation,
+    });
+    const nextNote = args.note ?? "manual closing by CS";
+
+    await patchClosingStatsWithKey(ctx, {
+      key: transitionKey,
+      source: "manual",
+    });
+
+    await ctx.db.patch(conversation._id, {
+      note: nextNote,
+      updatedAt: now,
+    });
+
+    await ctx.db.insert("events", {
+      conversationId: conversation._id,
+      orderId: conversation.orderId,
+      customerPhone: conversation.customerPhone,
+      type: "closing_detected",
+      actor: "cs",
+      metadata: { key: transitionKey, source: "manual", note: nextNote },
+      createdAt: now,
+    });
+
+    return {
+      success: true,
+      phone: conversation.customerPhone,
+      order_id: conversation.orderId,
+      status: conversation.status,
+      note: nextNote,
+      _action: "mark_closing",
+    };
+  },
+});
+
+export const deleteConversationOrder = mutation({
+  args: {
+    phone: v.string(),
+    order_id: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+
+    if (!conversation) {
+      return { success: false, error: "conversation not found", phone: args.phone, _action: "delete_order" };
+    }
+
+    const transitionKey = makeTransitionKey({
+      orderId: args.order_id,
+      phone: args.phone,
+      conversation,
+    });
+    const orderKey = makeOrderKey({
+      orderId: conversation.orderId,
+      phone: conversation.customerPhone,
+    });
+
+    await patchStatsWithKey(ctx, {
+      field: "orders",
+      keyField: "orderKeys",
+      key: orderKey,
+      remove: true,
+    });
+    await patchStatsWithKey(ctx, {
+      field: "handovers",
+      keyField: "handoverKeys",
+      key: transitionKey,
+      remove: true,
+    });
+    await patchStatsWithKey(ctx, {
+      field: "closedToday",
+      keyField: "closedKeys",
+      key: transitionKey,
+      remove: true,
+    });
+    await patchClosingStatsWithKey(ctx, {
+      key: transitionKey,
+      remove: true,
+    });
+
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversation._id))
+      .collect();
+    for (const message of messages) {
+      await ctx.db.delete(message._id);
+    }
+
+    const order = await ctx.db
+      .query("orders")
+      .withIndex("by_orderId", (q: any) => q.eq("orderId", conversation.orderId))
+      .unique();
+    if (order) {
+      await ctx.db.delete(order._id);
+    }
+
+    await ctx.db.insert("events", {
+      conversationId: conversation._id,
+      orderId: conversation.orderId,
+      customerPhone: conversation.customerPhone,
+      type: "order_deleted",
+      actor: "cs",
+      metadata: { transitionKey },
+      createdAt: Date.now(),
+    });
+
+    await ctx.db.delete(conversation._id);
+
+    return {
+      success: true,
+      phone: conversation.customerPhone,
+      order_id: conversation.orderId,
+      _action: "delete_order",
+    };
+  },
+});
+
 export const recordStatEventFromN8n = mutation({
   args: {
     field: v.union(v.literal("closings"), v.literal("handovers")),
@@ -374,6 +547,7 @@ export const recordStatEventFromN8n = mutation({
     order_id: v.optional(v.string()),
     productName: v.optional(v.string()),
     date: v.optional(v.string()),
+    source: v.optional(v.union(v.literal("ai"), v.literal("manual"))),
   },
   handler: async (ctx, args) => {
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
@@ -389,10 +563,9 @@ export const recordStatEventFromN8n = mutation({
     }
 
     if (args.field === "closings") {
-      await patchStatsWithKey(ctx, {
-        field: "closings",
-        keyField: "closingKeys",
+      await patchClosingStatsWithKey(ctx, {
         key,
+        source: args.source ?? "ai",
         date: args.date,
       });
 
@@ -402,8 +575,8 @@ export const recordStatEventFromN8n = mutation({
           orderId: conversation.orderId,
           customerPhone: conversation.customerPhone,
           type: "closing_detected",
-          actor: "ai",
-          metadata: { key },
+          actor: args.source === "manual" ? "cs" : "ai",
+          metadata: { key, source: args.source ?? "ai" },
           createdAt: Date.now(),
         });
       }
@@ -450,12 +623,24 @@ export const listConversations = query({
     const conversations = rows
       .filter((conversation) => isAisyah(conversation.assignedCsName))
       .filter((conversation) => conversation.status !== "closed" || getJakartaDate(conversation.updatedAt) === today);
+    const stats = await ctx.db
+      .query("dailyStats")
+      .withIndex("by_date", (q) => q.eq("date", today))
+      .unique();
 
     return await Promise.all(conversations.map(async (conversation) => {
       const order = await ctx.db
         .query("orders")
         .withIndex("by_orderId", (q) => q.eq("orderId", conversation.orderId))
         .unique();
+      const transitionKey = makeTransitionKey({
+        orderId: conversation.orderId,
+        phone: conversation.customerPhone,
+        conversation,
+      });
+      const manualClosing = Boolean(stats?.manualClosingKeys?.includes(transitionKey));
+      const aiClosing = Boolean(stats?.aiClosingKeys?.includes(transitionKey));
+      const totalClosing = Boolean(stats?.closingKeys?.includes(transitionKey));
 
       return {
         conversationId: conversation._id,
@@ -475,6 +660,7 @@ export const listConversations = query({
         order_id: conversation.orderId,
         updatedAt: new Date(conversation.updatedAt).toISOString(),
         note: conversation.note,
+        closingSource: manualClosing ? "manual" : aiClosing || totalClosing ? "ai" : null,
       };
     }));
   },
@@ -490,7 +676,17 @@ export const getDailyStats = query({
       .unique();
 
     if (!stats) {
-      return { success: true, date, orders: 0, closings: 0, handovers: 0, closed_today: 0, _action: "get_stats" };
+      return {
+        success: true,
+        date,
+        orders: 0,
+        closings: 0,
+        ai_closings: 0,
+        manual_closings: 0,
+        handovers: 0,
+        closed_today: 0,
+        _action: "get_stats",
+      };
     }
 
     return {
@@ -498,6 +694,8 @@ export const getDailyStats = query({
       date,
       orders: stats.orders,
       closings: stats.closings,
+      ai_closings: stats.aiClosings ?? Math.max(stats.closings - (stats.manualClosings ?? 0), 0),
+      manual_closings: stats.manualClosings ?? 0,
       handovers: stats.handovers,
       closed_today: stats.closedToday,
       _action: "get_stats",
