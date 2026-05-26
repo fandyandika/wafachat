@@ -301,6 +301,72 @@ export const setConversationStatusFromN8n = mutation({
   },
 });
 
+export const markConversationNotClosing = mutation({
+  args: {
+    phone: v.string(),
+    order_id: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+
+    if (!conversation) {
+      return { success: false, error: "conversation not found", phone: args.phone, _action: "not_closing" };
+    }
+
+    const transitionKey = makeTransitionKey({
+      orderId: args.order_id,
+      phone: args.phone,
+      conversation,
+    });
+    const nextNote = args.note ?? "not closing / corrected by CS";
+    const previousStatus = conversation.status;
+
+    await patchStatsWithKey(ctx, {
+      field: "closings",
+      keyField: "closingKeys",
+      key: transitionKey,
+      remove: true,
+    });
+
+    if (previousStatus === "closed") {
+      await patchStatsWithKey(ctx, {
+        field: "closedToday",
+        keyField: "closedKeys",
+        key: transitionKey,
+        remove: true,
+      });
+    }
+
+    await ctx.db.patch(conversation._id, {
+      status: "active",
+      note: nextNote,
+      updatedAt: now,
+    });
+
+    await ctx.db.insert("events", {
+      conversationId: conversation._id,
+      orderId: conversation.orderId,
+      customerPhone: conversation.customerPhone,
+      type: "reactivated",
+      actor: "cs",
+      metadata: { previousStatus, status: "active", note: nextNote, closingCorrected: true },
+      createdAt: now,
+    });
+
+    return {
+      success: true,
+      phone: conversation.customerPhone,
+      order_id: conversation.orderId,
+      status: "active",
+      previousStatus,
+      note: nextNote,
+      _action: "not_closing",
+    };
+  },
+});
+
 export const recordStatEventFromN8n = mutation({
   args: {
     field: v.union(v.literal("closings"), v.literal("handovers")),
@@ -392,10 +458,18 @@ export const listConversations = query({
         .unique();
 
       return {
+        conversationId: conversation._id,
         phone: conversation.customerPhone,
         status: conversation.status,
         customerName: conversation.customerName,
         productName: order?.productName ?? "",
+        products: order?.products ?? "",
+        productsSubtotal: order?.productsSubtotal ?? "",
+        shippingCost: order?.shippingCost ?? "",
+        total: order?.total ?? "",
+        shippingAddress: order?.shippingAddress ?? "",
+        shippingDistrict: order?.shippingDistrict ?? "",
+        shippingCity: order?.shippingCity ?? "",
         csName: conversation.assignedCsName,
         csNumber: order?.assignedCsNumber ?? "",
         order_id: conversation.orderId,
@@ -477,7 +551,7 @@ export const getConversationContextForN8n = query({
       .withIndex("by_orderId", (q) => q.eq("orderId", conversation.orderId))
       .unique();
 
-    const limit = Math.min(args.messageLimit ?? 20, 50);
+    const limit = Math.min(args.messageLimit ?? 50, 50);
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", conversation._id))

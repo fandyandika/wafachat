@@ -61,7 +61,7 @@ export const listMessages = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const limit = Math.min(args.limit ?? 20, 50);
+    const limit = Math.min(args.limit ?? 50, 50);
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", args.conversationId))
