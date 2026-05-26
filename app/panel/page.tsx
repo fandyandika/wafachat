@@ -167,7 +167,7 @@ export default function PanelPage() {
     await markNotClosing({
       phone: conversation.phone,
       order_id: conversation.order_id,
-      note: 'marked not won by CS',
+      note: 'marked not closing by CS',
     });
     setActionLoading(null);
   };
@@ -177,7 +177,7 @@ export default function PanelPage() {
     await markClosing({
       phone: conversation.phone,
       order_id: conversation.order_id,
-      note: 'marked won by CS',
+      note: 'marked closing by CS',
     });
     setActionLoading(null);
   };
@@ -258,14 +258,14 @@ export default function PanelPage() {
         tone: 'text-sky-400',
       },
       {
-        label: 'AI won',
+        label: 'AI closing',
         value: stats.ai_closings ?? Math.max(stats.closings - (stats.manual_closings ?? 0), 0),
         detail: 'Detected by AI',
         icon: CheckCircle2,
         tone: 'text-emerald-400',
       },
       {
-        label: 'Manual won',
+        label: 'Manual closing',
         value: stats.manual_closings ?? 0,
         detail: 'Marked by CS',
         icon: CheckCircle2,
@@ -279,9 +279,9 @@ export default function PanelPage() {
         tone: 'text-destructive',
       },
       {
-        label: 'Win rate',
+        label: 'Closing rate',
         value: `${crAI}%`,
-        detail: 'Won / orders',
+        detail: 'Closing / orders',
         icon: BarChart3,
         tone: crAI > 100 ? 'text-destructive' : 'text-emerald-400',
       },
@@ -466,10 +466,10 @@ export default function PanelPage() {
                   </CardHeader>
                   <CardContent className="space-y-2 text-sm text-muted-foreground">
                     <Formula label="Orders" value="unique phone + product" />
-                    <Formula label="AI Won" value="AI detected" />
-                    <Formula label="Manual Won" value="CS marked" />
+                    <Formula label="AI Closing" value="AI detected" />
+                    <Formula label="Manual Closing" value="CS marked" />
                     <Formula label="Cancelled" value="CS marked" />
-                    <Formula label="Win rate" value="won / orders" />
+                    <Formula label="Closing rate" value="closing / orders" />
                     <Formula label="Handover rate" value="current handovers / orders" />
                   </CardContent>
                 </Card>
@@ -724,7 +724,7 @@ function ConversationPanel({
                             variant="secondary"
                           >
                             <CheckCircle2 className="size-3.5" />
-                            Mark Won
+                            Mark Closing
                           </Button>
                         )}
                         {conversation.salesOutcome === 'cancelled' ? (
@@ -774,7 +774,7 @@ function ConversationPanel({
                               size="sm"
                               variant="outline"
                             >
-                              Mark Not Won
+                              Not Closing
                             </Button>
                           </>
                         ) : (
@@ -944,7 +944,7 @@ function ConversationDetailSheet({
                   variant="secondary"
                 >
                   <CheckCircle2 className="size-4" />
-                  Mark Won
+                  Mark Closing
                 </Button>
               )}
               {conversation.salesOutcome === 'cancelled' ? (
@@ -989,7 +989,7 @@ function ConversationDetailSheet({
                     onClick={() => onNotClosing(conversation)}
                     variant="outline"
                   >
-                    Mark Not Won
+                    Not Closing
                   </Button>
                 </>
               )}
@@ -1094,7 +1094,7 @@ function OutcomeBadge({ outcome }: { outcome: 'ai_won' | 'manual_won' | 'cancell
 
   return (
     <Badge className={outcome === 'manual_won' ? 'border-sky-500/30 text-sky-400' : 'border-emerald-500/30 text-emerald-400'} variant="outline">
-      {outcome === 'manual_won' ? 'manual won' : 'AI won'}
+      {outcome === 'manual_won' ? 'manual closing' : 'AI closing'}
     </Badge>
   );
 }
