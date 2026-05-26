@@ -431,6 +431,27 @@ export const getDailyStats = query({
   },
 });
 
+export const health = query({
+  args: {},
+  handler: async (ctx) => {
+    const globalEnabled = await getGlobalEnabled(ctx);
+    const date = getJakartaDate();
+    await ctx.db
+      .query("dailyStats")
+      .withIndex("by_date", (q) => q.eq("date", date))
+      .unique();
+
+    return {
+      success: true,
+      service: "wafachat-convex-state-manager",
+      schemaReady: true,
+      globalEnabled,
+      date,
+      _action: "health",
+    };
+  },
+});
+
 export const getConversationContextForN8n = query({
   args: { phone: v.string(), messageLimit: v.optional(v.number()) },
   handler: async (ctx, args) => {

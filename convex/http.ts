@@ -18,6 +18,11 @@ function isAuthorized(request: Request): boolean {
   return request.headers.get("x-wafachat-adapter-secret") === expected;
 }
 
+function normalizeMessageType(value: unknown): "text" | "image" | "template" | "button" {
+  if (value === "image" || value === "template" || value === "button") return value;
+  return "text";
+}
+
 http.route({
   path: "/n8n/state",
   method: "POST",
@@ -28,6 +33,11 @@ http.route({
 
     const body = await request.json();
     const action = body.action;
+
+    if (action === "health") {
+      const result = await ctx.runQuery(api.state.health, {});
+      return jsonResponse(result);
+    }
 
     if (action === "set_order") {
       const result = await ctx.runMutation(api.state.upsertOrderFromN8n, {
@@ -93,6 +103,21 @@ http.route({
       });
       return jsonResponse(result);
     }
+
+    if (action === "append_message") {
+      const result = await ctx.runMutation(api.messages.appendMessageFromN8n, {
+        phone: String(body.phone || ""),
+        order_id: body.order_id ? String(body.order_id) : undefined,
+        role: body.role,
+        direction: body.direction,
+        content: String(body.content || ""),
+        messageType: normalizeMessageType(body.messageType),
+        externalMessageId: body.externalMessageId ? String(body.externalMessageId) : undefined,
+        createdAt: body.createdAt ? Number(body.createdAt) : undefined,
+      });
+      return jsonResponse(result);
+    }
+
 
     if (action === "list_all") {
       const result = await ctx.runQuery(api.state.listConversations, {
