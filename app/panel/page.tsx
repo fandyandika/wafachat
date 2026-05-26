@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery } from 'convex/react';
 import {
   Activity,
   BarChart3,
@@ -48,6 +49,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { api } from '@/convex/_generated/api';
 
 interface Conversation {
   phone: string;
@@ -79,72 +81,47 @@ const navItems = [
 ];
 
 export default function PanelPage() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [stats, setStats] = useState<Stats>({
-    orders: 0,
-    closings: 0,
-    handovers: 0,
-    closed_today: 0,
-    date: '',
-  });
-  const [globalEnabled, setGlobalEnabled] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState('');
 
-  const fetchAll = useCallback(async () => {
-    try {
-      setError('');
-      const [convRes, statsRes, globalRes] = await Promise.all([
-        fetch('/api/conversations'),
-        fetch('/api/stats'),
-        fetch('/api/global'),
-      ]);
-
-      if (!convRes.ok || !statsRes.ok || !globalRes.ok) {
-        throw new Error('Panel data request failed');
-      }
-
-      const convData = await convRes.json();
-      const statsData = await statsRes.json();
-      const globalData = await globalRes.json();
-      setConversations(convData.conversations || []);
-      setStats(statsData);
-      setGlobalEnabled(globalData.globalEnabled !== false);
-      setLastUpdated(new Date().toLocaleTimeString('id-ID'));
-    } catch {
-      setError('Tidak bisa memuat data terbaru. Data terakhir tetap ditampilkan.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const conversationsData = useQuery(api.state.listConversations, { includeClosed: true });
+  const statsData = useQuery(api.state.getDailyStats, {});
+  const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
+  const setConversationStatus = useMutation(api.state.setConversationStatusFromN8n);
+  const setGlobalAiEnabled = useMutation(api.settings.setGlobalAiEnabled);
 
   useEffect(() => {
-    fetchAll();
-    const interval = setInterval(fetchAll, 10000);
-    return () => clearInterval(interval);
-  }, [fetchAll]);
+    if (conversationsData !== undefined && statsData !== undefined && globalEnabledData !== undefined) {
+      setLastUpdated(new Date().toLocaleTimeString('id-ID'));
+    }
+  }, [conversationsData, globalEnabledData, statsData]);
+
+  const conversations = (conversationsData ?? []) as Conversation[];
+  const stats: Stats = {
+    orders: statsData?.orders ?? 0,
+    closings: statsData?.closings ?? 0,
+    handovers: statsData?.handovers ?? 0,
+    closed_today: statsData?.closed_today ?? 0,
+    date: statsData?.date ?? '',
+  };
+  const globalEnabled = globalEnabledData !== false;
+  const loading = conversationsData === undefined || statsData === undefined || globalEnabledData === undefined;
 
   const toggleGlobal = async () => {
     const next = !globalEnabled;
-    setGlobalEnabled(next);
-    await fetch('/api/global', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: next }),
-    });
-    fetchAll();
+    setActionLoading('global');
+    await setGlobalAiEnabled({ enabled: next });
+    setActionLoading(null);
   };
 
-  const setStatus = async (phone: string, status: string, note?: string) => {
+  const setStatus = async (phone: string, status: Conversation['status'], note?: string, orderId?: string) => {
     setActionLoading(phone + ':' + status);
-    await fetch('/api/toggle', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, status, note }),
+    await setConversationStatus({
+      phone,
+      status,
+      note,
+      order_id: orderId,
     });
-    await fetchAll();
     setActionLoading(null);
   };
 
@@ -279,7 +256,7 @@ export default function PanelPage() {
                     <Bot className="size-4 text-muted-foreground" />
                     <span className="text-sm">Global AI</span>
                   </div>
-                  <Switch checked={globalEnabled} onCheckedChange={toggleGlobal} />
+                  <Switch checked={globalEnabled} disabled={actionLoading === 'global'} onCheckedChange={toggleGlobal} />
                   <Badge
                     variant="outline"
                     className={cn(
@@ -303,15 +280,6 @@ export default function PanelPage() {
           </header>
 
           <div className="space-y-6 p-4 md:p-6">
-            {error && (
-              <Card className="border-amber-500/30 bg-amber-500/10">
-                <CardContent className="flex items-center gap-3 py-3 text-sm text-amber-200">
-                  <CircleAlert className="size-4" />
-                  {error}
-                </CardContent>
-              </Card>
-            )}
-
             <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
               {loading
                 ? Array.from({ length: 7 }).map((_, index) => <MetricSkeleton key={index} />)
@@ -328,9 +296,9 @@ export default function PanelPage() {
                     actionLoading={actionLoading}
                     loading={loading}
                     highlighted
-                    onPauseAI={(phone) => setStatus(phone, 'handover', 'manual by CS')}
-                    onResumeAI={(phone) => setStatus(phone, 'active')}
-                    onSelesai={(phone) => setStatus(phone, 'closed')}
+                    onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
+                    onResumeAI={(conversation) => setStatus(conversation.phone, 'active', undefined, conversation.order_id)}
+                    onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
                   />
                 )}
 
@@ -340,9 +308,9 @@ export default function PanelPage() {
                   rows={active}
                   actionLoading={actionLoading}
                   loading={loading}
-                  onPauseAI={(phone) => setStatus(phone, 'handover', 'manual by CS')}
-                  onResumeAI={(phone) => setStatus(phone, 'active')}
-                  onSelesai={(phone) => setStatus(phone, 'closed')}
+                  onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
+                  onResumeAI={(conversation) => setStatus(conversation.phone, 'active', undefined, conversation.order_id)}
+                  onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
                 />
 
                 {closed.length > 0 && (
@@ -352,9 +320,9 @@ export default function PanelPage() {
                     rows={closed}
                     actionLoading={actionLoading}
                     loading={loading}
-                    onPauseAI={(phone) => setStatus(phone, 'handover', 'manual by CS')}
-                    onResumeAI={(phone) => setStatus(phone, 'active', 'reactivated by CS')}
-                    onSelesai={(phone) => setStatus(phone, 'closed')}
+                    onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
+                    onResumeAI={(conversation) => setStatus(conversation.phone, 'active', 'reactivated by CS', conversation.order_id)}
+                    onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
                   />
                 )}
               </div>
@@ -457,9 +425,9 @@ function ConversationPanel({
   actionLoading: string | null;
   loading: boolean;
   highlighted?: boolean;
-  onPauseAI: (phone: string) => void;
-  onResumeAI: (phone: string) => void;
-  onSelesai: (phone: string) => void;
+  onPauseAI: (conversation: Conversation) => void;
+  onResumeAI: (conversation: Conversation) => void;
+  onSelesai: (conversation: Conversation) => void;
 }) {
   return (
     <Card className={cn(highlighted && 'border-amber-500/30 bg-amber-500/5')}>
@@ -546,7 +514,7 @@ function ConversationPanel({
                         {conversation.status === 'active' && (
                           <Button
                             disabled={actionLoading === conversation.phone + ':handover'}
-                            onClick={() => onPauseAI(conversation.phone)}
+                            onClick={() => onPauseAI(conversation)}
                             size="sm"
                             variant="outline"
                           >
@@ -557,7 +525,7 @@ function ConversationPanel({
                         {conversation.status === 'handover' && (
                           <Button
                             disabled={actionLoading === conversation.phone + ':active'}
-                            onClick={() => onResumeAI(conversation.phone)}
+                            onClick={() => onResumeAI(conversation)}
                             size="sm"
                             variant="secondary"
                           >
@@ -568,7 +536,7 @@ function ConversationPanel({
                         {conversation.status === 'closed' ? (
                           <Button
                             disabled={actionLoading === conversation.phone + ':active'}
-                            onClick={() => onResumeAI(conversation.phone)}
+                            onClick={() => onResumeAI(conversation)}
                             size="sm"
                             variant="secondary"
                           >
@@ -578,7 +546,7 @@ function ConversationPanel({
                         ) : (
                           <Button
                             disabled={actionLoading === conversation.phone + ':closed'}
-                            onClick={() => onSelesai(conversation.phone)}
+                            onClick={() => onSelesai(conversation)}
                             size="sm"
                             variant="destructive"
                           >
