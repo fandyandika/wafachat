@@ -7,7 +7,7 @@ export async function GET() {
     const res = await fetch(N8N_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'list_all' }),
+      body: JSON.stringify({ action: 'list_all', includeClosed: true }),
       cache: 'no-store',
     });
     const data = await res.json();
