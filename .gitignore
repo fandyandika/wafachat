@@ -7,3 +7,4 @@ next-env.d.ts
 .vercel/
 
 .vercel
+.convex-adapter-secret.local
