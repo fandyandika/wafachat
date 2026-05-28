@@ -17,6 +17,27 @@ const statusValidator = v.union(
 
 const paymentMethodValidator = v.union(v.literal("cod"), v.literal("transfer"), v.literal("unknown"));
 
+const berduVerifiedRowValidator = v.object({
+  orderIdBerdu: v.string(),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  csName: v.string(),
+  orderedAt: v.number(),
+  closedAt: v.number(),
+  recipientName: v.string(),
+  recipientPhone: v.string(),
+  recipientAddress: v.string(),
+  recipientDistrict: v.string(),
+  recipientCity: v.string(),
+  packageContent: v.string(),
+  paymentMethod: paymentMethodValidator,
+  itemPrice: v.optional(v.number()),
+  shippingCost: v.optional(v.number()),
+  total: v.optional(v.number()),
+  discount: v.optional(v.number()),
+  sourceMessageText: v.string(),
+});
+
 function parseRupiah(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const digits = value.replace(/[^\d]/g, "");
@@ -28,6 +49,12 @@ function normalizePhone(value: string | undefined): string {
   const digits = String(value ?? "").replace(/[^\d]/g, "");
   if (digits.startsWith("0")) return `62${digits.slice(1)}`;
   return digits;
+}
+
+function normalizeOrderId(value: string | undefined): string {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  return text.startsWith("O-") ? text : `O-${text}`;
 }
 
 function normalizeText(value: string): string {
@@ -146,12 +173,19 @@ function normalizeComparable(value: string | undefined): string {
 function normalizeProductName(value: string | undefined): string {
   return cleanMarkdown(value ?? "")
     .replace(/\(\s*\d+\s*x\s*\)/gi, "")
+    .replace(/\s+-\s+Pilih Paket:.*/i, "")
     .replace(/\s+/g, " ")
     .trim() || "Unknown";
 }
 
 function isInternalTestPhone(value: string | undefined): boolean {
   return INTERNAL_TEST_PHONES.has(normalizePhone(value));
+}
+
+function normalizeCsName(value: string | undefined): string {
+  const name = cleanMarkdown(value ?? "") || "Unknown";
+  if (/^aisyah$/i.test(name)) return "CS Aisyah";
+  return name;
 }
 
 function compareWithOrder(parsed: ReturnType<typeof parseClosingMessage>, order: Doc<"orders"> | null) {
@@ -621,6 +655,102 @@ export const markExported = mutation({
   },
 });
 
+export const importBerduVerifiedRows = mutation({
+  args: {
+    rows: v.array(berduVerifiedRowValidator),
+    importBatchId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const results: Array<{ orderIdBerdu: string; recapId: Id<"shippingRecaps">; action: "inserted" | "updated" }> = [];
+
+    for (const row of args.rows) {
+      const orderIdBerdu = normalizeOrderId(row.orderIdBerdu);
+      const customerPhone = normalizePhone(row.customerPhone);
+      const recipientPhone = normalizePhone(row.recipientPhone || row.customerPhone);
+      const order = await findOrder(ctx, { orderIdBerdu, customerPhone });
+      const conversation = await findConversation(ctx, { orderIdBerdu, customerPhone });
+      const existing = await findExistingRecap(ctx, {
+        orderIdBerdu,
+        customerPhone,
+        conversationId: conversation?._id,
+      });
+      const status: RecapStatus =
+        existing?.status === "exported" || existing?.status === "cancelled" || existing?.status === "cancelled_after_export"
+          ? existing.status
+          : "ready";
+      const flags = unique([...(existing?.flags ?? []).filter((flag) => flag !== "MISSING_ORDER_CONTEXT"), "BERDU_VERIFIED"]);
+      const payload = {
+        orderIdBerdu,
+        conversationId: conversation?._id,
+        customerPhone,
+        customerName: row.customerName || order?.customerName || conversation?.customerName || "",
+        csName: row.csName || order?.assignedCsName || conversation?.assignedCsName || "",
+        csPhone: order?.assignedCsNumber,
+        orderedAt: order?.createdAt ?? row.orderedAt,
+        closedAt: row.closedAt,
+        recipientName: row.recipientName || row.customerName || order?.customerName || "",
+        recipientPhone,
+        recipientAddress: row.recipientAddress,
+        recipientDistrict: row.recipientDistrict,
+        recipientCity: row.recipientCity,
+        packageContent: row.packageContent,
+        paymentMethod: row.paymentMethod,
+        nonCodItemPrice: row.paymentMethod === "transfer" ? row.itemPrice ?? row.total : undefined,
+        codValue: row.paymentMethod === "cod" ? row.total : undefined,
+        shippingCost: row.shippingCost,
+        total: row.total,
+        discount: row.discount,
+        inferredDiscount: undefined,
+        status,
+        flags,
+        sourceMessageId: `berdu:${orderIdBerdu}:${args.importBatchId}`,
+        sourceMessageText: row.sourceMessageText,
+        updatedAt: now,
+      };
+
+      let recapId: Id<"shippingRecaps">;
+      let action: "inserted" | "updated";
+      if (existing) {
+        recapId = existing._id;
+        action = "updated";
+        await ctx.db.patch(existing._id, {
+          ...payload,
+          version: existing.version + 1,
+        });
+      } else {
+        action = "inserted";
+        recapId = await ctx.db.insert("shippingRecaps", {
+          ...payload,
+          version: 1,
+          createdAt: now,
+        });
+      }
+
+      await ctx.db.insert("events", {
+        conversationId: conversation?._id,
+        orderId: orderIdBerdu,
+        customerPhone,
+        type: "shipping_recap_upserted",
+        actor: "cs",
+        metadata: { recapId, source: "berdu_csv", importBatchId: args.importBatchId, action },
+        createdAt: now,
+      });
+
+      results.push({ orderIdBerdu, recapId, action });
+    }
+
+    return {
+      success: true,
+      importBatchId: args.importBatchId,
+      inserted: results.filter((row) => row.action === "inserted").length,
+      updated: results.filter((row) => row.action === "updated").length,
+      count: results.length,
+      sample: results.slice(0, 10),
+    };
+  },
+});
+
 export const repairRecipientNamesFromOrders = mutation({
   args: {
     limit: v.optional(v.number()),
@@ -695,12 +825,14 @@ export const getPerformance = query({
       .collect();
 
     const realOrders = orders.filter((order) => !isInternalTestPhone(order.customerPhone));
-    const validClosingRows = recaps.filter(
+    const validCandidateRows = recaps.filter(
       (row) =>
         row.status !== "cancelled" &&
         row.status !== "cancelled_after_export" &&
         !isInternalTestPhone(row.customerPhone),
     );
+    const berduVerifiedRows = validCandidateRows.filter((row) => row.flags.includes("BERDU_VERIFIED"));
+    const validClosingRows = berduVerifiedRows.length > 0 ? berduVerifiedRows : validCandidateRows;
     const latestOrderByPhone = new Map<string, Doc<"orders">>();
     const latestClosingByPhone = new Map<string, Doc<"shippingRecaps">>();
 
@@ -727,7 +859,7 @@ export const getPerformance = query({
       productRow.leads += 1;
       productMap.set(product, productRow);
 
-      const csName = order.assignedCsName || "Unknown";
+      const csName = normalizeCsName(order.assignedCsName);
       const csRow = csMap.get(csName) ?? { csName, leads: 0, closing: 0, revenue: 0, discount: 0 };
       csRow.leads += 1;
       csMap.set(csName, csRow);
@@ -743,7 +875,7 @@ export const getPerformance = query({
       productRow.discount += discount;
       productMap.set(product, productRow);
 
-      const csName = recap.csName || "Unknown";
+      const csName = normalizeCsName(recap.csName);
       const csRow = csMap.get(csName) ?? { csName, leads: 0, closing: 0, revenue: 0, discount: 0 };
       csRow.closing += 1;
       csRow.revenue += revenue;

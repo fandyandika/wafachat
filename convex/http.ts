@@ -132,6 +132,14 @@ http.route({
       return jsonResponse(result);
     }
 
+    if (action === "import_berdu_verified_rows") {
+      const result = await ctx.runMutation(api.shippingRecaps.importBerduVerifiedRows, {
+        importBatchId: String(body.importBatchId || `berdu-${Date.now()}`),
+        rows: Array.isArray(body.rows) ? body.rows : [],
+      });
+      return jsonResponse(result);
+    }
+
 
     if (action === "list_all") {
       const result = await ctx.runQuery(api.state.listConversations, {
