@@ -1,0 +1,1751 @@
+{
+  "updatedAt": "2026-05-28T14:06:45.916Z",
+  "createdAt": "2026-05-24T16:57:07.644Z",
+  "id": "4eBFqyabDlIRx3ZY",
+  "name": "WaFaChat ? Chat Handler",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "kirimchat-inbound",
+        "options": {}
+      },
+      "id": "node-wh-in",
+      "name": "01 Webhook - KirimChat Message",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        160,
+        304
+      ],
+      "webhookId": "fe8e5043-f39b-40af-b3db-f37f093c2fb0"
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = $input.first().json;\nconst body = root.body || root;\nconst data = body.data || body.message || body;\nconst raw = data.raw || {};\nconst rawMessage = raw.message || {};\nconst rawContact = Array.isArray(raw.contacts) ? raw.contacts[0] : {};\nconst headers = root.headers || {};\n\nconst stateManagerUrl = 'https://n8n.miqra.dev/webhook/conversation-state';\n\nfunction firstValue(...values) {\n  for (const value of values) {\n    if (value !== undefined && value !== null && String(value).trim()) return value;\n  }\n  return '';\n}\n\nfunction onlyDigits(value) {\n  return String(value || '').replace(/\\D/g, '');\n}\n\nfunction normalizePhone(value) {\n  const digits = onlyDigits(value);\n  if (!digits) return '';\n  if (digits.startsWith('0')) return `62${digits.slice(1)}`;\n  return digits;\n}\n\nfunction normalizeText(value) {\n  return String(value || '').replace(/\\s+/g, ' ').trim();\n}\n\nfunction normalizeMessageType(value) {\n  const type = String(value || '').toLowerCase();\n  if (['image', 'template', 'button', 'audio', 'document', 'video'].includes(type)) return type;\n  return 'text';\n}\n\nconst eventType = String(firstValue(body.event_type, body.event, headers['x-kirimchat-event'])).toLowerCase();\nconst directionRaw = String(firstValue(data.direction, raw.direction, rawMessage.direction)).toLowerCase();\nconst messageType = normalizeMessageType(firstValue(data.message_type, data.type, rawMessage.type));\nconst buttonTitle = firstValue(data.button_reply?.title, rawMessage.interactive?.button_reply?.title);\nconst content = firstValue(data.content, data.text, rawMessage.text?.body, data.caption, rawMessage.image?.caption);\nconst plainText = normalizeText(buttonTitle || content);\nconst phone = normalizePhone(firstValue(\n  data.customer_phone,\n  data.customer?.phone,\n  data.contact?.phone,\n  data.phone,\n  data.to,\n  data.recipient,\n  rawContact.wa_id,\n  rawMessage.from,\n));\nconst customerName = firstValue(data.customer_name, data.customer?.name, rawContact.profile?.name, 'Pelanggan');\nconst senderNumber = normalizePhone(firstValue(\n  raw.metadata?.display_phone_number,\n  data.sender_phone,\n  data.from,\n  rawMessage.from,\n));\n\nconst isOutbound = directionRaw === 'outbound' ||\n  eventType.includes('message.sent') ||\n  eventType.includes('message.delivered') ||\n  eventType.includes('message.outbound') ||\n  eventType.includes('outbound');\nconst isInbound = directionRaw === 'inbound' ||\n  eventType.includes('message.received') ||\n  eventType.includes('message.inbound') ||\n  eventType.includes('inbound');\n\nasync function handleManualOutbound() {\n  if (!phone || !plainText) return;\n  if (['system', 'notification', 'template'].includes(messageType)) return;\n\n  const stateResp = await this.helpers.httpRequest({\n    method: 'POST',\n    url: stateManagerUrl,\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ action: 'get_with_global', phone, messageLimit: 50 }),\n    json: true,\n  });\n\n  const hasOrderState = Boolean(stateResp.order_id || stateResp.productName || stateResp.csName);\n  const reportingEnabled = stateResp.reportingEnabled !== false;\n  if (!reportingEnabled || !hasOrderState) return;\n\n  const normalizedOutbound = normalizeText(plainText);\n  const recentAiEcho = (stateResp.messages || []).slice(-12).some((message) => {\n    const createdAt = Number(message.createdAt || 0);\n    const recent = !createdAt || createdAt > Date.now() - (15 * 60 * 1000);\n    return recent &&\n      message.role === 'ai' &&\n      message.direction === 'outbound' &&\n      normalizeText(message.content) === normalizedOutbound;\n  });\n\n  if (recentAiEcho) return;\n\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: stateManagerUrl,\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      action: 'append_message',\n      phone,\n      order_id: stateResp.order_id || '',\n      role: 'cs',\n      direction: 'outbound',\n      content: plainText,\n      messageType,\n    }),\n    json: true,\n  });\n\n\n  if (normalizedOutbound.includes('PEMESANAN BERHASIL')) {\n    const sourceMessageText = String(buttonTitle || content || plainText || '');\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: stateManagerUrl,\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        action: 'upsert_shipping_recap',\n        phone,\n        order_id: stateResp.order_id || '',\n        customerName: stateResp.customerName || customerName || '',\n        csName: stateResp.csName || 'CS Aisyah',\n        csNumber: stateResp.csNumber || senderNumber || '',\n        sourceMessageId: firstValue(data.message_id, data.id, rawMessage.id),\n        sourceMessageText,\n        closedAt: Date.now(),\n      }),\n      json: true,\n    });\n  }\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: stateManagerUrl,\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      action: 'set',\n      phone,\n      order_id: stateResp.order_id || '',\n      status: 'handover',\n      note: 'manual CS replied',\n      customerName,\n      csNumber: senderNumber,\n    }),\n    json: true,\n  });\n}\n\nif (isOutbound) {\n  await handleManualOutbound.call(this);\n  return [];\n}\n\nif (!isInbound) return [];\n\n\nconst fileHandoverTypes = ['document', 'audio', 'video'];\nif (fileHandoverTypes.includes(messageType)) {\n  if (!phone) return [];\n  const fileUrl = firstValue(data.media_url, data.document_url, data.file_url, data.url, rawMessage.document?.url, rawMessage.audio?.url, rawMessage.video?.url);\n  const caption = normalizeText(content);\n  const label = messageType === 'document' ? 'dokumen/PDF' : messageType;\n  const messageText = caption\n    ? `[Customer mengirim ${label}]\\nKeterangan: ${caption}\\nURL: ${fileUrl}`\n    : `[Customer mengirim ${label} tanpa keterangan]\\nURL: ${fileUrl}`;\n  return [{ json: { phone, messageText, messageType, fileUrl, customerName, senderNumber, rawPayload: body } }];\n}\nif (messageType === 'image') {\n  if (!phone) return [];\n  const imageUrl = firstValue(data.media_url, data.image_url, data.url, rawMessage.image?.url);\n  const caption = normalizeText(content);\n  const messageText = caption\n    ? `[Customer mengirim gambar]\\nKeterangan: ${caption}\\nURL: ${imageUrl}`\n    : `[Customer mengirim gambar tanpa keterangan]\\nURL: ${imageUrl}`;\n  return [{ json: { phone, messageText, messageType: 'image', imageUrl, customerName, senderNumber, rawPayload: body } }];\n}\n\nif (!phone || !plainText) return [];\nif (['system', 'notification', 'template'].includes(messageType)) return [];\n\nreturn [{ json: { phone, messageText: plainText, messageType, customerName, senderNumber, rawPayload: body } }];"
+      },
+      "id": "node-parse-in",
+      "name": "02 Parse Message + Manual CS Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.messageText }}",
+        "options": {
+          "systemMessage": "={{ $('06 Build Prompt v3.1').item.json.systemMessage }}"
+        }
+      },
+      "id": "node-ai-agent",
+      "name": "DISABLED - Legacy AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1728,
+        704
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 500
+        }
+      },
+      "id": "node-gpt",
+      "name": "DISABLED - Legacy LangChain Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1728,
+        944
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "TWuHhKs9B2M0Jesf",
+          "name": "OpenAi account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "let aiOutput = ($input.first().json.output || '').trim();\nconst inbound = $('02 Parse Message + Manual CS Guard').item.json;\nconst phone = inbound.phone;\nconst parseState = $('04 Validate AI Scope + State').item.json;\nconst inboundText = String(inbound.messageText || '').toLowerCase();\nconst inboundLooksLikeTemplateButtonReply = /assalamu?a?['']?alaikum[\\s\\S]{0,900}(?:transfer aja|cod\\s*(?:\\(|aja|ya)|bayar di tempat)/i.test(inbound.messageText || '') || /.\\s*(?:transfer aja|cod)/i.test(inbound.messageText || '');\nconst latestCustomerActuallySaidSalam = /\\b(?:assalamu?a?['']?alaikum|assalamualaikum|salam|halo|hai|pagi|siang|sore|malam)\\b/i.test(inbound.messageText || '') && !inboundLooksLikeTemplateButtonReply;\nconst isInvoiceOrderGreeting = /assalamu?a?['']?alaikum/i.test(inbound.messageText || '') && /saya\\s+mau\\s+pesan|pustakaislam\\.net\\/o\\//i.test(inbound.messageText || '') && !/.\\s*(?:transfer aja|cod)/i.test(inbound.messageText || '');\nconst inboundMessageType = inbound.messageType || 'text';\nconst isImageInbound = inboundMessageType === 'image';\nconst fileNeedsHandover = ['document', 'audio', 'video'].includes(inboundMessageType);\nconst transferClaimTerms = [\n  'sudah transfer', 'udah transfer', 'sdh transfer', 'telah transfer', 'baru transfer', 'barusan transfer', 'habis transfer',\n  'sudah saya transfer', 'saya sudah transfer', 'saya transfer', 'aku transfer',\n  'sudah tf', 'udah tf', 'sdh tf', 'telah tf', 'saya tf',\n  'sudah bayar', 'udah bayar', 'sdh bayar', 'telah bayar', 'sudah dibayar', 'saya bayar',\n  'ini bukti', 'bukti transfer', 'bukti tf', 'struk transfer', 'receipt transfer'\n];\nconst hasTransferClaim = transferClaimTerms.some((term) => inboundText.includes(term));\nconst claimedTransferClosing = aiOutput.includes('PEMESANAN BERHASIL') && aiOutput.includes('ORDER TRANSFER');\n\nif (isInvoiceOrderGreeting && !aiOutput.includes('PEMESANAN BERHASIL')) {\n  aiOutput = `Wa A'laikumussalam Warahmatullahi Wabarakatuh\nAlhamdulillah data pesanan sudah masuk ya Kak ??\n\nBoleh info Kak mau COD atau Transfer ya?`;\n}\n\nfunction parseRupiahToNumber(value) {\n  const digits = String(value || '').replace(/[^0-9]/g, '');\n  return digits ? Number(digits) : 0;\n}\n\nfunction pickMediaUrl() {\n  const textUrl = String(inbound.messageText || '').match(/https?:\\/\\/\\S+/i)?.[0] || '';\n  return inbound.imageUrl || inbound.fileUrl || textUrl;\n}\n\nasync function verifyPaymentProofImage(mediaUrl) {\n  if (!mediaUrl) {\n    return { verified: false, reason: 'no media url' };\n  }\n\n  const expectedTotal = parseState.total || '';\n  const expectedAmount = parseRupiahToNumber(expectedTotal);\n  const verifierPrompt = `\nYou verify Indonesian bank transfer proof images for PustakaIslam.\nReturn ONLY JSON. No markdown.\n\nExpected recipient account owner must match one of:\n- Rahmany Amanda M\n- Rahmany Amanda Meyri\n- Rahmany Amanda Meyriza\n\nExpected account numbers may be one of:\n- BCA 4660245877\n- BSI 7353424623\n- Mandiri 1560027353426\n\nExpected order total: ${expectedTotal} (${expectedAmount}).\n\nSet verified=true ONLY if the image is clearly a bank/e-wallet transfer receipt AND:\n1. recipient name or account number matches the expected recipient/accounts, AND\n2. transferred amount is visible and equals the expected total, allowing only formatting differences like Rp, dots, commas.\n\nIf the image is product/bonus/photo/chat screenshot/not a receipt, verified=false.\nIf amount or recipient is unclear, verified=false.\n\nJSON schema:\n{\n  \"is_payment_proof\": boolean,\n  \"verified\": boolean,\n  \"recipient_match\": boolean,\n  \"amount_match\": boolean,\n  \"recipient_text\": string,\n  \"account_text\": string,\n  \"amount_text\": string,\n  \"bank_text\": string,\n  \"confidence\": \"high\" | \"medium\" | \"low\",\n  \"reason\": string\n}`.trim();\n\n  try {\n    const response = await this.helpers.httpRequestWithAuthentication.call(this, 'openAiApi', {\n      method: 'POST',\n      url: 'https://api.openai.com/v1/chat/completions',\n      headers: { 'Content-Type': 'application/json' },\n      body: {\n        model: 'gpt-5-mini',\n        messages: [{\n          role: 'user',\n          content: [\n            { type: 'text', text: verifierPrompt },\n            { type: 'image_url', image_url: { url: mediaUrl, detail: 'high' } },\n          ],\n        }],\n        response_format: { type: 'json_object' },\n        max_completion_tokens: 350,\n        reasoning_effort: 'minimal',\n      },\n      json: true,\n    });\n    const content = response.choices?.[0]?.message?.content || '{}';\n    const parsed = JSON.parse(content);\n    return { ...parsed, raw: parsed };\n  } catch (error) {\n    return { verified: false, reason: `vision verifier error: ${error.message || error}` };\n  }\n}\n\nfunction buildTransferClosing() {\n  return `Alhamdulillah, bukti transfer sudah kami terima Kak ??\n\n*PEMESANAN BERHASIL*\n\\`ORDER TRANSFER\\`\n\nDetail pesanan:\nProduk: *${parseState.products || parseState.productName || ''}*\nHarga: *${parseState.productsSubtotal || ''}*\nOngkir: ${parseState.shippingCost || ''}\n*Total: ${parseState.total || ''}*\n\n?? Dikirim ke:\n${parseState.customerName || inbound.customerName || 'Kak'} | ${phone}\n${parseState.shippingAddress || ''}, ${parseState.shippingDistrict || ''}, ${parseState.shippingCity || ''}\n\nSemoga lancar rezeki dan sehat selalu,\nBaarakallahu fiik ??`;\n}\n\nif (isImageInbound || fileNeedsHandover) {\n  const recentTransferContext = (parseState.messages || []).slice(-8).some((message) => /4660245877|7353424623|1560027353426|rekening|transfer|tf|bukti|bayar/i.test(String(message.content || '')));\n  const explicitPaymentProofText = /bukti|transfer|tf|bayar|struk|receipt|resi transfer|sudah transfer|udah tf/i.test(inboundText);\n  const imageLooksProductRelated = /bonus|gambar|foto|ini\\?|ini ya|contoh|cover|halaman|produk/i.test(inboundText);\n  const shouldVerifyPaymentProof = isImageInbound && (explicitPaymentProofText || (recentTransferContext && !imageLooksProductRelated));\n\n  if (shouldVerifyPaymentProof) {\n    const verification = await verifyPaymentProofImage.call(this, pickMediaUrl());\n    const verified = verification.verified === true && verification.is_payment_proof === true && verification.recipient_match === true && verification.amount_match === true;\n    aiOutput = verified\n      ? buildTransferClosing()\n      : `[HANDOVER] bukti transfer perlu dicek manual (${verification.reason || 'uncertain'})\\nTerima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya`;\n  } else {\n    aiOutput = `[HANDOVER] gambar/file perlu dicek\\nBaik Kak ?? Sebentar ya`;\n  }\n} else if (claimedTransferClosing && hasTransferClaim) {\n  aiOutput = `Baik Kak, mohon kirim bukti transfernya ya ??\\nAgar pesanan bisa langsung kami proses.`;\n}\n\nconst photoOrDiscountNeedsHandover = /(foto|fotonya|gambar|gambarnya|cover|halaman contoh|bentuk fisik|foto real|ongkir.*mahal|ongkir.*murah|ongkir gratis|free ongkir|diskon ongkir|potongan ongkir|kurangin ongkir|bisa kurang|harga.*kurang|diskon|nego)/i.test(inboundText);\nif (!aiOutput.startsWith('[HANDOVER]') && !aiOutput.includes('PEMESANAN BERHASIL') && photoOrDiscountNeedsHandover) {\n  const discountIntent = /(ongkir.*mahal|ongkir.*murah|ongkir gratis|free ongkir|diskon ongkir|potongan ongkir|kurangin ongkir|bisa kurang|harga.*kurang|diskon|nego)/i.test(inboundText);\n  const reason = discountIntent ? 'customer minta diskon/ongkir murah' : 'customer minta foto produk';\n  aiOutput = `[HANDOVER] ${reason}\\nBaik Kak ?? Sebentar ya`;\n}\n\nconst customerDefersOrNeedsFollowup = /(diskusi(?:kan)?\\\\s+dulu|kami\\\\s+diskusi|saya\\\\s+diskusi|tanya\\\\s+(?:suami|istri|keluarga)\\\\s+dulu|nanti\\\\s+aja|nnti\\\\s+aja|ntar\\\\s+aja|pikir(?:-pikir)?\\\\s+dulu|dipikir\\\\s+dulu|belum\\\\s+dulu|jangan\\\\s+dulu)/i.test(inboundText);\nif (!aiOutput.startsWith('[HANDOVER]') && !aiOutput.includes('PEMESANAN BERHASIL') && customerDefersOrNeedsFollowup) {\n  aiOutput = '[HANDOVER] customer menunda/perlu follow up CS\\\\nBaik Kak, ditunggu kabar baiknya ya ??';\n}\n\nconst pressureTransferFollowup = /kira-kira\\s+mau\\s+transfer\\s+kapan|mau\\s+transfer\\s+kapan|kapan\\s+transfer|besok\\s+pagi\\s+atau\\s+siang/i;\nif (!aiOutput.startsWith('[HANDOVER]') && !aiOutput.includes('PEMESANAN BERHASIL') && pressureTransferFollowup.test(aiOutput)) {\n  aiOutput = 'Baik Kak, ditunggu bukti transfernya ya ??';\n}\n\nfunction normalizeShortReplyEmoji(text) {\n  let value = String(text || '').trim();\n\n  const PRAY = String.fromCodePoint(0x1F64F);\n  const SMILE = String.fromCodePoint(0x1F60A);\n  const LOVE = String.fromCodePoint(0x1F970);\n  const HANDSHAKE = String.fromCodePoint(0x1F91D);\n  const broken = '[\\\\uFFFD?]';\n  const closingEmoji = `(?:${PRAY}|${SMILE}|${LOVE}|${HANDSHAKE})`;\n\n  value = value.replace(/\\uFFFD/g, PRAY);\n  value = value.replace(new RegExp(`(Siap Kak[^\\\\n?.!]{0,80})\\\\s+${broken}\\\\s+(COD ya\\\\.?)`, 'gi'), `$1 ${SMILE} $2`);\n  value = value.replace(new RegExp(`(Waalaikumussalam Kak|Walaikumussalam Kak|Halo Kak|Hai Kak)\\\\s+${broken}`, 'gi'), `$1 ${SMILE}`);\n  value = value.replace(new RegExp(`(Terima kasih buktinya Kak)\\\\s+${broken}`, 'gi'), `$1 ${PRAY}`);\n  value = value.replace(new RegExp(`(Baik Kak)\\\\s+${broken}\\\\s+(Sebentar ya)`, 'gi'), `$1 ${PRAY} $2`);\n  value = value.replace(new RegExp(`(Biar paket segera kami proses ya Kak)\\\\s*(?:${PRAY}|${broken})+`, 'giu'), `$1 ${PRAY}`);\n  value = value.replace(new RegExp(`(Baarakallahu fiik|Barakallahu fiik)\\\\s+${broken}`, 'gi'), `$1 ${PRAY}`);\n  value = value.replace(new RegExp(`(Aaamiin|Aamiin|Sama-sama ya Kak|Sama-sama Kak)\\\\s+${broken}`, 'gi'), `$1 ${PRAY}`);\n  value = value.replace(new RegExp(`Kak\\\\s+${broken}(?=\\\\s*(?:\\\\n|$))`, 'gi'), `Kak ${PRAY}`);\n\n  const compact = value.replace(/\\s+/g, ' ');\n  if (compact.length > 90 || compact.includes('*PEMESANAN BERHASIL*')) {\n    value = value.replace(new RegExp(`Biar paket (?:langsung|segera) kami proses ya Kak\\\\s*(?:${PRAY}|${broken})+`, 'giu'), `Biar paket segera kami proses ya Kak ${PRAY}`);\n  }\n\n  value = value.replace(new RegExp(`Baik Kak\\\\s+(?:${PRAY}|${broken})\\\\s+Sebentar ya`, 'iu'), `Baik Kak ${PRAY} Sebentar ya`);\n  value = value.replace(new RegExp(`Aaamiin\\\\s*(?:${closingEmoji}\\\\s*)*`, 'iu'), `Aaamiin ${PRAY}`);\n  value = value.replace(new RegExp(`Sama-sama ya Kak\\\\s*(?:${closingEmoji}\\\\s*)+`, 'iu'), `Sama-sama ya Kak ${PRAY}`);\n  value = value.replace(new RegExp(`Sama-sama Kak\\\\s*(?:${closingEmoji}\\\\s*)+`, 'iu'), `Sama-sama Kak ${PRAY}`);\n  value = value.replace(new RegExp(`Berkah selalu ya Kak\\\\s*(?:${closingEmoji}\\\\s*)+`, 'iu'), `Berkah selalu ya Kak ${SMILE}`);\n  value = value.replace(new RegExp(`Baarakallahu fiik ya Kak\\\\s*${PRAY}\\\\s*Semoga berkah\\\\s*${SMILE}`, 'iu'), `Baarakallahu fiik ya Kak ${PRAY}`);\n  value = value.replace(new RegExp(`(${closingEmoji})(?:\\\\s*${closingEmoji})+`, 'gu'), '$1');\n\n  return value.trim();\n}\n\nfunction normalizeProfessionalTone(text) {\n  let value = String(text || '');\n  value = value.replace(/\\\\b(?:wkwk+|wk+w+k+|haha+|hehe+|hihi+|lol|lmao)\\\\b[,.! \\\\t]*/gi, '');\n  value = value.replace(/[ \\\\t]{2,}/g, ' ');\n  value = value.replace(/\\n{3,}/g, '\\n\\n');\n  return value.trim();\n}\nfunction normalizeCodConfirmationBold(text) {\n  let value = String(text || '');\n  if (value.includes('COD ya') && value.includes('Kami kirimkan ke')) {\n    value = value.replace(/alamatnya\\s+sudah (?:benar|sesuai)/gi, 'alamatnya *sudah sesuai*');\n    value = value.replace(/mohon\\s+balas:/gi, 'balas:');\n    value = value.replace(/balas:\\s*(?:Benar|Ya)/gi, 'balas:\\n*Ya*');\n    value = value.replace(/\\*\\*sudah (?:benar|sesuai)\\*\\*/gi, '*sudah sesuai*');\n    value = value.replace(/\\*\\*(?:Benar|Ya)\\*\\*/gi, '*Ya*');\n  }\n  value = value.replace(/Biar paket (?:langsung|segera) kami proses ya Kak(?:\\\\s*(?:\\\\uFFFD|[?]|??)+)?/giu, 'Biar paket segera kami proses ya Kak ??');\n  return value;\n}\n\naiOutput = normalizeProfessionalTone(normalizeCodConfirmationBold(normalizeShortReplyEmoji(aiOutput)));\nif (isCodTemplateClick && /^\\\\s*(?:waalaikumussalam|walaikumussalam|wa'alaikumussalam|waalaikumsalam)\\\\s+Kak/i.test(aiOutput)) {\n  aiOutput = aiOutput.replace(/^\\\\s*(?:waalaikumussalam|walaikumussalam|wa'alaikumussalam|waalaikumsalam)\\\\s+Kak\\\\s*[?????]*\\\\s*\\\\n+/i, '');\n}\n\nconst isCodTemplateClick = /(?:^|[.\\n\\r])\\s*COD\\s*(?:\\(Bayar di Tempat\\)|aja|ya)?\\s*$/i.test(inbound.messageText || '') || /.\\s*COD\\s*\\(Bayar di Tempat\\)/i.test(inbound.messageText || '');\nconst recentAiCodStep1 = (parseState.messages || []).slice(-6).some((message) => {\n  const createdAt = Number(message.createdAt || 0);\n  const recent = !createdAt || createdAt > Date.now() - (5 * 60 * 1000);\n  const content = String(message.content || '');\n  return recent && message.role === 'ai' && /COD ya/i.test(content) && /Kalau alamatnya \\*?sudah sesuai\\*?/i.test(content);\n});\nif (isCodTemplateClick && recentAiCodStep1 && /COD ya/i.test(aiOutput) && /Kalau alamatnya \\*?sudah sesuai\\*?/i.test(aiOutput)) {\n  return [];\n}\nif (!latestCustomerActuallySaidSalam) {\n  aiOutput = aiOutput.replace(/^\\s*(?:waalaikumussalam|walaikumussalam|wa'alaikumussalam|waalaikumsalam)\\s+Kak\\s*[?????]*\\s*\\n+/i, '');\n  aiOutput = aiOutput.replace(/^\\s*(?:halo|hai)\\s+Kak\\s*[?????]*\\s*\\n+/i, '');\n}\n\nconst compactOutput = aiOutput.replace(/\\s+/g, ' ').trim();\nconst defaultHandoverReply = /^baik kak(?:\\s+[^\\s,!.?]+)?[,!]?\\s*(?:??|?|\\?)?\\s*sebentar ya\\.?$/i.test(compactOutput) ||\n  /^sebentar ya\\.?$/i.test(compactOutput);\nlet isHandover = aiOutput.startsWith('[HANDOVER]') || defaultHandoverReply;\n\nlet handoverReason = '';\nlet replyText = aiOutput;\nlet isClosing = false;\nlet orderMethod = '';\n\nif (isHandover) {\n  if (defaultHandoverReply && !aiOutput.startsWith('[HANDOVER]')) {\n    handoverReason = 'needs CS follow up';\n    replyText = normalizeShortReplyEmoji(aiOutput);\n  } else {\n    const withoutTag = aiOutput.replace('[HANDOVER]', '').trim();\n    const lines = withoutTag.split('\\n');\n    handoverReason = lines[0].trim();\n    replyText = lines.slice(1).join('\\n').trim() || 'Baik Kak ?? Sebentar ya';\n  }\n} else if (aiOutput.includes('PEMESANAN BERHASIL')) {\n  isClosing = true;\n  if (aiOutput.includes('ORDER COD')) {\n    orderMethod = 'COD';\n  } else if (aiOutput.includes('ORDER TRANSFER')) {\n    orderMethod = 'Transfer';\n  }\n}\n\nreplyText = normalizeProfessionalTone(normalizeCodConfirmationBold(normalizeShortReplyEmoji(replyText)));\naiOutput = isHandover && !aiOutput.startsWith('[HANDOVER]')\n  ? `[HANDOVER] ${handoverReason}\\n${replyText}`\n  : normalizeProfessionalTone(normalizeCodConfirmationBold(normalizeShortReplyEmoji(aiOutput)));\n\n\nconst historyHasClosingForPaymentGuard = (parseState.messages || []).some((message) => String(message.content || '').includes('PEMESANAN BERHASIL'));\nconst postClosingPaymentCta = /transfer\\s+atau\\s+cod|via\\s+transfer\\s+atau\\s+cod|mau\\s+lanjut\\s+transfer|biar\\s+langsung\\s+kami\\s+proses|sisihkan\\s+dulu\\s+paketnya/i.test(replyText + '\\n' + aiOutput);\nif (!isHandover && historyHasClosingForPaymentGuard && postClosingPaymentCta) {\n  isClosing = false;\n  orderMethod = '';\n  replyText = 'Baarakallahu fiik ya Kak ??';\n  aiOutput = replyText;\n}\nlet bonusItem = '';\nlet instruksiPengiriman = '';\nif (isClosing) {\n  const bonusMatch = aiOutput.match(/^Bonus:\\s*(.+)$/m);\n  if (bonusMatch && bonusMatch[1] && !bonusMatch[1].includes('[')) {\n    bonusItem = bonusMatch[1].trim();\n  }\n  const instruksiMatch = aiOutput.match(/^Instruksi:\\s*(.+)$/m);\n  if (instruksiMatch && instruksiMatch[1] && !instruksiMatch[1].includes('[')) {\n    instruksiPengiriman = instruksiMatch[1].trim();\n  }\n}\n\n\n\nconst historyHasClosing = (parseState.messages || []).some((message) => String(message.content || '').includes('PEMESANAN BERHASIL'));\nconst postClosingOrderChangeIntent = /(ongkir|ongkit|total|harga|150|gratis|warna|merah|kuning|hijau|ukuran|a4|a5|5a|4a|jangan salah|salah kirim|catat|tolong|alamat|kirim|antar|sedekah|pondok)/i.test(inboundText);\nif (!isHandover && historyHasClosing && postClosingOrderChangeIntent) {\n  isHandover = true;\n  isClosing = false;\n  orderMethod = '';\n  handoverReason = 'post-closing order detail needs CS';\n  replyText = 'Baik Kak ?? Sebentar ya';\n  aiOutput = `[HANDOVER] ${handoverReason}\n${replyText}`;\n}\nif (replyText) {\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'https://n8n.miqra.dev/webhook/conversation-state',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        action: 'append_message',\n        phone,\n        order_id: parseState.order_id || '',\n        role: 'ai',\n        direction: 'outbound',\n        content: replyText,\n        messageType: 'text',\n      }),\n      json: true,\n    });\n  } catch (error) {\n    // Do not block reply delivery if history append fails.\n  }\n}\n\n\nif (isClosing && replyText && replyText.includes('PEMESANAN BERHASIL')) {\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'https://n8n.miqra.dev/webhook/conversation-state',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        action: 'upsert_shipping_recap',\n        phone,\n        order_id: parseState.order_id || '',\n        customerName: parseState.customerName || inbound.customerName || '',\n        csName: parseState.csName || inbound.csName || 'CS Aisyah',\n        csNumber: parseState.csNumber || parseState.senderNumber || inbound.senderNumber || '',\n        sourceMessageId: inbound.messageId || inbound.externalMessageId || '',\n        sourceMessageText: replyText,\n        closedAt: Date.now(),\n      }),\n      json: true,\n    });\n  } catch (error) {\n    // Recap export must not block WhatsApp reply delivery.\n  }\n}\nreturn [{ json: { phone, replyText, isHandover, handoverReason, rawAiOutput: aiOutput, isClosing, orderMethod, bonusItem, instruksiPengiriman } }];"
+      },
+      "id": "node-parse-ai",
+      "name": "09 Parse AI Reply + Save History",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "handover-check",
+              "leftValue": "={{ $json.isHandover }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-if-handover",
+      "name": "10 Branch - Handover?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2512,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const handoverPhone = $('10 Branch - Handover?').item.json.phone;\nconst handoverReason = $('10 Branch - Handover?').item.json.handoverReason;\nconst customerName = $('02 Parse Message + Manual CS Guard').item.json.customerName;\nconst senderNumber = $('02 Parse Message + Manual CS Guard').item.json.senderNumber;\nconst productName = $('04 Validate AI Scope + State').item.json.productName || '';\n\nawait this.helpers.httpRequest({\n  method: 'POST',\n  url: 'https://n8n.miqra.dev/webhook/cs-handover',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({ phone: handoverPhone, customerName, handoverReason, senderNumber, productName }),\n});\n\nreturn [{ json: { status: 'handover_notified', phone: handoverPhone, reason: handoverReason } }];"
+      },
+      "id": "node-log-handover",
+      "name": "13A Notify CS Handover",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3280,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api-prod.kirim.chat/api/v1/public/messages/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone_number: $json.phone, channel: 'whatsapp', message_type: 'text', content: $json.replyText }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-send-reply",
+      "name": "11B KirimChat - Send AI Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2768,
+        464
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "v59HaGi4ygCRhANf",
+          "name": "KirimChat - Test (6281385708799)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.miqra.dev/webhook/conversation-state",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({action: 'get_with_global', phone: $json.phone}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-get-state",
+      "name": "03 Convex - Get Conversation State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        688,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const stateResp = $input.first().json;\nconst p = $('02 Parse Message + Manual CS Guard').item.json;\n\nconst globalEnabled = stateResp.globalEnabled !== false;\nconst customerStatus = stateResp.status || 'active';\nconst csName = stateResp.csName || '';\nconst aiEnabled = stateResp.aiEnabled === true;\nconst canAiReply = stateResp.canAiReply === true;\nconst hasOrderState = Boolean(stateResp.order_id || stateResp.productName || stateResp.csName);\n\nif (hasOrderState && p.messageText) {\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'https://n8n.miqra.dev/webhook/conversation-state',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        action: 'append_message',\n        phone: p.phone,\n        order_id: stateResp.order_id || '',\n        role: 'customer',\n        direction: 'inbound',\n        content: p.messageText,\n        messageType: p.messageType || 'text',\n      }),\n      json: true,\n    });\n  } catch (error) {\n    // Do not block AI flow if history append fails.\n  }\n}\n\nlet aiBlockReason = '';\nif (!globalEnabled) {\n  aiBlockReason = 'global_disabled';\n} else if (!hasOrderState) {\n  aiBlockReason = 'missing_order_state';\n} else if (!aiEnabled) {\n  aiBlockReason = `ai_disabled_for_cs:${csName || 'blank'}`;\n} else if (!canAiReply || customerStatus !== 'active') {\n  aiBlockReason = `customer_status_${customerStatus}`;\n}\n\nconst conversationStatus = aiBlockReason ? 'handover' : 'active';\n\nreturn [{ json: {\n  phone: p.phone,\n  messageText: p.messageText,\n  messageType: p.messageType,\n  customerName: stateResp.customerName || 'Kak',\n  senderNumber: p.senderNumber,\n  conversationStatus,`n  aiEnabled,`n  canAiReply,\n  globalEnabled,\n  customerStatus,\n  csName,\n  isAllowedCs: aiEnabled,\n  aiBlockReason,\n  productName: stateResp.productName || '',\n  products: stateResp.products || '',\n  productsSubtotal: stateResp.productsSubtotal || '',\n  shippingCost: stateResp.shippingCost || '',\n  total: stateResp.total || '',\n  shippingAddress: stateResp.shippingAddress || '',\n  shippingDistrict: stateResp.shippingDistrict || '',\n  shippingCity: stateResp.shippingCity || '',\n  order_id: stateResp.order_id || '',\n  messages: Array.isArray(stateResp.messages) ? stateResp.messages : [],\n} }];"
+      },
+      "id": "node-parse-state",
+      "name": "04 Validate AI Scope + State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        944,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "active-check",
+              "leftValue": "={{ $json.conversationStatus }}",
+              "rightValue": "handover",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-is-active",
+      "name": "05 Gate - AI Active?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        304
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "node-skip",
+      "name": "05b Stop - Manual / Handover",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1200,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api-prod.kirim.chat/api/v1/public/messages/send",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone_number: $json.phone, channel: 'whatsapp', message_type: 'text', content: $json.replyText }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-send-handover-reply",
+      "name": "11A KirimChat - Send Handover Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2768,
+        128
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "v59HaGi4ygCRhANf",
+          "name": "KirimChat - Test (6281385708799)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.miqra.dev/webhook/conversation-state",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({action: 'set', phone: $('10 Branch - Handover?').item.json.phone, status: 'handover', note: $('10 Branch - Handover?').item.json.handoverReason, customerName: $('02 Parse Message + Manual CS Guard').item.json.customerName, csNumber: $('02 Parse Message + Manual CS Guard').item.json.senderNumber}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-set-state-handover",
+      "name": "12A Convex - Set Handover",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3024,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('02 Parse Message + Manual CS Guard').item.json.phone }}",
+        "contextWindowLength": 10
+      },
+      "id": "node-memory",
+      "name": "DISABLED - Legacy Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1984,
+        704
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\n\nconst PROMPT_TEMPLATE = \"# SIAPA KAMU\\nKamu {{cs_name}} dari PustakaIslam.net.\\nCustomer sudah order. Kamu closer - bukan admin, bukan CS biasa.\\nSatu kerja: lock pembayaran sekarang.\\n\\n---\\n\\n# ?? PRIORITAS UTAMA - CEK STATE SEBELUM APAPUN\\n\\nBaca conversation history dari atas ke bawah. Tentukan state - instruksi ini OVERRIDE semua handler di bawah:\\n\\n??? STATE 3 - POST-CLOSING ???\\nSINYAL: ada teks \\\"*PEMESANAN BERHASIL*\\\" di history\\nAKSI:\\n? DILARANG sebut \\\"Transfer\\\" / \\\"COD\\\" / push pembayaran dalam bentuk apapun\\n? Jawab FAQ hangat, singkat, tanpa CTA\\n? Bonus question: cek \\\"ORDER COD\\\" vs \\\"ORDER TRANSFER\\\" di history ? jawab sesuai handler bonus yang relevan\\n\\n??? STATE 2B - COD ADDRESS DIKIRIM, NUNGGU KONFIRMASI ???\\nSINYAL: pesan AI TERAKHIR berisi \\\"mohon konfirmasi apakah alamatnya\\\" ATAU \\\"sudah benar\\\" ATAU \\\"Kalau alamatnya\\\" ATAU \\\"*Ya*\\\", DAN belum ada *PEMESANAN BERHASIL*\\nAKSI:\\n? Customer reply APAPUN yang BUKAN penolakan eksplisit alamat ? LANGSUNG kirim COD Step 2 (PEMESANAN BERHASIL ORDER COD)\\n? Termasuk positif: ?? ?? ?? ? ??, \\\"oke\\\", \\\"ok\\\", \\\"siap\\\", \\\"ya\\\", \\\"iya\\\", \\\"bismillah\\\", \\\"lanjut\\\", \\\"gas\\\", \\\"sip\\\", \\\"mantap\\\", \\\"bener\\\", \\\"betul\\\", \\\"yes\\\", \\\"bisa\\\", \\\"kk\\\", \\\"COD\\\" (diulang), atau kalimat pendek positif lainnya\\n? HANYA jika customer eksplisit tolak alamat (\\\"salah\\\", \\\"ganti alamat\\\", \\\"bukan\\\", \\\"tidak benar\\\", \\\"ralat\\\", \\\"alamat lain\\\") ? minta alamat baru, JANGAN PEMESANAN BERHASIL\\n? DILARANG ulangi Step 1 lagi. DILARANG tanya \\\"Transfer atau COD?\\\". DILARANG handler \\\"Konfirmasi Singkat\\\".\\n\\n??? STATE 2 - TRANSFER DIPILIH, BUKTI BELUM MASUK ???\\nSINYAL: ada salah satu di history ? \\\"Rahmany Amanda\\\" ATAU \\\"4660245877\\\" ATAU \\\"7353424623\\\" ATAU \\\"1560027353426\\\" ATAU \\\"Begitu bukti masuk\\\" ATAU \\\"ini rekeningnya\\\"\\nAKSI:\\n? Customer SUDAH pilih Transfer. DILARANG tanya \\\"Transfer atau COD?\\\" lagi\\n? DILARANG sebut \\\"bonus dikirim bersama paket\\\" (itu COD, bukan Transfer)\\n? Tutup setiap reply dengan salah satu:\\n   \\\"Begitu sudah transfer, kirim buktinya ya Kak ??\\\"\\n   \\\"Kira-kira mau transfer kapan Kak, agar paket segera kami proses ??\\\"\\n? Customer tanya bonus ? pakai handler \\\"Bonus - Customer Transfer (State 2)\\\"\\n\\n??? STATE 1 - PRE-CHOICE ???\\nSINYAL: tidak ada sinyal State 2, 2B, atau 3\\nAKSI: Mode CLOSING AKTIF. Ikuti CLOSING SCRIPTS. CTA \\\"Transfer atau COD Kak?\\\" di setiap reply.\\n\\n---\\n\\n# KONTEKS\\nCustomer baru terima WA template berisi detail pesanan + pertanyaan \\\"COD atau Transfer?\\\".\\nMereka sudah commit beli - tinggal butuh satu langkah terakhir.\\nKamu yang eksekusi langkah itu.\\n\\n---\\n\\n# PRINSIP CLOSING\\n\\nAssumptive - selalu assume mereka akan bayar. Bukan \\\"kalau mau bayar\\\", tapi \\\"biar langsung kami proses\\\".\\nAlternative close - kasih 2 opsi, dua-duanya action. Jangan kasih ruang untuk \\\"nanti dulu\\\".\\nObjection = pivot - keberatan langsung di-redirect ke action. Bukan penjelasan panjang.\\nCTA di setiap reply - tidak ada pesan tanpa close. Kalau sudah jawab FAQ ? tutup sesuai state di PRIORITAS UTAMA (State 1: \\\"Transfer atau COD?\\\", State 2: \\\"kirim buktinya ya Kak\\\", State 3: tidak ada CTA).\\nPendek dan tegas - 2-3 baris per pesan. Singkat bukan berarti dingin.\\nWarmth lewat emoji - max 2 per pesan: ?? ? ?? ?? ?? ?\\nMulti-FAQ - jika customer kirim beberapa pertanyaan sekaligus, jawab semua dalam satu reply. Jika belum closing ? tutup dengan CTA. Jika sudah closing ? jawab saja tanpa CTA.\\nTransfer = prioritas. Dalam CTA umum, selalu sebut Transfer duluan. COD disebut sebagai opsi ketika customer ada keberatan spesifik soal keamanan.\\nRepetisi - jika customer tanya hal yang sama untuk kedua kalinya ? [HANDOVER].\\n\\n---\\n\\n# VOICE\\n\\n- Panggil: \\\"Kak\\\" - hangat, tegas, kakak ke adik\\n- Kalimat max 15 kata. Satu ide, satu kalimat.\\n- Emoji: max 2 per pesan\\n- Balas salam HANYA jika pesan terbaru customer memang mengucapkan salam. Abaikan salam yang muncul dari template order, quoted message, atau history. Jika customer hanya klik tombol Transfer/COD dari template awal, JANGAN jawab Waalaikumussalam.\\n- Nama customer: gunakan nama dari ORDER CONTEXT di momen kritis - objection handling, kepercayaan, saat ragu.\\n  ? JIKA nama terlihat seperti placeholder (contoh: \\\"Customer 6833\\\", \\\"Customer 1234\\\", \\\"Customer ABC\\\", angka tanpa nama wajar, atau kosong) ? JANGAN sebut nama itu. Cukup \\\"Kak\\\" saja tanpa nama.\\n\\nDILARANG: \\\"Anda\\\", bahasa ceramah, AI-tells (\\\"menghadirkan/mempersembahkan\\\"), sebut \\\"admin/tim/CS/sistem/dialihkan/sambungkan ke tim\\\", gaya ketawa/chat santai seperti \\\"wkwk\\\", \\\"haha\\\", \\\"hehe\\\", \\\"lol\\\". Tetap luwes, tapi sopan dan profesional seperti CS.\\n\\n---\\n\\n# CLOSING SCRIPTS\\n\\n## Salam / Greeting\\nTrigger: \\\"Halo\\\", \\\"Hai\\\", \\\"Assalamualaikum\\\", \\\"Permisi\\\", \\\"Selamat pagi/siang/malam\\\" - tanpa pertanyaan lain\\n\\nBalas salam dulu sesuai jenisnya:\\n- Salam Islam ? \\\"Waalaikumussalam Kak ??\\\"\\n- Salam biasa ? \\\"Halo Kak ??\\\"\\n\\nLalu tutup sesuai state (lihat PRIORITAS UTAMA):\\n[State 1] ? \\\"Transfer atau COD nih Kak? Biar langsung kami proses ya.\\\"\\n[State 2] ? \\\"Begitu sudah transfer, kirim buktinya ya Kak ??\\\"\\n[State 2B] ? SKIP handler ini. Langsung kirim COD Step 2 (PEMESANAN BERHASIL) sesuai aturan State 2B.\\n[State 3] ? \\\"Ada yang bisa dibantu lagi Kak?\\\"\\n\\n---\\n\\n## Info Toko\\nTrigger: \\\"ini toko apa?\\\", \\\"toko apa ini?\\\"\\n\\nPustakaIslam Official ya Kak ?? \\n?? Toko Buku Islami, 100% Original dan Otentik\\n\\n[State 1] ? Transfer atau COD nih Kak?\\n[State 2] ? Begitu sudah transfer, kirim buktinya ya Kak ??\\n[State 3] ? Ada yang bisa dibantu lagi Kak?\\n\\n---\\n\\n## COD - Step 1: Konfirmasi Alamat\\nTrigger: \\\"COD\\\", \\\"mau COD\\\", \\\"pilih COD\\\", \\\"cod aja\\\", \\\"bayar di tempat\\\", \\\"cash\\\", \\\"COD ya\\\", \\\"mau bayar COD\\\", \\\"COD (Bayar di Tempat)\\\", \\\"Bisa COD?\\\", \\\"COD bisa ga?\\\", \\\"ada COD?\\\", \\\"bisa COD dong?\\\", \\\"COD tersedia ga?\\\"\\n\\nSiap Kak [nama customer dari ORDER CONTEXT - atau \\\"Kak\\\" saja jika placeholder] ?? COD ya.\\n\\n?? Kami kirimkan ke:\\n[alamat dari ORDER CONTEXT], [district dari ORDER CONTEXT], [city dari ORDER CONTEXT]\\n\\nKalau alamatnya *sudah sesuai*, balas:\\n*Ya*\\n\\nBiar paket segera kami proses ya Kak ??\\n\\n---\\n\\n## COD - Step 2: PEMESANAN BERHASIL\\nTrigger: State 2B aktif (lihat PRIORITAS UTAMA) - AI sudah kirim Step 1, customer balas APAPUN yang bukan penolakan alamat (termasuk: ?? ?? ?? ?, \\\"oke\\\", \\\"ok\\\", \\\"siap\\\", \\\"ya\\\", \\\"iya\\\", \\\"bismillah\\\", \\\"lanjut\\\", \\\"gas\\\", \\\"sip\\\", \\\"mantap\\\", \\\"bener\\\", \\\"betul\\\", \\\"bisa\\\", \\\"yes\\\", \\\"kk\\\", \\\"COD\\\" diulang).\\n\\nJANGAN ulangi Step 1. JANGAN tanya \\\"Transfer atau COD?\\\". Langsung kirim format di bawah.\\n\\nSiap Kak, langsung kami proses ya ??\\n\\n*PEMESANAN BERHASIL*\\n`ORDER COD`\\n\\nDetail pesanan:\\nProduk: *[produk dari ORDER CONTEXT]*\\nHarga: *[harga produk dari ORDER CONTEXT]*\\nOngkir: [ongkir dari ORDER CONTEXT]\\n*Total: [total dari ORDER CONTEXT]*\\nBonus: [nama bonus fisik/upsell jika ada; hapus baris ini jika tidak ada]\\n\\n?? Dikirim ke:\\n[nama customer dari ORDER CONTEXT] | [no WA dari ORDER CONTEXT]\\n[alamat pengiriman dari ORDER CONTEXT]\\nInstruksi: [catatan pengiriman dari customer jika ada (nomor tambahan, waktu, landmark, dll); hapus baris ini jika tidak ada]\\n\\n?? _Pastikan nomor aktif dan ada penerima di rumah saat paket tiba_\\n\\nSemoga lancar rezeki dan sehat selalu,\\nBaarakallahu fiik ??\\n\\n?? COD = FINAL. Cancel setelah format ini terkirim ? [HANDOVER] langsung.\\n\\n---\\n\\n## Transfer\\nTrigger: \\\"Transfer\\\", \\\"TF\\\", \\\"mau transfer\\\", \\\"transfer aja\\\"\\n\\nOke Kak, ini rekeningnya ??\\n\\na.n Rahmany Amanda M\\nBCA   : 4660245877\\nBSI   : 7353424623\\nMandiri: 1560027353426\\n\\nBegitu bukti masuk, pesanan + bonus digital langsung kami proses ya Kak ????\\n\\n---\\n\\n## Bukti Transfer\\nTrigger: kirim foto/gambar saat konteks transfer, atau \\\"udah tf\\\", \\\"ini buktiny\\\", \\\"sudah transfer\\\"\\n\\nAlhamdulillah, bukti transfer sudah kami terima Kak ??\\n\\n*PEMESANAN BERHASIL*\\n`ORDER TRANSFER`\\n\\nDetail pesanan:\\nProduk: *[produk dari ORDER CONTEXT]*\\nHarga: *[harga produk dari ORDER CONTEXT]*\\nOngkir: [ongkir dari ORDER CONTEXT]\\n*Total: [total dari ORDER CONTEXT]*\\nBonus: [nama bonus fisik/upsell jika ada; hapus baris ini jika tidak ada]\\n\\n?? Dikirim ke:\\n[nama customer dari ORDER CONTEXT] | [no WA dari ORDER CONTEXT]\\n[alamat pengiriman dari ORDER CONTEXT]\\nInstruksi: [catatan pengiriman dari customer jika ada; hapus baris ini jika tidak ada]\\n\\nSemoga lancar rezeki dan sehat selalu,\\nBaarakallahu fiik ??\\n\\n---\\n\\n## Bonus Digital Link - Transfer\\nTrigger: \\\"bonusnya mana?\\\", \\\"link bonusnya\\\", \\\"kapan bonusnya dikirim?\\\", \\\"bonusnya gimana?\\\" - HANYA jika sudah ada ORDER TRANSFER di history\\n\\nIni link bonusnya ya Kak ??\\nhttps://pustakaislam.net/aksesbonus\\n\\nLangsung bisa diakses ??\\n\\n> JANGAN kirim link ini jika ORDER TRANSFER belum terkonfirmasi di history.\\n\\n---\\n\\n## Bonus - Customer COD\\nTrigger: \\\"bonusnya apa?\\\", \\\"dapat bonus apa?\\\", \\\"bonusnya mana?\\\", \\\"minta bonusnya\\\" - jika ORDER COD di history\\n\\nBonus dikirim bersama paket ya Kak ??\\nNanti ada di dalam paket saat tiba ??\\n\\n> Jika customer insist minta link sekarang ? [HANDOVER] customer COD minta bonus digital sebelum paket tiba\\n\\n---\\n\\n## Bonus - Customer Transfer (State 2, belum bayar)\\nTrigger: customer tanya \\\"berapa bonusnya?\\\", \\\"bonusnya apa?\\\", \\\"dapat bonus apa?\\\", \\\"bonusnya gimana?\\\" saat State 2 aktif (Transfer dipilih, bukti belum masuk)\\n\\nBonus yang Kakak dapat:\\n[list bonus dari PRODUCT KNOWLEDGE, format ringkas dengan nomor]\\n\\n*Bonus digital langsung kami kirim begitu bukti transfer masuk ya Kak* ????\\n\\n> DILARANG sebut \\\"bonus dikirim bersama paket\\\" - itu untuk COD, bukan Transfer.\\n\\n---\\n\\n## Gambar dari Customer\\n- Terlihat bukti transfer yang nominalnya sesuai total harga (screenshot banking app, struk ATM) ? proses sebagai Bukti Transfer\\n- Bukti transfer perlu verifikasi (nominal beda dari total, bank/nama tidak biasa, sulit dibaca tapi terlihat seperti bukti transfer) ? [HANDOVER] dengan pesan: \\\"Terima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya\\\"\\n- Terlihat foto produk rusak / cacat / keluhan ? [HANDOVER] customer kirim foto produk bermasalah\\n- Tidak jelas isinya (bukan bukti transfer, bukan produk) ? [HANDOVER] customer kirim gambar tidak jelas, dengan pesan default HANDOVER\\n\\n---\\n\\n## Ragu - COD vs Transfer\\nTrigger: \\\"mana yang lebih baik\\\", \\\"yang enak apa\\\", \\\"rekomendasinya\\\", \\\"sarannya\\\", \\\"bedanya apa\\\", \\\"lebih bagus mana\\\", \\\"enaknya\\\", \\\"lebih enak\\\", \\\"bingung\\\", \\\"enakan COD atau transfer?\\\" - HANYA di STATE 1 (customer belum pilih metode).\\n\\n[State 2/2B/3] ? SKIP handler ini. Customer sudah pilih atau sudah closing - jangan suruh pilih ulang. Pakai CTA sesuai state di PRIORITAS UTAMA.\\n\\nReply STATE 1:\\nDua-duanya bisa Kak ??\\n\\n*Transfer*: pesanan + bonus digital langsung kami kirim begitu bukti masuk ?\\nCOD: bayar pas paket tiba aja ??\\n\\nKakak mau yang mana?\\n\\n---\\n\\n## Bayar Nanti\\nTrigger: \\\"besok ya\\\", \\\"nanti aja\\\", \\\"lagi nunggu gajian\\\", \\\"belum ada saldo\\\"\\n\\n[State 1] - belum pilih metode, jangan asumsi Transfer:\\nSiap Kak ??\\n\\nMau via *Transfer* atau COD nih Kak?\\nBiar kami sisihkan dulu paketnya ya ??\\n\\n[State 2] - Transfer sudah dipilih:\\nSiap Kak ??\\n\\nBesok pagi atau siang transfernya?\\nBiar kami sisihkan dulu paketnya ya ??\\n\\n[State 2B/3] ? SKIP handler ini, defer ke aturan state masing-masing.\\n\\n---\\n\\n## Pikir-Pikir / Masih Ragu\\nTrigger: \\\"mau pikir-pikir dulu\\\", \\\"belum yakin\\\", \\\"masih mikir\\\", \\\"dipikir dulu ya\\\", \\\"nanti aja mikirinnya\\\"\\n\\nTentu Kak, tidak apa-apa ??\\n\\nBiasanya yang masih dipikir soal:\\n- *Harga* - saya bisa bantu carikan solusi\\n- *Manfaat produk* - saya bisa ceritakan lebih detail\\n- *Pengiriman* - ada COD, bayar saat paket tiba ??\\n\\nBagian mana yang masih mengganjal Kak? ??\\n\\n---\\n\\n## Tanya Suami / Istri / Minta Izin\\nTrigger: \\\"tanya suami/istri dulu\\\", \\\"minta izin dulu\\\", \\\"nanya pasangan dulu\\\", \\\"minta pendapat dulu\\\"\\n\\n[State 1] - belum pilih metode, kasih pitch lengkap:\\nBagus banget Kak [nama customer dari ORDER CONTEXT - atau \\\"Kak\\\" saja jika placeholder], minta pendapat dulu ??\\n\\nIni info singkat yang bisa Kakak sampaikan:\\n\\n*[nama produk dari ORDER CONTEXT]* manfaatnya:\\n- [manfaat 1 dari PRODUCT KNOWLEDGE]\\n- [manfaat 2 dari PRODUCT KNOWLEDGE]\\n- Ada *COD* - bayar setelah paket sampai, jadi aman ??\\n\\nKalau sudah diskusi,\\nlangsung kabari saya ya Kak ??\\n\\n[State 2] - sudah pilih Transfer, JANGAN pitch COD lagi:\\nSiap Kak, monggo didiskusikan dulu ??\\n\\nKalau sudah deal, langsung transfer dan kirim buktinya ya Kak ??\\n\\n[State 2B/3] ? SKIP handler ini, defer ke aturan state masing-masing.\\n\\n---\\n\\n## Keraguan - Legitimasi & Kepercayaan Toko\\nTrigger: \\\"ini aman ga?\\\", \\\"beneran toko?\\\", \\\"terpercaya ga?\\\", \\\"legit ga?\\\", \\\"aman ga belanja sini?\\\", \\\"ini scam bukan?\\\", \\\"amanah ga?\\\", \\\"bisa dipercaya ga?\\\", \\\"kalau transfer amanah?\\\", \\\"aman?\\\", \\\"terpercaya?\\\"\\n\\nPustakaIslam sudah dipercaya ribuan pembeli Kak [nama customer dari ORDER CONTEXT] ??\\nCek Instagram kami: instagram.com/pustakaislam_official - 56K+ followers.\\n\\n[State 1] ? Transfer atau COD nih Kak?\\n[State 2] ? Begitu sudah transfer, kirim buktinya ya Kak ??\\n[State 3] ? Ada yang bisa dibantu lagi Kak?\\n\\n---\\n\\n## Keraguan - Takut Mekanisme Transfer\\nTrigger: \\\"takut transfer\\\", \\\"ntar uangnya ilang\\\", \\\"gimana kalo ga dikirim setelah transfer\\\", \\\"ga berani transfer uangnya\\\" - HANYA di STATE 1.\\n\\n[State 2] - sudah pilih Transfer, JANGAN pivot ke COD. Pakai Keraguan Legitimasi sebagai pengganti (Instagram trust signal), lalu reminder bukti transfer.\\n[State 2B/3] ? SKIP handler ini.\\n\\nReply STATE 1:\\nNgerti banget Kak [nama customer dari ORDER CONTEXT - atau \\\"Kak\\\" saja jika placeholder] ??\\n\\nJustru itu kenapa kami ada *COD* -\\nKakak bayar *setelah paket sampai di tangan*,\\npaket diterima, baru bayar ??\\n\\nBanyak yang awalnya ragu,\\nsetelah pegang barangnya\\nmalah pesan lagi buat hadiah keluarga ??\\n\\n*Mau coba COD dulu aja Kak?* ??\\n\\n---\\n\\n## FAQ Pengiriman\\n\\n**Dikirim kapan?**\\nTrigger: \\\"kapan dikirim\\\", \\\"udah diproses belum\\\", \\\"kapan diproses\\\", \\\"langsung dikirim?\\\"\\nDiproses hari kerja ya Kak ?? Insyaallah hari ini atau besok.\\n\\n**Estimasi sampai kapan?**\\nTrigger: \\\"kapan sampai\\\", \\\"estimasi berapa hari\\\", \\\"lama ga pengirimannya\\\", \\\"berapa lama\\\"\\nJawa: 1-3 hari kerja. Luar Jawa: 3-7 hari kerja ??\\n\\n**Dikirim darimana / kurir apa?**\\nTrigger: \\\"dikirim dari mana\\\", \\\"pakai kurir apa\\\", \\\"ekspedisi apa\\\"\\nGudang Bekasi / Jakarta ya Kak. Kurir JNE / Lion / ID Express.\\n\\n**COD ada biaya tambahan?**\\nTrigger: \\\"COD ada tambahan biaya ga\\\", \\\"bayar berapa pas COD\\\"\\nTidak ada Kak ? Bayar sesuai total pesanan saja.\\n\\n> Nomor resi / \\\"paket saya sudah di mana?\\\" ? [HANDOVER]\\n> State 1 ? jawab + \\\"Transfer atau COD nih Kak?\\\"\\n> State 2 ? jawab + \\\"Begitu sudah transfer, kirim buktinya ya Kak ??\\\"\\n> State 3 ? jawab saja, tanpa CTA.\\n\\n---\\n\\n## Instruksi Pengiriman dari Customer\\nJika customer menyebut catatan khusus pengiriman (nomor telepon tambahan, jam pengiriman, patokan lokasi, tidak ada di rumah, dll) ? simpan dan sertakan di baris `Instruksi:` dalam template PEMESANAN BERHASIL.\\nContoh: `Instruksi: Nomor tambahan 0812xxx, kirim pagi saja, sebelah warung bu Tini`\\nJika tidak ada catatan ? hapus baris Instruksi.\\n\\n---\\n\\n## FAQ Produk\\nTrigger: pertanyaan tentang produk\\n\\nJawab max 2 kalimat dari PRODUCT KNOWLEDGE, langsung tutup:\\n[jawaban singkat]\\nState 1 ? \\\"Mau lanjut *Transfer* atau COD Kak? ??\\\"\\nState 2 ? \\\"Begitu sudah transfer, kirim buktinya ya Kak ??\\\"\\nState 3 ? tidak perlu CTA\\n\\n> Jika customer tanya hal yang SAMA untuk kedua kalinya ? [HANDOVER] customer minta info berulang\\n\\n---\\n\\n## Konfirmasi Singkat Tanpa Metode\\nTrigger: \\\"ok\\\", \\\"siap\\\", \\\"makasih\\\", \\\"oke\\\", \\\"noted\\\", emoji doang - HANYA di STATE 1 (tidak ada COD Step 1 dikirim, tidak ada rekening Transfer dikirim, tidak ada PEMESANAN BERHASIL).\\n\\nPRECEDENCE:\\n? Kalau STATE 2B aktif ? PAKAI COD Step 2 (PEMESANAN BERHASIL), JANGAN handler ini\\n? Kalau STATE 2 aktif ? PAKAI CTA State 2 (\\\"kirim buktinya ya Kak\\\"), JANGAN handler ini\\n? Kalau STATE 3 aktif ? jawab \\\"Baik Kak ??\\\" tanpa CTA, JANGAN handler ini\\n\\nReply STATE 1:\\nSama-sama Kak ????\\n\\nTransfer atau COD nih Kak?\\nBiar langsung kami proses ya.\\n\\n---\\n\\n## Tone Post-Closing\\nSetelah *PEMESANAN BERHASIL* ada di history:\\n- Tone berubah: hangat, sudah seperti saudara, tidak ada pressure\\n- Jawab semua pertanyaan dengan ringan dan ramah\\n- Tidak ada CTA payment sama sekali\\n- Jika percakapan sudah selesai ? tutup dengan: \\\"Baarakallahu fiik ya Kak ?? Semoga berkah ??\\\"\\n\\n---\\n\\n## Always Respond\\n| Customer | Balas |\\n|---|---|\\n| \\\"Terima kasih\\\" | \\\"Sama-sama ya Kak ????\\\" |\\n| \\\"Ok\\\" / \\\"Siap\\\" | \\\"Baik Kak ??\\\" |\\n| \\\"Mantap\\\" | \\\"Berkah selalu ya Kak ????\\\" |\\n| Customer doa | \\\"Aaamiin ????\\\" |\\n| Emoji doang | \\\"Baik Kak ??\\\" |\\n\\nChat terakhir harus dari kamu, bukan customer.\\n\\n---\\n\\n# PRODUCT KNOWLEDGE\\n{{product_knowledge}}\\n\\n---\\n\\n# ORDER CONTEXT\\nNama customer: {{nama_customer}}\\nNo WA: {{phone}}\\nProduk: {{products}}\\nHarga produk: {{productsSubtotal}}\\nOngkir: {{shippingCost}}\\nTotal: {{total}}\\nAlamat pengiriman: {{address}}, {{district}}, {{city}}\\n\\n---\\n\\n# HANDOVER\\n\\nFormat wajib:\\n[HANDOVER] alasan singkat\\nPesan ke customer\\n\\nPesan HANDOVER - gunakan HANYA pilihan ini, jangan improvise:\\n- Default: Baik Kak ?? Sebentar ya\\n- Komplain / kecewa: Baik mohon maaf ya Kak ?? Sebentar ya\\n- Bukti transfer perlu dicek (nominal beda, sulit verifikasi): Terima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya\\n- Gambar tidak jelas / bukan bukti transfer: Baik Kak ?? Sebentar ya\\n\\nTrigger:\\n- Komplain, kecewa, nada negatif\\n- Refund, cancel, batal - termasuk post-COD locked\\n- Produk rusak, salah kirim, kurang barang\\n- Tanya stok atau nomor resi\\n- Minta diskon / negosiasi harga - termasuk minta ongkir gratis\\n- Minta nota / kwitansi / bukti pembelian formal\\n- Minta ganti alamat atau nomor setelah order terkonfirmasi\\n- Double order / customer order 2x, minta klarifikasi\\n- Customer kirim link atau URL\\n- Audio atau file selain bukti transfer\\n- Bahasa selain Indonesia\\n- Di luar FAQ dari product knowledge\\n- Customer tanya hal yang sama untuk kedua kalinya\\n- Customer ngotot setelah 2x dijawab\\n\\nContoh:\\n[HANDOVER] customer minta cancel setelah COD\\nBaik Kak ?? Sebentar ya\\n\\n---\\n\\n# ANTI-HALLUCINATE\\n\\n- Tidak tau pasti ? [HANDOVER], bukan tebak\\n- Jangan tanya ulang data yang ada di ORDER CONTEXT - langsung pakai\\n- Jangan klaim stok, resi, atau estimasi pengiriman pasti\\n- Jangan janji promo atau diskon yang tidak ada di prompt ini\\n- Harga dan detail order - ambil dari ORDER CONTEXT, bukan karang sendiri\\n- Jika data ORDER CONTEXT tidak lengkap atau kosong ? [HANDOVER], jangan output placeholder secara literal\\n\\n---\\n\\nNow respond to the customer.\";\nconst PRODUCT_KNOWLEDGE = [{\"file\":\"mapping-for-ai.md\",\"keywords\":[\"mapping\",\"quran mapping\"],\"content\":\"PRODUK: Quran Mapping - panduan memahami kandungan seluruh Al-Qur'an secara ringkas dan menyeluruh.\\nSetiap surah diurai jadi 5 poin: kandungan, hikmah, hukum Islam, keterkaitan antar surah, gambaran besar. 5-15 menit per surah. 678 halaman, 114 surah, bisa dibuka dari surah mana saja - tidak harus urut.\\n\\nHARGA: Rp 179.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\nBeda sama tafsir biasa? ? Bukan tafsir tebal - tiap surah diringkas 5 poin praktis, bisa langsung buka surah yang ingin dipelajari.\\nIsinya apa per surah? ? Kandungan, hikmah, hukum Islam, keterkaitan antar surah, gambaran besar Al-Qur'an.\\nHarus dibaca urut dari depan? ? Tidak, format per surah - bebas buka dari mana saja.\\nUntuk siapa? ? Siapa pun yang ingin paham isi Quran secara praktis, terutama yang baca tapi belum terasa maknanya.\\nBisa untuk hadiah? ? Bisa.\"},{\"file\":\"medis-for-ai.md\",\"keywords\":[\"medis\",\"al-qur'an medis\",\"alquran medis\",\"quran medis\"],\"content\":\"PRODUK: Al-Qur'an Medis - mushaf terjemah Kemenag RI lengkap + 600+ hadis medis shahih + jurnal kesehatan modern.\\nTajwid warna, hard cover, khat Rasm Utsmani. Tersedia A4 (besar, untuk rumah/masjid) dan A5 (standar, praktis dibawa). Semua warna cover isinya sama persis.\\n\\nHARGA:\\n- A4 (Besar): Rp 229.000\\n- A5 (Sedang/Standar): Rp 159.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\nIni Al-Qur'an biasa atau ada tambahan? ? Terjemah Kemenag RI standar; ditambah 600+ hadis medis shahih dan jurnal kesehatan modern.\\nBeda A4 sama A5? ? Isi sama persis - A4 lebih nyaman di rumah/masjid, A5 lebih praktis dibawa.\\nWarna cover beda, isinya beda? ? Tidak, semua warna isinya sama.\\nAda tajwidnya? ? Ada, tajwid warna standar Kemenag RI.\\nPenerbitnya siapa? ? Cordoba - penerbit resmi Al-Qur'an di Indonesia.\\nBisa untuk hadiah? ? Bisa.\"},{\"file\":\"tazyin-for-ai.md\",\"keywords\":[\"tazyin\",\"alquran tulis\",\"al-quran tulis\",\"quran tulis\"],\"content\":\"PRODUK: Alquran Tulis Tazyin - mushaf yang ditulis ulang sendiri menggunakan Metode Tazyin.\\nAyat sudah tercetak sebagai contoh; customer menyalinnya ke garis panduan khusus yang bikin tulisan otomatis lurus dan konsisten, cocok untuk pemula. Hasilnya mushaf tulisan tangan sendiri - tidak bisa dibeli, hanya bisa ditulis.\\n\\nPAKET:\\n- 1 Jilid (Juz 1-10): Rp 149.000\\n- 2 Jilid (Juz 1-20): Rp 249.000\\n- 3 Jilid / Khatam (Juz 1-30): Rp 299.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa, Pulpen\\n\\nFAQ:\\nTulisan saya jelek, bisa pakai? ? Bisa - garis panduan Tazyin yang bikin tulisan lurus, bukan kemampuan nulis.\\nBisa pakai pulpen biasa? ? Bisa, tinta tidak tembus ke halaman belakang.\\nIsinya kosong atau ada contohnya? ? Ayat sudah tercetak; customer menyalin ulang ke garis panduan di tiap halaman.\\nBerapa lama selesai 1 jilid? ? Sekitar 2-3 bulan kalau konsisten 30 menit/hari.\\nBedanya sama Quran tulis biasa? ? Ada garis panduan Tazyin, kertas anti-tembus tinta, dan hard cover dijahit kuat.\\nBeli 1 jilid dulu bisa? ? Bisa, bonus tetap dapat semua.\\nUntuk usia berapa? ? Semua usia - huruf besar, cocok dari anak SD sampai lansia.\\nBisa untuk hadiah? ? Bisa.\"},{\"file\":\"soundbook-shalat-for-ai.md\",\"keywords\":[\"soundbook\",\"sound book\",\"shalat\",\"sholat\"],\"content\":\"PRODUK: Sound Book Learning How To Do Shalat - buku interaktif shalat untuk anak usia 2-7 tahun dengan tombol suara.\\nTekan tombol, anak langsung dengar bacaan shalat. Dua bahasa (Indonesia & Inggris). Boardbook tebal 300gr, sudut tumpul, hardcover - aman untuk anak. Baterai LR1130 sudah termasuk, langsung pakai.\\n\\nHARGA: Rp 197.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\nUntuk anak usia berapa? ? 2-7 tahun; paling optimal usia emas 3-5 tahun.\\nBaterainya sudah termasuk? ? Ya, baterai LR1130 3 pcs sudah termasuk - buka langsung bisa dipakai.\\nDua bahasanya maksudnya? ? Teks Indonesia dan Inggris sekaligus di buku yang sama.\\nBukunya tahan lama? ? Boardbook 300gr, sudut tumpul, hardcover - dirancang untuk dipegang anak kecil berulang-ulang.\\nIsinya sampai mana? ? Dari wudhu sampai salam, urutan shalat lengkap dengan ilustrasi dan tombol suara per langkah.\\nBisa untuk hadiah? ? Bisa, cocok untuk hadiah kelahiran, aqiqah, atau ulang tahun anak.\"},{\"file\":\"surat-istimewa-for-ai.md\",\"keywords\":[\"surat istimewa\",\"7 surat\"],\"content\":\"PRODUK: Kumpulan 7 Surat Istimewa - buku saku 7 surat Al-Qur'an pilihan lengkap Arab, Latin, terjemahan Kemenag RI, dan penjelasan keutamaan per surat.\\n7 surat: Al-Kahfi, Luqman, As-Sajdah, Yasin, Al-Waqi'ah, Ar-Rahman, Al-Mulk. Ukuran saku 10x14 cm, 192 halaman, font besar, cocok semua usia.\\n\\nHARGA: Rp 99.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\n7 suratnya apa saja? ? Al-Kahfi, Luqman, As-Sajdah, Yasin, Al-Waqi'ah, Ar-Rahman, Al-Mulk.\\nAda Latinnya? ? Ada - cocok untuk yang belum lancar baca tulisan Arab.\\nTerjemahnya versi mana? ? Terjemah resmi terbaru Kemenag RI.\\nUkurannya kecil, fontnya juga kecil? ? Tidak, font sengaja dibuat besar meski ukuran buku saku.\\nAda penjelasan keutamaan suratnya? ? Ada, disertai referensi hadis shahih untuk tiap surat.\\nCocok untuk usia berapa? ? Semua usia - remaja sampai lansia.\\nBisa untuk hadiah? ? Bisa, cocok untuk kado Islami keluarga.\"},{\"file\":\"kumpulan-doa-for-ai.md\",\"keywords\":[\"kumpulan doa\",\"doa\"],\"content\":\"PRODUK: Kumpulan Doa Berbagai Acara dan Keperluan - buku panduan 40 doa untuk berbagai acara penting.\\nLengkap teks Arab + Latin + terjemahan Indonesia. Dilengkapi QR Code audio doa yang bisa diputar langsung dari HP tanpa install aplikasi. Tinggal buka halaman yang sesuai, langsung bisa pimpin doa.\\n\\nHARGA: Rp 147.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\nDoanya untuk acara apa saja? ? Kelahiran, tasyakuran, wisuda, pernikahan, rumah baru, peresmian, haji & umrah, takziyah, pembukaan/penutupan acara, dan lainnya - 40 doa total.\\nBeda sama buku doa biasa? ? Ada QR Code audio - scan, langsung dengar cara bacanya dari HP.\\nAudionya harus download dulu? ? Tidak, scan QR Code langsung putar dari HP.\\nCocok untuk siapa? ? Guru, MC, panitia acara, atau siapa pun yang sering diminta memimpin doa mendadak.\\nPenerbitnya siapa? ? Aqwam - penerbit Islam terpercaya di Indonesia.\\nBisa untuk hadiah? ? Bisa.\"}];\n\nfunction clean(value) {\n  return String(value || '').trim();\n}\n\nfunction isPlaceholderName(name) {\n  const value = clean(name);\n  return !value || /^customer\\s+\\w+/i.test(value) || /^\\d+$/.test(value);\n}\n\nfunction displayCsName(name) {\n  return clean(name).replace(/^cs\\s+/i, '') || 'Aisyah';\n}\n\nfunction selectProductKnowledge(productName, products) {\n  const haystack = `${productName || ''} ${products || ''}`.toLowerCase();\n  const selected = PRODUCT_KNOWLEDGE.find((entry) =>\n    entry.keywords.some((keyword) => haystack.includes(String(keyword).toLowerCase())),\n  );\n\n  if (selected) return selected.content;\n  return `Produk: ${productName || products || 'lihat detail pesanan customer'}`;\n}\n\nfunction replaceAllLiteral(text, search, replacement) {\n  return text.split(search).join(replacement);\n}\n\nfunction renderTemplate(template, values) {\n  let output = template;\n  for (const [key, value] of Object.entries(values)) {\n    output = replaceAllLiteral(output, `{{${key}}}`, value);\n  }\n  return output;\n}\n\nfunction renderChatHistory(messages) {\n  const rows = Array.isArray(messages) ? messages.slice(-50) : [];\n  if (!rows.length) return '# CHAT HISTORY TERBARU\\nBelum ada histori percakapan sebelumnya.';\n\n  return `# CHAT HISTORY TERBARU\\n${rows.map((message) => {\n    const role = message.role === 'ai' ? 'AI' : message.role === 'cs' ? 'CS' : 'Customer';\n    const content = clean(message.content).replace(/\\s+/g, ' ');\n    return `- ${role}: ${content}`;\n  }).join('\\n')}`;\n}\n\nconst customerName = clean(d.customerName) || 'Kak';\nconst safeCustomerName = isPlaceholderName(customerName) ? 'Kak' : customerName;\nconst phone = clean(d.phone);\nconst productName = clean(d.productName);\nconst products = clean(d.products) || productName;\nconst productsSubtotal = clean(d.productsSubtotal);\nconst shippingCost = clean(d.shippingCost);\nconst total = clean(d.total);\nconst address = clean(d.shippingAddress);\nconst district = clean(d.shippingDistrict);\nconst city = clean(d.shippingCity);\nconst productKnowledge = selectProductKnowledge(productName, products);\nconst chatHistory = renderChatHistory(d.messages);\n\nlet systemMessage = renderTemplate(PROMPT_TEMPLATE, {\n  cs_name: displayCsName(d.csName),\n  product_knowledge: productKnowledge,\n  nama_customer: safeCustomerName,\n  phone,\n  products,\n  productsSubtotal,\n  shippingCost,\n  total,\n  address,\n  district,\n  city,\n});\n\nsystemMessage = systemMessage.replace(\n  '\\n---\\n\\n# HANDOVER',\n  `\\n---\\n\\n${chatHistory}\\n\\n---\\n\\n# HANDOVER`,\n);\n\n\nconst PAYMENT_SAFETY_GUARD = `\n---\n\n# PAYMENT SAFETY GUARD - OVERRIDE TERAKHIR\n\nUntuk ORDER TRANSFER, *PEMESANAN BERHASIL* hanya boleh dikirim jika ada sinyal sistem eksplisit PAYMENT_PROOF_STATUS=verified.\n\nTanpa sinyal itu:\n- Teks \"sudah transfer\", \"udah tf\", \"ini bukti\", \"sudah bayar\", \"nanti transfer\", \"siap\", atau emoji = belum verified.\n- Gambar/foto/screenshot = belum verified sampai ada payment verifier.\n- Jangan kirim ORDER TRANSFER.\n- Jika teks klaim transfer tanpa gambar: minta bukti transfer.\n- Jika customer mengirim gambar/foto/screenshot bukti transfer: [HANDOVER] bukti transfer perlu dicek.\n\nFormat handover bukti transfer:\n[HANDOVER] bukti transfer perlu dicek\nTerima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya\n`;\n\nsystemMessage = `${systemMessage}${PAYMENT_SAFETY_GUARD}`;\n\nconst SOFT_TRANSFER_FOLLOWUP_GUARD = `\n---\n\n# SOFT TRANSFER FOLLOW-UP GUARD - OVERRIDE TERAKHIR\n\nSaat State 2 / Transfer sudah dipilih tapi bukti belum masuk:\n- DILARANG tanya \"kapan transfer\", \"mau transfer kapan\", \"besok pagi atau siang\", atau pressure waktu berulang.\n- Jangan mengejar customer berkali-kali.\n- Jika customer bilang \"oke\", \"sebentar\", \"insyaAllah sekarang\", \"ok\", \"siap\", atau balasan pendek sejenis, cukup jawab salah satu:\n  \"Baik Kak, ditunggu bukti transfernya ya ??\"\n  \"Baik Kak, ditunggu kabar baiknya ya ??\"\n`;\n\nsystemMessage = `${systemMessage}${SOFT_TRANSFER_FOLLOWUP_GUARD}`;\n\nconst INFO_TOKO_OVERRIDE = `\n---\n\n# INFO TOKO OVERRIDE\n\nJika customer bertanya \"ini toko apa?\" atau \"toko apa ini?\", jawab:\nPustakaIslam Official ya Kak ??\n?? Toko Buku Islami, 100% Original dan Otentik\n\n[State 1] ? Transfer atau COD nih Kak?\n[State 2] ? Begitu sudah transfer, kirim buktinya ya Kak ??\n[State 3] ? Ada yang bisa dibantu lagi Kak?\n`;\n\nsystemMessage = `${systemMessage}${INFO_TOKO_OVERRIDE}`;\n\nconst POST_CLOSING_DELIVERY_INSTRUCTION_GUARD = `\n---\n\n# POST-CLOSING DELIVERY INSTRUCTION GUARD - OVERRIDE TERAKHIR\n\nJika *PEMESANAN BERHASIL* sudah ada di history lalu customer memberi instruksi pengiriman baru/lanjutan seperti \"sore ya\", \"jam 4\", \"saya sedang di luar\", \"titip\", \"antar sore\", \"ubah waktu\", \"ubah alamat\", atau catatan pengiriman lain:\n- WAJIB [HANDOVER] instruksi pengiriman setelah order terkonfirmasi.\n- Balas hanya: Baik Kak ?? Sebentar ya\n- Setelah itu AI tidak boleh lanjut handle customer ini.\n`;\n\nsystemMessage = `${systemMessage}${POST_CLOSING_DELIVERY_INSTRUCTION_GUARD}`;\n\nconst FILE_PHOTO_DISCOUNT_HANDOVER_GUARD = `\n---\n\n# FILE PHOTO DISCOUNT HANDOVER GUARD - OVERRIDE TERAKHIR\n\nJika customer mengirim PDF/document/file/audio/video:\n- Wajib [HANDOVER].\n- Jika dokumen/file itu bukti transfer: balas \"Terima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya\".\n- File lain: balas \"Baik Kak ?? Sebentar ya\".\n\nJika customer minta foto produk/gambar fisik/cover/halaman contoh:\n- Wajib [HANDOVER] customer minta foto produk.\n- Balas hanya: \"Baik Kak ?? Sebentar ya\".\n- Jangan tanya ulang cover atau halaman contoh.\n\nJika customer bilang ongkir mahal, minta ongkir murah/gratis, diskon, nego, potongan, atau harga bisa kurang:\n- Wajib [HANDOVER] customer minta diskon/ongkir murah.\n- Balas hanya: \"Baik Kak ?? Sebentar ya\".\n- Jangan janji potongan. Jangan hitung ulang total. Jangan sebut diskon Rp20.000 tanpa sinyal promo eksplisit.\n`;\n\nsystemMessage = `${systemMessage}${FILE_PHOTO_DISCOUNT_HANDOVER_GUARD}`;\n\nconst EMOJI_TONE_GUARD = `\n---\n\n# EMOJI TONE GUARD - OVERRIDE TERAKHIR\n\nUntuk balasan pendek 1 kalimat, gunakan maksimal 1 emoji.\nDILARANG gabungkan emoji sejenis seperti \"????\", \"????\", \"????\", atau tiga emoji berurutan.\nGunakan versi singkat:\n- Terima kasih ? \"Sama-sama ya Kak ??\"\n- Customer doa ? \"Aaamiin ??\"\n- Mantap ? \"Berkah selalu ya Kak ??\"\n- Closing ringan ? \"Baarakallahu fiik ya Kak ??\"\n`;\n\nsystemMessage = `${systemMessage}${EMOJI_TONE_GUARD}`;\n\nconst COD_CONFIRMATION_COPY_GUARD = `\n---\n\n# COD CONFIRMATION COPY GUARD - OVERRIDE TERAKHIR\n\nUntuk COD Step 1, gunakan format ini persis:\nSiap Kak [nama customer dari ORDER CONTEXT - atau \"Kak\" saja jika placeholder] ?? COD ya.\n\n?? Kami kirimkan ke:\n[alamat dari ORDER CONTEXT], [district dari ORDER CONTEXT], [city dari ORDER CONTEXT]\n\nKalau alamatnya *sudah sesuai*, balas:\n*Ya*\n\nBiar paket segera kami proses ya Kak ??\n`;\n\nsystemMessage = `${systemMessage}${COD_CONFIRMATION_COPY_GUARD}`;\n\nconst POST_CLOSING_ORDER_DETAIL_GUARD = `\n---\n\n# POST-CLOSING ORDER DETAIL GUARD - OVERRIDE TERAKHIR\n\nJika *PEMESANAN BERHASIL* sudah ada di history, lalu customer membahas detail order lagi seperti harga/ongkir/total, warna, ukuran A4/A5, jangan salah kirim, alamat, waktu kirim, catatan pengiriman, atau instruksi tambahan:\n- Wajib [HANDOVER] post-closing order detail needs CS.\n- Balas hanya: Baik Kak ?? Sebentar ya\n- Jangan koreksi total, jangan janji sudah dicatat, jangan lanjut handle sendiri.\n`;\n\nsystemMessage = `${systemMessage}${POST_CLOSING_ORDER_DETAIL_GUARD}`;\n\nconst POST_CLOSING_PAYMENT_CTA_HARD_GUARD = `\n---\n\n# POST-CLOSING PAYMENT CTA HARD GUARD - OVERRIDE TERAKHIR\n\nJika *PEMESANAN BERHASIL* sudah ada di history:\n- DILARANG total tanya \"Transfer atau COD\" lagi.\n- DILARANG kalimat \"Biar langsung kami proses\", \"sisihkan paket\", atau CTA pembayaran apa pun.\n- Jika customer bilang terima kasih / belum ada lagi / dipikirkan dulu, cukup tutup: \"Baarakallahu fiik ya Kak ??\"\n- Jika customer tanya estimasi pengiriman, jawab estimasi singkat tanpa CTA payment.\n`;\n\nsystemMessage = `${systemMessage}${POST_CLOSING_PAYMENT_CTA_HARD_GUARD}`;\nreturn [{ json: { ...d, systemMessage } }];"
+      },
+      "id": "node-build-context",
+      "name": "06 Build Prompt v3.1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "closing-check",
+              "leftValue": "={{ $('09 Parse AI Reply + Save History').item.json.isClosing }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-is-closing",
+      "name": "12B Branch - Closing Detected?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3024,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1acve92eQneZCthTX879nxj40Ne4pJjFpPoTdlslZBnI"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Sheet1"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tanggal": "={{ new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}",
+            "Nama Pengirim*": "={{ $('04 Validate AI Scope + State').item.json.csName }}",
+            "No Telp. Pengirim*": "={{ $('02 Parse Message + Manual CS Guard').item.json.senderNumber }}",
+            "Nama Penerima*": "={{ $('02 Parse Message + Manual CS Guard').item.json.customerName }}",
+            "Alamat Penerima*": "={{ $('04 Validate AI Scope + State').item.json.shippingAddress }}",
+            "No Telp. Penerima*": "={{ $('09 Parse AI Reply + Save History').item.json.phone }}",
+            "Kecamatan Penerima*": "={{ $('04 Validate AI Scope + State').item.json.shippingDistrict }}",
+            "Kota Penerima*": "={{ $('04 Validate AI Scope + State').item.json.shippingCity }}",
+            "Isi Paket*": "={{ $('04 Validate AI Scope + State').item.json.productName }}",
+            "Metode Bayar": "={{ $('09 Parse AI Reply + Save History').item.json.orderMethod }}",
+            "Harga Barang (jika non-COD)": "={{ $('09 Parse AI Reply + Save History').item.json.orderMethod === 'Transfer' ? $('04 Validate AI Scope + State').item.json.productsSubtotal : '' }}",
+            "Nilai COD (Jika COD)": "={{ $('09 Parse AI Reply + Save History').item.json.orderMethod === 'COD' ? $('04 Validate AI Scope + State').item.json.total : '' }}",
+            "Order ID": "={{ $('04 Validate AI Scope + State').item.json.order_id }}",
+            "Bonus / Bump Order / Upsale": "={{ $('09 Parse AI Reply + Save History').item.json.bonusItem }}",
+            "Diskon": "",
+            "Instruksi Pengiriman (opt)": "={{ $('09 Parse AI Reply + Save History').item.json.instruksiPengiriman }}"
+          },
+          "schema": [
+            {
+              "id": "Tanggal",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Tanggal",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama Pengirim*",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Nama Pengirim*",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "No Telp. Pengirim*",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "No Telp. Pengirim*",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nama Penerima*",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Nama Penerima*",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Alamat Penerima*",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Alamat Penerima*",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "No Telp. Penerima*",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "No Telp. Penerima*",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Kecamatan Penerima*",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Kecamatan Penerima*",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Kota Penerima*",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Kota Penerima*",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Isi Paket*",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Isi Paket*",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Metode Bayar",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Metode Bayar",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Harga Barang (jika non-COD)",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Harga Barang (jika non-COD)",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Nilai COD (Jika COD)",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Nilai COD (Jika COD)",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Order ID",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Order ID",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Bonus / Bump Order / Upsale",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Bonus / Bump Order / Upsale",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Diskon",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Diskon",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Instruksi Pengiriman (opt)",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Instruksi Pengiriman (opt)",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "node-log-sheet",
+      "name": "14B Google Sheets - Log Closing",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3552,
+        464
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "FsWAxpmqZXMN1Csi",
+          "name": "Google Sheets account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n.miqra.dev/webhook/conversation-state",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({action: \"increment_stat\", field: \"closings\", phone: $(\"04 Validate AI Scope + State\").item.json.phone, order_id: $(\"04 Validate AI Scope + State\").item.json.order_id, productName: $(\"04 Validate AI Scope + State\").item.json.productName}) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-increment-closing",
+      "name": "13B Convex - Record AI Closing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3280,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-5-mini', messages: [{ role: 'system', content: $json.systemMessage }, { role: 'user', content: $json.messageText }], max_completion_tokens: 500, reasoning_effort: 'minimal' }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-call-openai",
+      "name": "07 OpenAI - GPT-5 Mini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1728,
+        304
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "TWuHhKs9B2M0Jesf",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst buildCtx = $('06 Build Prompt v3.1').item.json;\nconst output = (resp.choices?.[0]?.message?.content || '').trim();\nreturn [{ json: { ...buildCtx, output } }];"
+      },
+      "id": "node-extract-output",
+      "name": "08 Parse OpenAI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        304
+      ]
+    }
+  ],
+  "connections": {
+    "01 Webhook - KirimChat Message": {
+      "main": [
+        [
+          {
+            "node": "02 Parse Message + Manual CS Guard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DISABLED - Legacy LangChain Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "DISABLED - Legacy AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "09 Parse AI Reply + Save History": {
+      "main": [
+        [
+          {
+            "node": "10 Branch - Handover?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10 Branch - Handover?": {
+      "main": [
+        [
+          {
+            "node": "11A KirimChat - Send Handover Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "11B KirimChat - Send AI Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 Parse Message + Manual CS Guard": {
+      "main": [
+        [
+          {
+            "node": "03 Convex - Get Conversation State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 Convex - Get Conversation State": {
+      "main": [
+        [
+          {
+            "node": "04 Validate AI Scope + State",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 Validate AI Scope + State": {
+      "main": [
+        [
+          {
+            "node": "05 Gate - AI Active?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 Gate - AI Active?": {
+      "main": [
+        [
+          {
+            "node": "06 Build Prompt v3.1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "05b Stop - Manual / Handover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11A KirimChat - Send Handover Reply": {
+      "main": [
+        [
+          {
+            "node": "12A Convex - Set Handover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12A Convex - Set Handover": {
+      "main": [
+        [
+          {
+            "node": "13A Notify CS Handover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DISABLED - Legacy Memory": {
+      "main": [
+        [
+          {
+            "node": "DISABLED - Legacy AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11B KirimChat - Send AI Reply": {
+      "main": [
+        [
+          {
+            "node": "12B Branch - Closing Detected?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12B Branch - Closing Detected?": {
+      "main": [
+        [
+          {
+            "node": "13B Convex - Record AI Closing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13B Convex - Record AI Closing": {
+      "main": [
+        [
+          {
+            "node": "14B Google Sheets - Log Closing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 Build Prompt v3.1": {
+      "main": [
+        [
+          {
+            "node": "07 OpenAI - GPT-5 Mini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07 OpenAI - GPT-5 Mini": {
+      "main": [
+        [
+          {
+            "node": "08 Parse OpenAI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "08 Parse OpenAI Output": {
+      "main": [
+        [
+          {
+            "node": "09 Parse AI Reply + Save History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": "810d5286-04bb-4335-b28c-72c41c0bbfbb",
+  "activeVersionId": "810d5286-04bb-4335-b28c-72c41c0bbfbb",
+  "versionCounter": 302,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-05-24T16:57:07.647Z",
+      "createdAt": "2026-05-24T16:57:07.647Z",
+      "role": "workflow:owner",
+      "workflowId": "4eBFqyabDlIRx3ZY",
+      "projectId": "I2kQHzoFawpqTwF0",
+      "project": {
+        "updatedAt": "2026-01-23T13:29:36.435Z",
+        "createdAt": "2026-01-23T10:40:19.498Z",
+        "id": "I2kQHzoFawpqTwF0",
+        "name": "Fandi Harahap <fandy.andika@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "88d21b67-3335-40f7-a811-e2cdee83ceb6"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-05-28T14:06:45.919Z",
+    "createdAt": "2026-05-28T14:06:45.919Z",
+    "versionId": "810d5286-04bb-4335-b28c-72c41c0bbfbb",
+    "workflowId": "4eBFqyabDlIRx3ZY",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "kirimchat-inbound",
+          "options": {}
+        },
+        "id": "node-wh-in",
+        "name": "01 Webhook - KirimChat Message",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          160,
+          304
+        ],
+        "webhookId": "fe8e5043-f39b-40af-b3db-f37f093c2fb0"
+      },
+      {
+        "parameters": {
+          "jsCode": "const root = $input.first().json;\nconst body = root.body || root;\nconst data = body.data || body.message || body;\nconst raw = data.raw || {};\nconst rawMessage = raw.message || {};\nconst rawContact = Array.isArray(raw.contacts) ? raw.contacts[0] : {};\nconst headers = root.headers || {};\n\nconst stateManagerUrl = 'https://n8n.miqra.dev/webhook/conversation-state';\n\nfunction firstValue(...values) {\n  for (const value of values) {\n    if (value !== undefined && value !== null && String(value).trim()) return value;\n  }\n  return '';\n}\n\nfunction onlyDigits(value) {\n  return String(value || '').replace(/\\D/g, '');\n}\n\nfunction normalizePhone(value) {\n  const digits = onlyDigits(value);\n  if (!digits) return '';\n  if (digits.startsWith('0')) return `62${digits.slice(1)}`;\n  return digits;\n}\n\nfunction normalizeText(value) {\n  return String(value || '').replace(/\\s+/g, ' ').trim();\n}\n\nfunction normalizeMessageType(value) {\n  const type = String(value || '').toLowerCase();\n  if (['image', 'template', 'button', 'audio', 'document', 'video'].includes(type)) return type;\n  return 'text';\n}\n\nconst eventType = String(firstValue(body.event_type, body.event, headers['x-kirimchat-event'])).toLowerCase();\nconst directionRaw = String(firstValue(data.direction, raw.direction, rawMessage.direction)).toLowerCase();\nconst messageType = normalizeMessageType(firstValue(data.message_type, data.type, rawMessage.type));\nconst buttonTitle = firstValue(data.button_reply?.title, rawMessage.interactive?.button_reply?.title);\nconst content = firstValue(data.content, data.text, rawMessage.text?.body, data.caption, rawMessage.image?.caption);\nconst plainText = normalizeText(buttonTitle || content);\nconst phone = normalizePhone(firstValue(\n  data.customer_phone,\n  data.customer?.phone,\n  data.contact?.phone,\n  data.phone,\n  data.to,\n  data.recipient,\n  rawContact.wa_id,\n  rawMessage.from,\n));\nconst customerName = firstValue(data.customer_name, data.customer?.name, rawContact.profile?.name, 'Pelanggan');\nconst senderNumber = normalizePhone(firstValue(\n  raw.metadata?.display_phone_number,\n  data.sender_phone,\n  data.from,\n  rawMessage.from,\n));\n\nconst isOutbound = directionRaw === 'outbound' ||\n  eventType.includes('message.sent') ||\n  eventType.includes('message.delivered') ||\n  eventType.includes('message.outbound') ||\n  eventType.includes('outbound');\nconst isInbound = directionRaw === 'inbound' ||\n  eventType.includes('message.received') ||\n  eventType.includes('message.inbound') ||\n  eventType.includes('inbound');\n\nasync function handleManualOutbound() {\n  if (!phone || !plainText) return;\n  if (['system', 'notification', 'template'].includes(messageType)) return;\n\n  const stateResp = await this.helpers.httpRequest({\n    method: 'POST',\n    url: stateManagerUrl,\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({ action: 'get_with_global', phone, messageLimit: 50 }),\n    json: true,\n  });\n\n  const hasOrderState = Boolean(stateResp.order_id || stateResp.productName || stateResp.csName);\n  const reportingEnabled = stateResp.reportingEnabled !== false;\n  if (!reportingEnabled || !hasOrderState) return;\n\n  const normalizedOutbound = normalizeText(plainText);\n  const recentAiEcho = (stateResp.messages || []).slice(-12).some((message) => {\n    const createdAt = Number(message.createdAt || 0);\n    const recent = !createdAt || createdAt > Date.now() - (15 * 60 * 1000);\n    return recent &&\n      message.role === 'ai' &&\n      message.direction === 'outbound' &&\n      normalizeText(message.content) === normalizedOutbound;\n  });\n\n  if (recentAiEcho) return;\n\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: stateManagerUrl,\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      action: 'append_message',\n      phone,\n      order_id: stateResp.order_id || '',\n      role: 'cs',\n      direction: 'outbound',\n      content: plainText,\n      messageType,\n    }),\n    json: true,\n  });\n\n\n  if (normalizedOutbound.includes('PEMESANAN BERHASIL')) {\n    const sourceMessageText = String(buttonTitle || content || plainText || '');\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: stateManagerUrl,\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        action: 'upsert_shipping_recap',\n        phone,\n        order_id: stateResp.order_id || '',\n        customerName: stateResp.customerName || customerName || '',\n        csName: stateResp.csName || 'CS Aisyah',\n        csNumber: stateResp.csNumber || senderNumber || '',\n        sourceMessageId: firstValue(data.message_id, data.id, rawMessage.id),\n        sourceMessageText,\n        closedAt: Date.now(),\n      }),\n      json: true,\n    });\n  }\n  await this.helpers.httpRequest({\n    method: 'POST',\n    url: stateManagerUrl,\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      action: 'set',\n      phone,\n      order_id: stateResp.order_id || '',\n      status: 'handover',\n      note: 'manual CS replied',\n      customerName,\n      csNumber: senderNumber,\n    }),\n    json: true,\n  });\n}\n\nif (isOutbound) {\n  await handleManualOutbound.call(this);\n  return [];\n}\n\nif (!isInbound) return [];\n\n\nconst fileHandoverTypes = ['document', 'audio', 'video'];\nif (fileHandoverTypes.includes(messageType)) {\n  if (!phone) return [];\n  const fileUrl = firstValue(data.media_url, data.document_url, data.file_url, data.url, rawMessage.document?.url, rawMessage.audio?.url, rawMessage.video?.url);\n  const caption = normalizeText(content);\n  const label = messageType === 'document' ? 'dokumen/PDF' : messageType;\n  const messageText = caption\n    ? `[Customer mengirim ${label}]\\nKeterangan: ${caption}\\nURL: ${fileUrl}`\n    : `[Customer mengirim ${label} tanpa keterangan]\\nURL: ${fileUrl}`;\n  return [{ json: { phone, messageText, messageType, fileUrl, customerName, senderNumber, rawPayload: body } }];\n}\nif (messageType === 'image') {\n  if (!phone) return [];\n  const imageUrl = firstValue(data.media_url, data.image_url, data.url, rawMessage.image?.url);\n  const caption = normalizeText(content);\n  const messageText = caption\n    ? `[Customer mengirim gambar]\\nKeterangan: ${caption}\\nURL: ${imageUrl}`\n    : `[Customer mengirim gambar tanpa keterangan]\\nURL: ${imageUrl}`;\n  return [{ json: { phone, messageText, messageType: 'image', imageUrl, customerName, senderNumber, rawPayload: body } }];\n}\n\nif (!phone || !plainText) return [];\nif (['system', 'notification', 'template'].includes(messageType)) return [];\n\nreturn [{ json: { phone, messageText: plainText, messageType, customerName, senderNumber, rawPayload: body } }];"
+        },
+        "id": "node-parse-in",
+        "name": "02 Parse Message + Manual CS Guard",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          432,
+          304
+        ]
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "={{ $json.messageText }}",
+          "options": {
+            "systemMessage": "={{ $('06 Build Prompt v3.1').item.json.systemMessage }}"
+          }
+        },
+        "id": "node-ai-agent",
+        "name": "DISABLED - Legacy AI Agent",
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 3.1,
+        "position": [
+          1728,
+          704
+        ],
+        "disabled": true
+      },
+      {
+        "parameters": {
+          "model": {
+            "__rl": true,
+            "mode": "list",
+            "value": "gpt-5-mini"
+          },
+          "builtInTools": {},
+          "options": {
+            "maxTokens": 500
+          }
+        },
+        "id": "node-gpt",
+        "name": "DISABLED - Legacy LangChain Model",
+        "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+        "typeVersion": 1.3,
+        "position": [
+          1728,
+          944
+        ],
+        "credentials": {
+          "openAiApi": {
+            "id": "TWuHhKs9B2M0Jesf",
+            "name": "OpenAi account"
+          }
+        },
+        "disabled": true
+      },
+      {
+        "parameters": {
+          "jsCode": "let aiOutput = ($input.first().json.output || '').trim();\nconst inbound = $('02 Parse Message + Manual CS Guard').item.json;\nconst phone = inbound.phone;\nconst parseState = $('04 Validate AI Scope + State').item.json;\nconst inboundText = String(inbound.messageText || '').toLowerCase();\nconst inboundLooksLikeTemplateButtonReply = /assalamu?a?['']?alaikum[\\s\\S]{0,900}(?:transfer aja|cod\\s*(?:\\(|aja|ya)|bayar di tempat)/i.test(inbound.messageText || '') || /.\\s*(?:transfer aja|cod)/i.test(inbound.messageText || '');\nconst latestCustomerActuallySaidSalam = /\\b(?:assalamu?a?['']?alaikum|assalamualaikum|salam|halo|hai|pagi|siang|sore|malam)\\b/i.test(inbound.messageText || '') && !inboundLooksLikeTemplateButtonReply;\nconst isInvoiceOrderGreeting = /assalamu?a?['']?alaikum/i.test(inbound.messageText || '') && /saya\\s+mau\\s+pesan|pustakaislam\\.net\\/o\\//i.test(inbound.messageText || '') && !/.\\s*(?:transfer aja|cod)/i.test(inbound.messageText || '');\nconst inboundMessageType = inbound.messageType || 'text';\nconst isImageInbound = inboundMessageType === 'image';\nconst fileNeedsHandover = ['document', 'audio', 'video'].includes(inboundMessageType);\nconst transferClaimTerms = [\n  'sudah transfer', 'udah transfer', 'sdh transfer', 'telah transfer', 'baru transfer', 'barusan transfer', 'habis transfer',\n  'sudah saya transfer', 'saya sudah transfer', 'saya transfer', 'aku transfer',\n  'sudah tf', 'udah tf', 'sdh tf', 'telah tf', 'saya tf',\n  'sudah bayar', 'udah bayar', 'sdh bayar', 'telah bayar', 'sudah dibayar', 'saya bayar',\n  'ini bukti', 'bukti transfer', 'bukti tf', 'struk transfer', 'receipt transfer'\n];\nconst hasTransferClaim = transferClaimTerms.some((term) => inboundText.includes(term));\nconst claimedTransferClosing = aiOutput.includes('PEMESANAN BERHASIL') && aiOutput.includes('ORDER TRANSFER');\n\nif (isInvoiceOrderGreeting && !aiOutput.includes('PEMESANAN BERHASIL')) {\n  aiOutput = `Wa A'laikumussalam Warahmatullahi Wabarakatuh\nAlhamdulillah data pesanan sudah masuk ya Kak ??\n\nBoleh info Kak mau COD atau Transfer ya?`;\n}\n\nfunction parseRupiahToNumber(value) {\n  const digits = String(value || '').replace(/[^0-9]/g, '');\n  return digits ? Number(digits) : 0;\n}\n\nfunction pickMediaUrl() {\n  const textUrl = String(inbound.messageText || '').match(/https?:\\/\\/\\S+/i)?.[0] || '';\n  return inbound.imageUrl || inbound.fileUrl || textUrl;\n}\n\nasync function verifyPaymentProofImage(mediaUrl) {\n  if (!mediaUrl) {\n    return { verified: false, reason: 'no media url' };\n  }\n\n  const expectedTotal = parseState.total || '';\n  const expectedAmount = parseRupiahToNumber(expectedTotal);\n  const verifierPrompt = `\nYou verify Indonesian bank transfer proof images for PustakaIslam.\nReturn ONLY JSON. No markdown.\n\nExpected recipient account owner must match one of:\n- Rahmany Amanda M\n- Rahmany Amanda Meyri\n- Rahmany Amanda Meyriza\n\nExpected account numbers may be one of:\n- BCA 4660245877\n- BSI 7353424623\n- Mandiri 1560027353426\n\nExpected order total: ${expectedTotal} (${expectedAmount}).\n\nSet verified=true ONLY if the image is clearly a bank/e-wallet transfer receipt AND:\n1. recipient name or account number matches the expected recipient/accounts, AND\n2. transferred amount is visible and equals the expected total, allowing only formatting differences like Rp, dots, commas.\n\nIf the image is product/bonus/photo/chat screenshot/not a receipt, verified=false.\nIf amount or recipient is unclear, verified=false.\n\nJSON schema:\n{\n  \"is_payment_proof\": boolean,\n  \"verified\": boolean,\n  \"recipient_match\": boolean,\n  \"amount_match\": boolean,\n  \"recipient_text\": string,\n  \"account_text\": string,\n  \"amount_text\": string,\n  \"bank_text\": string,\n  \"confidence\": \"high\" | \"medium\" | \"low\",\n  \"reason\": string\n}`.trim();\n\n  try {\n    const response = await this.helpers.httpRequestWithAuthentication.call(this, 'openAiApi', {\n      method: 'POST',\n      url: 'https://api.openai.com/v1/chat/completions',\n      headers: { 'Content-Type': 'application/json' },\n      body: {\n        model: 'gpt-5-mini',\n        messages: [{\n          role: 'user',\n          content: [\n            { type: 'text', text: verifierPrompt },\n            { type: 'image_url', image_url: { url: mediaUrl, detail: 'high' } },\n          ],\n        }],\n        response_format: { type: 'json_object' },\n        max_completion_tokens: 350,\n        reasoning_effort: 'minimal',\n      },\n      json: true,\n    });\n    const content = response.choices?.[0]?.message?.content || '{}';\n    const parsed = JSON.parse(content);\n    return { ...parsed, raw: parsed };\n  } catch (error) {\n    return { verified: false, reason: `vision verifier error: ${error.message || error}` };\n  }\n}\n\nfunction buildTransferClosing() {\n  return `Alhamdulillah, bukti transfer sudah kami terima Kak ??\n\n*PEMESANAN BERHASIL*\n\\`ORDER TRANSFER\\`\n\nDetail pesanan:\nProduk: *${parseState.products || parseState.productName || ''}*\nHarga: *${parseState.productsSubtotal || ''}*\nOngkir: ${parseState.shippingCost || ''}\n*Total: ${parseState.total || ''}*\n\n?? Dikirim ke:\n${parseState.customerName || inbound.customerName || 'Kak'} | ${phone}\n${parseState.shippingAddress || ''}, ${parseState.shippingDistrict || ''}, ${parseState.shippingCity || ''}\n\nSemoga lancar rezeki dan sehat selalu,\nBaarakallahu fiik ??`;\n}\n\nif (isImageInbound || fileNeedsHandover) {\n  const recentTransferContext = (parseState.messages || []).slice(-8).some((message) => /4660245877|7353424623|1560027353426|rekening|transfer|tf|bukti|bayar/i.test(String(message.content || '')));\n  const explicitPaymentProofText = /bukti|transfer|tf|bayar|struk|receipt|resi transfer|sudah transfer|udah tf/i.test(inboundText);\n  const imageLooksProductRelated = /bonus|gambar|foto|ini\\?|ini ya|contoh|cover|halaman|produk/i.test(inboundText);\n  const shouldVerifyPaymentProof = isImageInbound && (explicitPaymentProofText || (recentTransferContext && !imageLooksProductRelated));\n\n  if (shouldVerifyPaymentProof) {\n    const verification = await verifyPaymentProofImage.call(this, pickMediaUrl());\n    const verified = verification.verified === true && verification.is_payment_proof === true && verification.recipient_match === true && verification.amount_match === true;\n    aiOutput = verified\n      ? buildTransferClosing()\n      : `[HANDOVER] bukti transfer perlu dicek manual (${verification.reason || 'uncertain'})\\nTerima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya`;\n  } else {\n    aiOutput = `[HANDOVER] gambar/file perlu dicek\\nBaik Kak ?? Sebentar ya`;\n  }\n} else if (claimedTransferClosing && hasTransferClaim) {\n  aiOutput = `Baik Kak, mohon kirim bukti transfernya ya ??\\nAgar pesanan bisa langsung kami proses.`;\n}\n\nconst photoOrDiscountNeedsHandover = /(foto|fotonya|gambar|gambarnya|cover|halaman contoh|bentuk fisik|foto real|ongkir.*mahal|ongkir.*murah|ongkir gratis|free ongkir|diskon ongkir|potongan ongkir|kurangin ongkir|bisa kurang|harga.*kurang|diskon|nego)/i.test(inboundText);\nif (!aiOutput.startsWith('[HANDOVER]') && !aiOutput.includes('PEMESANAN BERHASIL') && photoOrDiscountNeedsHandover) {\n  const discountIntent = /(ongkir.*mahal|ongkir.*murah|ongkir gratis|free ongkir|diskon ongkir|potongan ongkir|kurangin ongkir|bisa kurang|harga.*kurang|diskon|nego)/i.test(inboundText);\n  const reason = discountIntent ? 'customer minta diskon/ongkir murah' : 'customer minta foto produk';\n  aiOutput = `[HANDOVER] ${reason}\\nBaik Kak ?? Sebentar ya`;\n}\n\nconst customerDefersOrNeedsFollowup = /(diskusi(?:kan)?\\\\s+dulu|kami\\\\s+diskusi|saya\\\\s+diskusi|tanya\\\\s+(?:suami|istri|keluarga)\\\\s+dulu|nanti\\\\s+aja|nnti\\\\s+aja|ntar\\\\s+aja|pikir(?:-pikir)?\\\\s+dulu|dipikir\\\\s+dulu|belum\\\\s+dulu|jangan\\\\s+dulu)/i.test(inboundText);\nif (!aiOutput.startsWith('[HANDOVER]') && !aiOutput.includes('PEMESANAN BERHASIL') && customerDefersOrNeedsFollowup) {\n  aiOutput = '[HANDOVER] customer menunda/perlu follow up CS\\\\nBaik Kak, ditunggu kabar baiknya ya ??';\n}\n\nconst pressureTransferFollowup = /kira-kira\\s+mau\\s+transfer\\s+kapan|mau\\s+transfer\\s+kapan|kapan\\s+transfer|besok\\s+pagi\\s+atau\\s+siang/i;\nif (!aiOutput.startsWith('[HANDOVER]') && !aiOutput.includes('PEMESANAN BERHASIL') && pressureTransferFollowup.test(aiOutput)) {\n  aiOutput = 'Baik Kak, ditunggu bukti transfernya ya ??';\n}\n\nfunction normalizeShortReplyEmoji(text) {\n  let value = String(text || '').trim();\n\n  const PRAY = String.fromCodePoint(0x1F64F);\n  const SMILE = String.fromCodePoint(0x1F60A);\n  const LOVE = String.fromCodePoint(0x1F970);\n  const HANDSHAKE = String.fromCodePoint(0x1F91D);\n  const broken = '[\\\\uFFFD?]';\n  const closingEmoji = `(?:${PRAY}|${SMILE}|${LOVE}|${HANDSHAKE})`;\n\n  value = value.replace(/\\uFFFD/g, PRAY);\n  value = value.replace(new RegExp(`(Siap Kak[^\\\\n?.!]{0,80})\\\\s+${broken}\\\\s+(COD ya\\\\.?)`, 'gi'), `$1 ${SMILE} $2`);\n  value = value.replace(new RegExp(`(Waalaikumussalam Kak|Walaikumussalam Kak|Halo Kak|Hai Kak)\\\\s+${broken}`, 'gi'), `$1 ${SMILE}`);\n  value = value.replace(new RegExp(`(Terima kasih buktinya Kak)\\\\s+${broken}`, 'gi'), `$1 ${PRAY}`);\n  value = value.replace(new RegExp(`(Baik Kak)\\\\s+${broken}\\\\s+(Sebentar ya)`, 'gi'), `$1 ${PRAY} $2`);\n  value = value.replace(new RegExp(`(Biar paket segera kami proses ya Kak)\\\\s*(?:${PRAY}|${broken})+`, 'giu'), `$1 ${PRAY}`);\n  value = value.replace(new RegExp(`(Baarakallahu fiik|Barakallahu fiik)\\\\s+${broken}`, 'gi'), `$1 ${PRAY}`);\n  value = value.replace(new RegExp(`(Aaamiin|Aamiin|Sama-sama ya Kak|Sama-sama Kak)\\\\s+${broken}`, 'gi'), `$1 ${PRAY}`);\n  value = value.replace(new RegExp(`Kak\\\\s+${broken}(?=\\\\s*(?:\\\\n|$))`, 'gi'), `Kak ${PRAY}`);\n\n  const compact = value.replace(/\\s+/g, ' ');\n  if (compact.length > 90 || compact.includes('*PEMESANAN BERHASIL*')) {\n    value = value.replace(new RegExp(`Biar paket (?:langsung|segera) kami proses ya Kak\\\\s*(?:${PRAY}|${broken})+`, 'giu'), `Biar paket segera kami proses ya Kak ${PRAY}`);\n  }\n\n  value = value.replace(new RegExp(`Baik Kak\\\\s+(?:${PRAY}|${broken})\\\\s+Sebentar ya`, 'iu'), `Baik Kak ${PRAY} Sebentar ya`);\n  value = value.replace(new RegExp(`Aaamiin\\\\s*(?:${closingEmoji}\\\\s*)*`, 'iu'), `Aaamiin ${PRAY}`);\n  value = value.replace(new RegExp(`Sama-sama ya Kak\\\\s*(?:${closingEmoji}\\\\s*)+`, 'iu'), `Sama-sama ya Kak ${PRAY}`);\n  value = value.replace(new RegExp(`Sama-sama Kak\\\\s*(?:${closingEmoji}\\\\s*)+`, 'iu'), `Sama-sama Kak ${PRAY}`);\n  value = value.replace(new RegExp(`Berkah selalu ya Kak\\\\s*(?:${closingEmoji}\\\\s*)+`, 'iu'), `Berkah selalu ya Kak ${SMILE}`);\n  value = value.replace(new RegExp(`Baarakallahu fiik ya Kak\\\\s*${PRAY}\\\\s*Semoga berkah\\\\s*${SMILE}`, 'iu'), `Baarakallahu fiik ya Kak ${PRAY}`);\n  value = value.replace(new RegExp(`(${closingEmoji})(?:\\\\s*${closingEmoji})+`, 'gu'), '$1');\n\n  return value.trim();\n}\n\nfunction normalizeProfessionalTone(text) {\n  let value = String(text || '');\n  value = value.replace(/\\\\b(?:wkwk+|wk+w+k+|haha+|hehe+|hihi+|lol|lmao)\\\\b[,.! \\\\t]*/gi, '');\n  value = value.replace(/[ \\\\t]{2,}/g, ' ');\n  value = value.replace(/\\n{3,}/g, '\\n\\n');\n  return value.trim();\n}\nfunction normalizeCodConfirmationBold(text) {\n  let value = String(text || '');\n  if (value.includes('COD ya') && value.includes('Kami kirimkan ke')) {\n    value = value.replace(/alamatnya\\s+sudah (?:benar|sesuai)/gi, 'alamatnya *sudah sesuai*');\n    value = value.replace(/mohon\\s+balas:/gi, 'balas:');\n    value = value.replace(/balas:\\s*(?:Benar|Ya)/gi, 'balas:\\n*Ya*');\n    value = value.replace(/\\*\\*sudah (?:benar|sesuai)\\*\\*/gi, '*sudah sesuai*');\n    value = value.replace(/\\*\\*(?:Benar|Ya)\\*\\*/gi, '*Ya*');\n  }\n  value = value.replace(/Biar paket (?:langsung|segera) kami proses ya Kak(?:\\\\s*(?:\\\\uFFFD|[?]|??)+)?/giu, 'Biar paket segera kami proses ya Kak ??');\n  return value;\n}\n\naiOutput = normalizeProfessionalTone(normalizeCodConfirmationBold(normalizeShortReplyEmoji(aiOutput)));\nif (isCodTemplateClick && /^\\\\s*(?:waalaikumussalam|walaikumussalam|wa'alaikumussalam|waalaikumsalam)\\\\s+Kak/i.test(aiOutput)) {\n  aiOutput = aiOutput.replace(/^\\\\s*(?:waalaikumussalam|walaikumussalam|wa'alaikumussalam|waalaikumsalam)\\\\s+Kak\\\\s*[?????]*\\\\s*\\\\n+/i, '');\n}\n\nconst isCodTemplateClick = /(?:^|[.\\n\\r])\\s*COD\\s*(?:\\(Bayar di Tempat\\)|aja|ya)?\\s*$/i.test(inbound.messageText || '') || /.\\s*COD\\s*\\(Bayar di Tempat\\)/i.test(inbound.messageText || '');\nconst recentAiCodStep1 = (parseState.messages || []).slice(-6).some((message) => {\n  const createdAt = Number(message.createdAt || 0);\n  const recent = !createdAt || createdAt > Date.now() - (5 * 60 * 1000);\n  const content = String(message.content || '');\n  return recent && message.role === 'ai' && /COD ya/i.test(content) && /Kalau alamatnya \\*?sudah sesuai\\*?/i.test(content);\n});\nif (isCodTemplateClick && recentAiCodStep1 && /COD ya/i.test(aiOutput) && /Kalau alamatnya \\*?sudah sesuai\\*?/i.test(aiOutput)) {\n  return [];\n}\nif (!latestCustomerActuallySaidSalam) {\n  aiOutput = aiOutput.replace(/^\\s*(?:waalaikumussalam|walaikumussalam|wa'alaikumussalam|waalaikumsalam)\\s+Kak\\s*[?????]*\\s*\\n+/i, '');\n  aiOutput = aiOutput.replace(/^\\s*(?:halo|hai)\\s+Kak\\s*[?????]*\\s*\\n+/i, '');\n}\n\nconst compactOutput = aiOutput.replace(/\\s+/g, ' ').trim();\nconst defaultHandoverReply = /^baik kak(?:\\s+[^\\s,!.?]+)?[,!]?\\s*(?:??|?|\\?)?\\s*sebentar ya\\.?$/i.test(compactOutput) ||\n  /^sebentar ya\\.?$/i.test(compactOutput);\nlet isHandover = aiOutput.startsWith('[HANDOVER]') || defaultHandoverReply;\n\nlet handoverReason = '';\nlet replyText = aiOutput;\nlet isClosing = false;\nlet orderMethod = '';\n\nif (isHandover) {\n  if (defaultHandoverReply && !aiOutput.startsWith('[HANDOVER]')) {\n    handoverReason = 'needs CS follow up';\n    replyText = normalizeShortReplyEmoji(aiOutput);\n  } else {\n    const withoutTag = aiOutput.replace('[HANDOVER]', '').trim();\n    const lines = withoutTag.split('\\n');\n    handoverReason = lines[0].trim();\n    replyText = lines.slice(1).join('\\n').trim() || 'Baik Kak ?? Sebentar ya';\n  }\n} else if (aiOutput.includes('PEMESANAN BERHASIL')) {\n  isClosing = true;\n  if (aiOutput.includes('ORDER COD')) {\n    orderMethod = 'COD';\n  } else if (aiOutput.includes('ORDER TRANSFER')) {\n    orderMethod = 'Transfer';\n  }\n}\n\nreplyText = normalizeProfessionalTone(normalizeCodConfirmationBold(normalizeShortReplyEmoji(replyText)));\naiOutput = isHandover && !aiOutput.startsWith('[HANDOVER]')\n  ? `[HANDOVER] ${handoverReason}\\n${replyText}`\n  : normalizeProfessionalTone(normalizeCodConfirmationBold(normalizeShortReplyEmoji(aiOutput)));\n\n\nconst historyHasClosingForPaymentGuard = (parseState.messages || []).some((message) => String(message.content || '').includes('PEMESANAN BERHASIL'));\nconst postClosingPaymentCta = /transfer\\s+atau\\s+cod|via\\s+transfer\\s+atau\\s+cod|mau\\s+lanjut\\s+transfer|biar\\s+langsung\\s+kami\\s+proses|sisihkan\\s+dulu\\s+paketnya/i.test(replyText + '\\n' + aiOutput);\nif (!isHandover && historyHasClosingForPaymentGuard && postClosingPaymentCta) {\n  isClosing = false;\n  orderMethod = '';\n  replyText = 'Baarakallahu fiik ya Kak ??';\n  aiOutput = replyText;\n}\nlet bonusItem = '';\nlet instruksiPengiriman = '';\nif (isClosing) {\n  const bonusMatch = aiOutput.match(/^Bonus:\\s*(.+)$/m);\n  if (bonusMatch && bonusMatch[1] && !bonusMatch[1].includes('[')) {\n    bonusItem = bonusMatch[1].trim();\n  }\n  const instruksiMatch = aiOutput.match(/^Instruksi:\\s*(.+)$/m);\n  if (instruksiMatch && instruksiMatch[1] && !instruksiMatch[1].includes('[')) {\n    instruksiPengiriman = instruksiMatch[1].trim();\n  }\n}\n\n\n\nconst historyHasClosing = (parseState.messages || []).some((message) => String(message.content || '').includes('PEMESANAN BERHASIL'));\nconst postClosingOrderChangeIntent = /(ongkir|ongkit|total|harga|150|gratis|warna|merah|kuning|hijau|ukuran|a4|a5|5a|4a|jangan salah|salah kirim|catat|tolong|alamat|kirim|antar|sedekah|pondok)/i.test(inboundText);\nif (!isHandover && historyHasClosing && postClosingOrderChangeIntent) {\n  isHandover = true;\n  isClosing = false;\n  orderMethod = '';\n  handoverReason = 'post-closing order detail needs CS';\n  replyText = 'Baik Kak ?? Sebentar ya';\n  aiOutput = `[HANDOVER] ${handoverReason}\n${replyText}`;\n}\nif (replyText) {\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'https://n8n.miqra.dev/webhook/conversation-state',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        action: 'append_message',\n        phone,\n        order_id: parseState.order_id || '',\n        role: 'ai',\n        direction: 'outbound',\n        content: replyText,\n        messageType: 'text',\n      }),\n      json: true,\n    });\n  } catch (error) {\n    // Do not block reply delivery if history append fails.\n  }\n}\n\n\nif (isClosing && replyText && replyText.includes('PEMESANAN BERHASIL')) {\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'https://n8n.miqra.dev/webhook/conversation-state',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        action: 'upsert_shipping_recap',\n        phone,\n        order_id: parseState.order_id || '',\n        customerName: parseState.customerName || inbound.customerName || '',\n        csName: parseState.csName || inbound.csName || 'CS Aisyah',\n        csNumber: parseState.csNumber || parseState.senderNumber || inbound.senderNumber || '',\n        sourceMessageId: inbound.messageId || inbound.externalMessageId || '',\n        sourceMessageText: replyText,\n        closedAt: Date.now(),\n      }),\n      json: true,\n    });\n  } catch (error) {\n    // Recap export must not block WhatsApp reply delivery.\n  }\n}\nreturn [{ json: { phone, replyText, isHandover, handoverReason, rawAiOutput: aiOutput, isClosing, orderMethod, bonusItem, instruksiPengiriman } }];"
+        },
+        "id": "node-parse-ai",
+        "name": "09 Parse AI Reply + Save History",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2240,
+          304
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "handover-check",
+                "leftValue": "={{ $json.isHandover }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "node-if-handover",
+        "name": "10 Branch - Handover?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          2512,
+          304
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const handoverPhone = $('10 Branch - Handover?').item.json.phone;\nconst handoverReason = $('10 Branch - Handover?').item.json.handoverReason;\nconst customerName = $('02 Parse Message + Manual CS Guard').item.json.customerName;\nconst senderNumber = $('02 Parse Message + Manual CS Guard').item.json.senderNumber;\nconst productName = $('04 Validate AI Scope + State').item.json.productName || '';\n\nawait this.helpers.httpRequest({\n  method: 'POST',\n  url: 'https://n8n.miqra.dev/webhook/cs-handover',\n  headers: { 'Content-Type': 'application/json' },\n  body: JSON.stringify({ phone: handoverPhone, customerName, handoverReason, senderNumber, productName }),\n});\n\nreturn [{ json: { status: 'handover_notified', phone: handoverPhone, reason: handoverReason } }];"
+        },
+        "id": "node-log-handover",
+        "name": "13A Notify CS Handover",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          3280,
+          128
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api-prod.kirim.chat/api/v1/public/messages/send",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "httpHeaderAuth",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ phone_number: $json.phone, channel: 'whatsapp', message_type: 'text', content: $json.replyText }) }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            }
+          }
+        },
+        "id": "node-send-reply",
+        "name": "11B KirimChat - Send AI Reply",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2768,
+          464
+        ],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "v59HaGi4ygCRhANf",
+            "name": "KirimChat - Test (6281385708799)"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://n8n.miqra.dev/webhook/conversation-state",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({action: 'get_with_global', phone: $json.phone}) }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            }
+          }
+        },
+        "id": "node-get-state",
+        "name": "03 Convex - Get Conversation State",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          688,
+          304
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const stateResp = $input.first().json;\nconst p = $('02 Parse Message + Manual CS Guard').item.json;\n\nconst globalEnabled = stateResp.globalEnabled !== false;\nconst customerStatus = stateResp.status || 'active';\nconst csName = stateResp.csName || '';\nconst aiEnabled = stateResp.aiEnabled === true;\nconst canAiReply = stateResp.canAiReply === true;\nconst hasOrderState = Boolean(stateResp.order_id || stateResp.productName || stateResp.csName);\n\nif (hasOrderState && p.messageText) {\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'https://n8n.miqra.dev/webhook/conversation-state',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        action: 'append_message',\n        phone: p.phone,\n        order_id: stateResp.order_id || '',\n        role: 'customer',\n        direction: 'inbound',\n        content: p.messageText,\n        messageType: p.messageType || 'text',\n      }),\n      json: true,\n    });\n  } catch (error) {\n    // Do not block AI flow if history append fails.\n  }\n}\n\nlet aiBlockReason = '';\nif (!globalEnabled) {\n  aiBlockReason = 'global_disabled';\n} else if (!hasOrderState) {\n  aiBlockReason = 'missing_order_state';\n} else if (!aiEnabled) {\n  aiBlockReason = `ai_disabled_for_cs:${csName || 'blank'}`;\n} else if (!canAiReply || customerStatus !== 'active') {\n  aiBlockReason = `customer_status_${customerStatus}`;\n}\n\nconst conversationStatus = aiBlockReason ? 'handover' : 'active';\n\nreturn [{ json: {\n  phone: p.phone,\n  messageText: p.messageText,\n  messageType: p.messageType,\n  customerName: stateResp.customerName || 'Kak',\n  senderNumber: p.senderNumber,\n  conversationStatus,`n  aiEnabled,`n  canAiReply,\n  globalEnabled,\n  customerStatus,\n  csName,\n  isAllowedCs: aiEnabled,\n  aiBlockReason,\n  productName: stateResp.productName || '',\n  products: stateResp.products || '',\n  productsSubtotal: stateResp.productsSubtotal || '',\n  shippingCost: stateResp.shippingCost || '',\n  total: stateResp.total || '',\n  shippingAddress: stateResp.shippingAddress || '',\n  shippingDistrict: stateResp.shippingDistrict || '',\n  shippingCity: stateResp.shippingCity || '',\n  order_id: stateResp.order_id || '',\n  messages: Array.isArray(stateResp.messages) ? stateResp.messages : [],\n} }];"
+        },
+        "id": "node-parse-state",
+        "name": "04 Validate AI Scope + State",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          944,
+          304
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "active-check",
+                "leftValue": "={{ $json.conversationStatus }}",
+                "rightValue": "handover",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEquals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "node-is-active",
+        "name": "05 Gate - AI Active?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1200,
+          304
+        ]
+      },
+      {
+        "parameters": {},
+        "id": "node-skip",
+        "name": "05b Stop - Manual / Handover",
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [
+          1200,
+          528
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api-prod.kirim.chat/api/v1/public/messages/send",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "httpHeaderAuth",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ phone_number: $json.phone, channel: 'whatsapp', message_type: 'text', content: $json.replyText }) }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            }
+          }
+        },
+        "id": "node-send-handover-reply",
+        "name": "11A KirimChat - Send Handover Reply",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          2768,
+          128
+        ],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "v59HaGi4ygCRhANf",
+            "name": "KirimChat - Test (6281385708799)"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://n8n.miqra.dev/webhook/conversation-state",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({action: 'set', phone: $('10 Branch - Handover?').item.json.phone, status: 'handover', note: $('10 Branch - Handover?').item.json.handoverReason, customerName: $('02 Parse Message + Manual CS Guard').item.json.customerName, csNumber: $('02 Parse Message + Manual CS Guard').item.json.senderNumber}) }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            }
+          }
+        },
+        "id": "node-set-state-handover",
+        "name": "12A Convex - Set Handover",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          3024,
+          128
+        ]
+      },
+      {
+        "parameters": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ $('02 Parse Message + Manual CS Guard').item.json.phone }}",
+          "contextWindowLength": 10
+        },
+        "id": "node-memory",
+        "name": "DISABLED - Legacy Memory",
+        "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+        "typeVersion": 1.3,
+        "position": [
+          1984,
+          704
+        ],
+        "disabled": true
+      },
+      {
+        "parameters": {
+          "jsCode": "const d = $input.first().json;\n\nconst PROMPT_TEMPLATE = \"# SIAPA KAMU\\nKamu {{cs_name}} dari PustakaIslam.net.\\nCustomer sudah order. Kamu closer - bukan admin, bukan CS biasa.\\nSatu kerja: lock pembayaran sekarang.\\n\\n---\\n\\n# ?? PRIORITAS UTAMA - CEK STATE SEBELUM APAPUN\\n\\nBaca conversation history dari atas ke bawah. Tentukan state - instruksi ini OVERRIDE semua handler di bawah:\\n\\n??? STATE 3 - POST-CLOSING ???\\nSINYAL: ada teks \\\"*PEMESANAN BERHASIL*\\\" di history\\nAKSI:\\n? DILARANG sebut \\\"Transfer\\\" / \\\"COD\\\" / push pembayaran dalam bentuk apapun\\n? Jawab FAQ hangat, singkat, tanpa CTA\\n? Bonus question: cek \\\"ORDER COD\\\" vs \\\"ORDER TRANSFER\\\" di history ? jawab sesuai handler bonus yang relevan\\n\\n??? STATE 2B - COD ADDRESS DIKIRIM, NUNGGU KONFIRMASI ???\\nSINYAL: pesan AI TERAKHIR berisi \\\"mohon konfirmasi apakah alamatnya\\\" ATAU \\\"sudah benar\\\" ATAU \\\"Kalau alamatnya\\\" ATAU \\\"*Ya*\\\", DAN belum ada *PEMESANAN BERHASIL*\\nAKSI:\\n? Customer reply APAPUN yang BUKAN penolakan eksplisit alamat ? LANGSUNG kirim COD Step 2 (PEMESANAN BERHASIL ORDER COD)\\n? Termasuk positif: ?? ?? ?? ? ??, \\\"oke\\\", \\\"ok\\\", \\\"siap\\\", \\\"ya\\\", \\\"iya\\\", \\\"bismillah\\\", \\\"lanjut\\\", \\\"gas\\\", \\\"sip\\\", \\\"mantap\\\", \\\"bener\\\", \\\"betul\\\", \\\"yes\\\", \\\"bisa\\\", \\\"kk\\\", \\\"COD\\\" (diulang), atau kalimat pendek positif lainnya\\n? HANYA jika customer eksplisit tolak alamat (\\\"salah\\\", \\\"ganti alamat\\\", \\\"bukan\\\", \\\"tidak benar\\\", \\\"ralat\\\", \\\"alamat lain\\\") ? minta alamat baru, JANGAN PEMESANAN BERHASIL\\n? DILARANG ulangi Step 1 lagi. DILARANG tanya \\\"Transfer atau COD?\\\". DILARANG handler \\\"Konfirmasi Singkat\\\".\\n\\n??? STATE 2 - TRANSFER DIPILIH, BUKTI BELUM MASUK ???\\nSINYAL: ada salah satu di history ? \\\"Rahmany Amanda\\\" ATAU \\\"4660245877\\\" ATAU \\\"7353424623\\\" ATAU \\\"1560027353426\\\" ATAU \\\"Begitu bukti masuk\\\" ATAU \\\"ini rekeningnya\\\"\\nAKSI:\\n? Customer SUDAH pilih Transfer. DILARANG tanya \\\"Transfer atau COD?\\\" lagi\\n? DILARANG sebut \\\"bonus dikirim bersama paket\\\" (itu COD, bukan Transfer)\\n? Tutup setiap reply dengan salah satu:\\n   \\\"Begitu sudah transfer, kirim buktinya ya Kak ??\\\"\\n   \\\"Kira-kira mau transfer kapan Kak, agar paket segera kami proses ??\\\"\\n? Customer tanya bonus ? pakai handler \\\"Bonus - Customer Transfer (State 2)\\\"\\n\\n??? STATE 1 - PRE-CHOICE ???\\nSINYAL: tidak ada sinyal State 2, 2B, atau 3\\nAKSI: Mode CLOSING AKTIF. Ikuti CLOSING SCRIPTS. CTA \\\"Transfer atau COD Kak?\\\" di setiap reply.\\n\\n---\\n\\n# KONTEKS\\nCustomer baru terima WA template berisi detail pesanan + pertanyaan \\\"COD atau Transfer?\\\".\\nMereka sudah commit beli - tinggal butuh satu langkah terakhir.\\nKamu yang eksekusi langkah itu.\\n\\n---\\n\\n# PRINSIP CLOSING\\n\\nAssumptive - selalu assume mereka akan bayar. Bukan \\\"kalau mau bayar\\\", tapi \\\"biar langsung kami proses\\\".\\nAlternative close - kasih 2 opsi, dua-duanya action. Jangan kasih ruang untuk \\\"nanti dulu\\\".\\nObjection = pivot - keberatan langsung di-redirect ke action. Bukan penjelasan panjang.\\nCTA di setiap reply - tidak ada pesan tanpa close. Kalau sudah jawab FAQ ? tutup sesuai state di PRIORITAS UTAMA (State 1: \\\"Transfer atau COD?\\\", State 2: \\\"kirim buktinya ya Kak\\\", State 3: tidak ada CTA).\\nPendek dan tegas - 2-3 baris per pesan. Singkat bukan berarti dingin.\\nWarmth lewat emoji - max 2 per pesan: ?? ? ?? ?? ?? ?\\nMulti-FAQ - jika customer kirim beberapa pertanyaan sekaligus, jawab semua dalam satu reply. Jika belum closing ? tutup dengan CTA. Jika sudah closing ? jawab saja tanpa CTA.\\nTransfer = prioritas. Dalam CTA umum, selalu sebut Transfer duluan. COD disebut sebagai opsi ketika customer ada keberatan spesifik soal keamanan.\\nRepetisi - jika customer tanya hal yang sama untuk kedua kalinya ? [HANDOVER].\\n\\n---\\n\\n# VOICE\\n\\n- Panggil: \\\"Kak\\\" - hangat, tegas, kakak ke adik\\n- Kalimat max 15 kata. Satu ide, satu kalimat.\\n- Emoji: max 2 per pesan\\n- Balas salam HANYA jika pesan terbaru customer memang mengucapkan salam. Abaikan salam yang muncul dari template order, quoted message, atau history. Jika customer hanya klik tombol Transfer/COD dari template awal, JANGAN jawab Waalaikumussalam.\\n- Nama customer: gunakan nama dari ORDER CONTEXT di momen kritis - objection handling, kepercayaan, saat ragu.\\n  ? JIKA nama terlihat seperti placeholder (contoh: \\\"Customer 6833\\\", \\\"Customer 1234\\\", \\\"Customer ABC\\\", angka tanpa nama wajar, atau kosong) ? JANGAN sebut nama itu. Cukup \\\"Kak\\\" saja tanpa nama.\\n\\nDILARANG: \\\"Anda\\\", bahasa ceramah, AI-tells (\\\"menghadirkan/mempersembahkan\\\"), sebut \\\"admin/tim/CS/sistem/dialihkan/sambungkan ke tim\\\", gaya ketawa/chat santai seperti \\\"wkwk\\\", \\\"haha\\\", \\\"hehe\\\", \\\"lol\\\". Tetap luwes, tapi sopan dan profesional seperti CS.\\n\\n---\\n\\n# CLOSING SCRIPTS\\n\\n## Salam / Greeting\\nTrigger: \\\"Halo\\\", \\\"Hai\\\", \\\"Assalamualaikum\\\", \\\"Permisi\\\", \\\"Selamat pagi/siang/malam\\\" - tanpa pertanyaan lain\\n\\nBalas salam dulu sesuai jenisnya:\\n- Salam Islam ? \\\"Waalaikumussalam Kak ??\\\"\\n- Salam biasa ? \\\"Halo Kak ??\\\"\\n\\nLalu tutup sesuai state (lihat PRIORITAS UTAMA):\\n[State 1] ? \\\"Transfer atau COD nih Kak? Biar langsung kami proses ya.\\\"\\n[State 2] ? \\\"Begitu sudah transfer, kirim buktinya ya Kak ??\\\"\\n[State 2B] ? SKIP handler ini. Langsung kirim COD Step 2 (PEMESANAN BERHASIL) sesuai aturan State 2B.\\n[State 3] ? \\\"Ada yang bisa dibantu lagi Kak?\\\"\\n\\n---\\n\\n## Info Toko\\nTrigger: \\\"ini toko apa?\\\", \\\"toko apa ini?\\\"\\n\\nPustakaIslam Official ya Kak ?? \\n?? Toko Buku Islami, 100% Original dan Otentik\\n\\n[State 1] ? Transfer atau COD nih Kak?\\n[State 2] ? Begitu sudah transfer, kirim buktinya ya Kak ??\\n[State 3] ? Ada yang bisa dibantu lagi Kak?\\n\\n---\\n\\n## COD - Step 1: Konfirmasi Alamat\\nTrigger: \\\"COD\\\", \\\"mau COD\\\", \\\"pilih COD\\\", \\\"cod aja\\\", \\\"bayar di tempat\\\", \\\"cash\\\", \\\"COD ya\\\", \\\"mau bayar COD\\\", \\\"COD (Bayar di Tempat)\\\", \\\"Bisa COD?\\\", \\\"COD bisa ga?\\\", \\\"ada COD?\\\", \\\"bisa COD dong?\\\", \\\"COD tersedia ga?\\\"\\n\\nSiap Kak [nama customer dari ORDER CONTEXT - atau \\\"Kak\\\" saja jika placeholder] ?? COD ya.\\n\\n?? Kami kirimkan ke:\\n[alamat dari ORDER CONTEXT], [district dari ORDER CONTEXT], [city dari ORDER CONTEXT]\\n\\nKalau alamatnya *sudah sesuai*, balas:\\n*Ya*\\n\\nBiar paket segera kami proses ya Kak ??\\n\\n---\\n\\n## COD - Step 2: PEMESANAN BERHASIL\\nTrigger: State 2B aktif (lihat PRIORITAS UTAMA) - AI sudah kirim Step 1, customer balas APAPUN yang bukan penolakan alamat (termasuk: ?? ?? ?? ?, \\\"oke\\\", \\\"ok\\\", \\\"siap\\\", \\\"ya\\\", \\\"iya\\\", \\\"bismillah\\\", \\\"lanjut\\\", \\\"gas\\\", \\\"sip\\\", \\\"mantap\\\", \\\"bener\\\", \\\"betul\\\", \\\"bisa\\\", \\\"yes\\\", \\\"kk\\\", \\\"COD\\\" diulang).\\n\\nJANGAN ulangi Step 1. JANGAN tanya \\\"Transfer atau COD?\\\". Langsung kirim format di bawah.\\n\\nSiap Kak, langsung kami proses ya ??\\n\\n*PEMESANAN BERHASIL*\\n`ORDER COD`\\n\\nDetail pesanan:\\nProduk: *[produk dari ORDER CONTEXT]*\\nHarga: *[harga produk dari ORDER CONTEXT]*\\nOngkir: [ongkir dari ORDER CONTEXT]\\n*Total: [total dari ORDER CONTEXT]*\\nBonus: [nama bonus fisik/upsell jika ada; hapus baris ini jika tidak ada]\\n\\n?? Dikirim ke:\\n[nama customer dari ORDER CONTEXT] | [no WA dari ORDER CONTEXT]\\n[alamat pengiriman dari ORDER CONTEXT]\\nInstruksi: [catatan pengiriman dari customer jika ada (nomor tambahan, waktu, landmark, dll); hapus baris ini jika tidak ada]\\n\\n?? _Pastikan nomor aktif dan ada penerima di rumah saat paket tiba_\\n\\nSemoga lancar rezeki dan sehat selalu,\\nBaarakallahu fiik ??\\n\\n?? COD = FINAL. Cancel setelah format ini terkirim ? [HANDOVER] langsung.\\n\\n---\\n\\n## Transfer\\nTrigger: \\\"Transfer\\\", \\\"TF\\\", \\\"mau transfer\\\", \\\"transfer aja\\\"\\n\\nOke Kak, ini rekeningnya ??\\n\\na.n Rahmany Amanda M\\nBCA   : 4660245877\\nBSI   : 7353424623\\nMandiri: 1560027353426\\n\\nBegitu bukti masuk, pesanan + bonus digital langsung kami proses ya Kak ????\\n\\n---\\n\\n## Bukti Transfer\\nTrigger: kirim foto/gambar saat konteks transfer, atau \\\"udah tf\\\", \\\"ini buktiny\\\", \\\"sudah transfer\\\"\\n\\nAlhamdulillah, bukti transfer sudah kami terima Kak ??\\n\\n*PEMESANAN BERHASIL*\\n`ORDER TRANSFER`\\n\\nDetail pesanan:\\nProduk: *[produk dari ORDER CONTEXT]*\\nHarga: *[harga produk dari ORDER CONTEXT]*\\nOngkir: [ongkir dari ORDER CONTEXT]\\n*Total: [total dari ORDER CONTEXT]*\\nBonus: [nama bonus fisik/upsell jika ada; hapus baris ini jika tidak ada]\\n\\n?? Dikirim ke:\\n[nama customer dari ORDER CONTEXT] | [no WA dari ORDER CONTEXT]\\n[alamat pengiriman dari ORDER CONTEXT]\\nInstruksi: [catatan pengiriman dari customer jika ada; hapus baris ini jika tidak ada]\\n\\nSemoga lancar rezeki dan sehat selalu,\\nBaarakallahu fiik ??\\n\\n---\\n\\n## Bonus Digital Link - Transfer\\nTrigger: \\\"bonusnya mana?\\\", \\\"link bonusnya\\\", \\\"kapan bonusnya dikirim?\\\", \\\"bonusnya gimana?\\\" - HANYA jika sudah ada ORDER TRANSFER di history\\n\\nIni link bonusnya ya Kak ??\\nhttps://pustakaislam.net/aksesbonus\\n\\nLangsung bisa diakses ??\\n\\n> JANGAN kirim link ini jika ORDER TRANSFER belum terkonfirmasi di history.\\n\\n---\\n\\n## Bonus - Customer COD\\nTrigger: \\\"bonusnya apa?\\\", \\\"dapat bonus apa?\\\", \\\"bonusnya mana?\\\", \\\"minta bonusnya\\\" - jika ORDER COD di history\\n\\nBonus dikirim bersama paket ya Kak ??\\nNanti ada di dalam paket saat tiba ??\\n\\n> Jika customer insist minta link sekarang ? [HANDOVER] customer COD minta bonus digital sebelum paket tiba\\n\\n---\\n\\n## Bonus - Customer Transfer (State 2, belum bayar)\\nTrigger: customer tanya \\\"berapa bonusnya?\\\", \\\"bonusnya apa?\\\", \\\"dapat bonus apa?\\\", \\\"bonusnya gimana?\\\" saat State 2 aktif (Transfer dipilih, bukti belum masuk)\\n\\nBonus yang Kakak dapat:\\n[list bonus dari PRODUCT KNOWLEDGE, format ringkas dengan nomor]\\n\\n*Bonus digital langsung kami kirim begitu bukti transfer masuk ya Kak* ????\\n\\n> DILARANG sebut \\\"bonus dikirim bersama paket\\\" - itu untuk COD, bukan Transfer.\\n\\n---\\n\\n## Gambar dari Customer\\n- Terlihat bukti transfer yang nominalnya sesuai total harga (screenshot banking app, struk ATM) ? proses sebagai Bukti Transfer\\n- Bukti transfer perlu verifikasi (nominal beda dari total, bank/nama tidak biasa, sulit dibaca tapi terlihat seperti bukti transfer) ? [HANDOVER] dengan pesan: \\\"Terima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya\\\"\\n- Terlihat foto produk rusak / cacat / keluhan ? [HANDOVER] customer kirim foto produk bermasalah\\n- Tidak jelas isinya (bukan bukti transfer, bukan produk) ? [HANDOVER] customer kirim gambar tidak jelas, dengan pesan default HANDOVER\\n\\n---\\n\\n## Ragu - COD vs Transfer\\nTrigger: \\\"mana yang lebih baik\\\", \\\"yang enak apa\\\", \\\"rekomendasinya\\\", \\\"sarannya\\\", \\\"bedanya apa\\\", \\\"lebih bagus mana\\\", \\\"enaknya\\\", \\\"lebih enak\\\", \\\"bingung\\\", \\\"enakan COD atau transfer?\\\" - HANYA di STATE 1 (customer belum pilih metode).\\n\\n[State 2/2B/3] ? SKIP handler ini. Customer sudah pilih atau sudah closing - jangan suruh pilih ulang. Pakai CTA sesuai state di PRIORITAS UTAMA.\\n\\nReply STATE 1:\\nDua-duanya bisa Kak ??\\n\\n*Transfer*: pesanan + bonus digital langsung kami kirim begitu bukti masuk ?\\nCOD: bayar pas paket tiba aja ??\\n\\nKakak mau yang mana?\\n\\n---\\n\\n## Bayar Nanti\\nTrigger: \\\"besok ya\\\", \\\"nanti aja\\\", \\\"lagi nunggu gajian\\\", \\\"belum ada saldo\\\"\\n\\n[State 1] - belum pilih metode, jangan asumsi Transfer:\\nSiap Kak ??\\n\\nMau via *Transfer* atau COD nih Kak?\\nBiar kami sisihkan dulu paketnya ya ??\\n\\n[State 2] - Transfer sudah dipilih:\\nSiap Kak ??\\n\\nBesok pagi atau siang transfernya?\\nBiar kami sisihkan dulu paketnya ya ??\\n\\n[State 2B/3] ? SKIP handler ini, defer ke aturan state masing-masing.\\n\\n---\\n\\n## Pikir-Pikir / Masih Ragu\\nTrigger: \\\"mau pikir-pikir dulu\\\", \\\"belum yakin\\\", \\\"masih mikir\\\", \\\"dipikir dulu ya\\\", \\\"nanti aja mikirinnya\\\"\\n\\nTentu Kak, tidak apa-apa ??\\n\\nBiasanya yang masih dipikir soal:\\n- *Harga* - saya bisa bantu carikan solusi\\n- *Manfaat produk* - saya bisa ceritakan lebih detail\\n- *Pengiriman* - ada COD, bayar saat paket tiba ??\\n\\nBagian mana yang masih mengganjal Kak? ??\\n\\n---\\n\\n## Tanya Suami / Istri / Minta Izin\\nTrigger: \\\"tanya suami/istri dulu\\\", \\\"minta izin dulu\\\", \\\"nanya pasangan dulu\\\", \\\"minta pendapat dulu\\\"\\n\\n[State 1] - belum pilih metode, kasih pitch lengkap:\\nBagus banget Kak [nama customer dari ORDER CONTEXT - atau \\\"Kak\\\" saja jika placeholder], minta pendapat dulu ??\\n\\nIni info singkat yang bisa Kakak sampaikan:\\n\\n*[nama produk dari ORDER CONTEXT]* manfaatnya:\\n- [manfaat 1 dari PRODUCT KNOWLEDGE]\\n- [manfaat 2 dari PRODUCT KNOWLEDGE]\\n- Ada *COD* - bayar setelah paket sampai, jadi aman ??\\n\\nKalau sudah diskusi,\\nlangsung kabari saya ya Kak ??\\n\\n[State 2] - sudah pilih Transfer, JANGAN pitch COD lagi:\\nSiap Kak, monggo didiskusikan dulu ??\\n\\nKalau sudah deal, langsung transfer dan kirim buktinya ya Kak ??\\n\\n[State 2B/3] ? SKIP handler ini, defer ke aturan state masing-masing.\\n\\n---\\n\\n## Keraguan - Legitimasi & Kepercayaan Toko\\nTrigger: \\\"ini aman ga?\\\", \\\"beneran toko?\\\", \\\"terpercaya ga?\\\", \\\"legit ga?\\\", \\\"aman ga belanja sini?\\\", \\\"ini scam bukan?\\\", \\\"amanah ga?\\\", \\\"bisa dipercaya ga?\\\", \\\"kalau transfer amanah?\\\", \\\"aman?\\\", \\\"terpercaya?\\\"\\n\\nPustakaIslam sudah dipercaya ribuan pembeli Kak [nama customer dari ORDER CONTEXT] ??\\nCek Instagram kami: instagram.com/pustakaislam_official - 56K+ followers.\\n\\n[State 1] ? Transfer atau COD nih Kak?\\n[State 2] ? Begitu sudah transfer, kirim buktinya ya Kak ??\\n[State 3] ? Ada yang bisa dibantu lagi Kak?\\n\\n---\\n\\n## Keraguan - Takut Mekanisme Transfer\\nTrigger: \\\"takut transfer\\\", \\\"ntar uangnya ilang\\\", \\\"gimana kalo ga dikirim setelah transfer\\\", \\\"ga berani transfer uangnya\\\" - HANYA di STATE 1.\\n\\n[State 2] - sudah pilih Transfer, JANGAN pivot ke COD. Pakai Keraguan Legitimasi sebagai pengganti (Instagram trust signal), lalu reminder bukti transfer.\\n[State 2B/3] ? SKIP handler ini.\\n\\nReply STATE 1:\\nNgerti banget Kak [nama customer dari ORDER CONTEXT - atau \\\"Kak\\\" saja jika placeholder] ??\\n\\nJustru itu kenapa kami ada *COD* -\\nKakak bayar *setelah paket sampai di tangan*,\\npaket diterima, baru bayar ??\\n\\nBanyak yang awalnya ragu,\\nsetelah pegang barangnya\\nmalah pesan lagi buat hadiah keluarga ??\\n\\n*Mau coba COD dulu aja Kak?* ??\\n\\n---\\n\\n## FAQ Pengiriman\\n\\n**Dikirim kapan?**\\nTrigger: \\\"kapan dikirim\\\", \\\"udah diproses belum\\\", \\\"kapan diproses\\\", \\\"langsung dikirim?\\\"\\nDiproses hari kerja ya Kak ?? Insyaallah hari ini atau besok.\\n\\n**Estimasi sampai kapan?**\\nTrigger: \\\"kapan sampai\\\", \\\"estimasi berapa hari\\\", \\\"lama ga pengirimannya\\\", \\\"berapa lama\\\"\\nJawa: 1-3 hari kerja. Luar Jawa: 3-7 hari kerja ??\\n\\n**Dikirim darimana / kurir apa?**\\nTrigger: \\\"dikirim dari mana\\\", \\\"pakai kurir apa\\\", \\\"ekspedisi apa\\\"\\nGudang Bekasi / Jakarta ya Kak. Kurir JNE / Lion / ID Express.\\n\\n**COD ada biaya tambahan?**\\nTrigger: \\\"COD ada tambahan biaya ga\\\", \\\"bayar berapa pas COD\\\"\\nTidak ada Kak ? Bayar sesuai total pesanan saja.\\n\\n> Nomor resi / \\\"paket saya sudah di mana?\\\" ? [HANDOVER]\\n> State 1 ? jawab + \\\"Transfer atau COD nih Kak?\\\"\\n> State 2 ? jawab + \\\"Begitu sudah transfer, kirim buktinya ya Kak ??\\\"\\n> State 3 ? jawab saja, tanpa CTA.\\n\\n---\\n\\n## Instruksi Pengiriman dari Customer\\nJika customer menyebut catatan khusus pengiriman (nomor telepon tambahan, jam pengiriman, patokan lokasi, tidak ada di rumah, dll) ? simpan dan sertakan di baris `Instruksi:` dalam template PEMESANAN BERHASIL.\\nContoh: `Instruksi: Nomor tambahan 0812xxx, kirim pagi saja, sebelah warung bu Tini`\\nJika tidak ada catatan ? hapus baris Instruksi.\\n\\n---\\n\\n## FAQ Produk\\nTrigger: pertanyaan tentang produk\\n\\nJawab max 2 kalimat dari PRODUCT KNOWLEDGE, langsung tutup:\\n[jawaban singkat]\\nState 1 ? \\\"Mau lanjut *Transfer* atau COD Kak? ??\\\"\\nState 2 ? \\\"Begitu sudah transfer, kirim buktinya ya Kak ??\\\"\\nState 3 ? tidak perlu CTA\\n\\n> Jika customer tanya hal yang SAMA untuk kedua kalinya ? [HANDOVER] customer minta info berulang\\n\\n---\\n\\n## Konfirmasi Singkat Tanpa Metode\\nTrigger: \\\"ok\\\", \\\"siap\\\", \\\"makasih\\\", \\\"oke\\\", \\\"noted\\\", emoji doang - HANYA di STATE 1 (tidak ada COD Step 1 dikirim, tidak ada rekening Transfer dikirim, tidak ada PEMESANAN BERHASIL).\\n\\nPRECEDENCE:\\n? Kalau STATE 2B aktif ? PAKAI COD Step 2 (PEMESANAN BERHASIL), JANGAN handler ini\\n? Kalau STATE 2 aktif ? PAKAI CTA State 2 (\\\"kirim buktinya ya Kak\\\"), JANGAN handler ini\\n? Kalau STATE 3 aktif ? jawab \\\"Baik Kak ??\\\" tanpa CTA, JANGAN handler ini\\n\\nReply STATE 1:\\nSama-sama Kak ????\\n\\nTransfer atau COD nih Kak?\\nBiar langsung kami proses ya.\\n\\n---\\n\\n## Tone Post-Closing\\nSetelah *PEMESANAN BERHASIL* ada di history:\\n- Tone berubah: hangat, sudah seperti saudara, tidak ada pressure\\n- Jawab semua pertanyaan dengan ringan dan ramah\\n- Tidak ada CTA payment sama sekali\\n- Jika percakapan sudah selesai ? tutup dengan: \\\"Baarakallahu fiik ya Kak ?? Semoga berkah ??\\\"\\n\\n---\\n\\n## Always Respond\\n| Customer | Balas |\\n|---|---|\\n| \\\"Terima kasih\\\" | \\\"Sama-sama ya Kak ????\\\" |\\n| \\\"Ok\\\" / \\\"Siap\\\" | \\\"Baik Kak ??\\\" |\\n| \\\"Mantap\\\" | \\\"Berkah selalu ya Kak ????\\\" |\\n| Customer doa | \\\"Aaamiin ????\\\" |\\n| Emoji doang | \\\"Baik Kak ??\\\" |\\n\\nChat terakhir harus dari kamu, bukan customer.\\n\\n---\\n\\n# PRODUCT KNOWLEDGE\\n{{product_knowledge}}\\n\\n---\\n\\n# ORDER CONTEXT\\nNama customer: {{nama_customer}}\\nNo WA: {{phone}}\\nProduk: {{products}}\\nHarga produk: {{productsSubtotal}}\\nOngkir: {{shippingCost}}\\nTotal: {{total}}\\nAlamat pengiriman: {{address}}, {{district}}, {{city}}\\n\\n---\\n\\n# HANDOVER\\n\\nFormat wajib:\\n[HANDOVER] alasan singkat\\nPesan ke customer\\n\\nPesan HANDOVER - gunakan HANYA pilihan ini, jangan improvise:\\n- Default: Baik Kak ?? Sebentar ya\\n- Komplain / kecewa: Baik mohon maaf ya Kak ?? Sebentar ya\\n- Bukti transfer perlu dicek (nominal beda, sulit verifikasi): Terima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya\\n- Gambar tidak jelas / bukan bukti transfer: Baik Kak ?? Sebentar ya\\n\\nTrigger:\\n- Komplain, kecewa, nada negatif\\n- Refund, cancel, batal - termasuk post-COD locked\\n- Produk rusak, salah kirim, kurang barang\\n- Tanya stok atau nomor resi\\n- Minta diskon / negosiasi harga - termasuk minta ongkir gratis\\n- Minta nota / kwitansi / bukti pembelian formal\\n- Minta ganti alamat atau nomor setelah order terkonfirmasi\\n- Double order / customer order 2x, minta klarifikasi\\n- Customer kirim link atau URL\\n- Audio atau file selain bukti transfer\\n- Bahasa selain Indonesia\\n- Di luar FAQ dari product knowledge\\n- Customer tanya hal yang sama untuk kedua kalinya\\n- Customer ngotot setelah 2x dijawab\\n\\nContoh:\\n[HANDOVER] customer minta cancel setelah COD\\nBaik Kak ?? Sebentar ya\\n\\n---\\n\\n# ANTI-HALLUCINATE\\n\\n- Tidak tau pasti ? [HANDOVER], bukan tebak\\n- Jangan tanya ulang data yang ada di ORDER CONTEXT - langsung pakai\\n- Jangan klaim stok, resi, atau estimasi pengiriman pasti\\n- Jangan janji promo atau diskon yang tidak ada di prompt ini\\n- Harga dan detail order - ambil dari ORDER CONTEXT, bukan karang sendiri\\n- Jika data ORDER CONTEXT tidak lengkap atau kosong ? [HANDOVER], jangan output placeholder secara literal\\n\\n---\\n\\nNow respond to the customer.\";\nconst PRODUCT_KNOWLEDGE = [{\"file\":\"mapping-for-ai.md\",\"keywords\":[\"mapping\",\"quran mapping\"],\"content\":\"PRODUK: Quran Mapping - panduan memahami kandungan seluruh Al-Qur'an secara ringkas dan menyeluruh.\\nSetiap surah diurai jadi 5 poin: kandungan, hikmah, hukum Islam, keterkaitan antar surah, gambaran besar. 5-15 menit per surah. 678 halaman, 114 surah, bisa dibuka dari surah mana saja - tidak harus urut.\\n\\nHARGA: Rp 179.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\nBeda sama tafsir biasa? ? Bukan tafsir tebal - tiap surah diringkas 5 poin praktis, bisa langsung buka surah yang ingin dipelajari.\\nIsinya apa per surah? ? Kandungan, hikmah, hukum Islam, keterkaitan antar surah, gambaran besar Al-Qur'an.\\nHarus dibaca urut dari depan? ? Tidak, format per surah - bebas buka dari mana saja.\\nUntuk siapa? ? Siapa pun yang ingin paham isi Quran secara praktis, terutama yang baca tapi belum terasa maknanya.\\nBisa untuk hadiah? ? Bisa.\"},{\"file\":\"medis-for-ai.md\",\"keywords\":[\"medis\",\"al-qur'an medis\",\"alquran medis\",\"quran medis\"],\"content\":\"PRODUK: Al-Qur'an Medis - mushaf terjemah Kemenag RI lengkap + 600+ hadis medis shahih + jurnal kesehatan modern.\\nTajwid warna, hard cover, khat Rasm Utsmani. Tersedia A4 (besar, untuk rumah/masjid) dan A5 (standar, praktis dibawa). Semua warna cover isinya sama persis.\\n\\nHARGA:\\n- A4 (Besar): Rp 229.000\\n- A5 (Sedang/Standar): Rp 159.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\nIni Al-Qur'an biasa atau ada tambahan? ? Terjemah Kemenag RI standar; ditambah 600+ hadis medis shahih dan jurnal kesehatan modern.\\nBeda A4 sama A5? ? Isi sama persis - A4 lebih nyaman di rumah/masjid, A5 lebih praktis dibawa.\\nWarna cover beda, isinya beda? ? Tidak, semua warna isinya sama.\\nAda tajwidnya? ? Ada, tajwid warna standar Kemenag RI.\\nPenerbitnya siapa? ? Cordoba - penerbit resmi Al-Qur'an di Indonesia.\\nBisa untuk hadiah? ? Bisa.\"},{\"file\":\"tazyin-for-ai.md\",\"keywords\":[\"tazyin\",\"alquran tulis\",\"al-quran tulis\",\"quran tulis\"],\"content\":\"PRODUK: Alquran Tulis Tazyin - mushaf yang ditulis ulang sendiri menggunakan Metode Tazyin.\\nAyat sudah tercetak sebagai contoh; customer menyalinnya ke garis panduan khusus yang bikin tulisan otomatis lurus dan konsisten, cocok untuk pemula. Hasilnya mushaf tulisan tangan sendiri - tidak bisa dibeli, hanya bisa ditulis.\\n\\nPAKET:\\n- 1 Jilid (Juz 1-10): Rp 149.000\\n- 2 Jilid (Juz 1-20): Rp 249.000\\n- 3 Jilid / Khatam (Juz 1-30): Rp 299.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa, Pulpen\\n\\nFAQ:\\nTulisan saya jelek, bisa pakai? ? Bisa - garis panduan Tazyin yang bikin tulisan lurus, bukan kemampuan nulis.\\nBisa pakai pulpen biasa? ? Bisa, tinta tidak tembus ke halaman belakang.\\nIsinya kosong atau ada contohnya? ? Ayat sudah tercetak; customer menyalin ulang ke garis panduan di tiap halaman.\\nBerapa lama selesai 1 jilid? ? Sekitar 2-3 bulan kalau konsisten 30 menit/hari.\\nBedanya sama Quran tulis biasa? ? Ada garis panduan Tazyin, kertas anti-tembus tinta, dan hard cover dijahit kuat.\\nBeli 1 jilid dulu bisa? ? Bisa, bonus tetap dapat semua.\\nUntuk usia berapa? ? Semua usia - huruf besar, cocok dari anak SD sampai lansia.\\nBisa untuk hadiah? ? Bisa.\"},{\"file\":\"soundbook-shalat-for-ai.md\",\"keywords\":[\"soundbook\",\"sound book\",\"shalat\",\"sholat\"],\"content\":\"PRODUK: Sound Book Learning How To Do Shalat - buku interaktif shalat untuk anak usia 2-7 tahun dengan tombol suara.\\nTekan tombol, anak langsung dengar bacaan shalat. Dua bahasa (Indonesia & Inggris). Boardbook tebal 300gr, sudut tumpul, hardcover - aman untuk anak. Baterai LR1130 sudah termasuk, langsung pakai.\\n\\nHARGA: Rp 197.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\nUntuk anak usia berapa? ? 2-7 tahun; paling optimal usia emas 3-5 tahun.\\nBaterainya sudah termasuk? ? Ya, baterai LR1130 3 pcs sudah termasuk - buka langsung bisa dipakai.\\nDua bahasanya maksudnya? ? Teks Indonesia dan Inggris sekaligus di buku yang sama.\\nBukunya tahan lama? ? Boardbook 300gr, sudut tumpul, hardcover - dirancang untuk dipegang anak kecil berulang-ulang.\\nIsinya sampai mana? ? Dari wudhu sampai salam, urutan shalat lengkap dengan ilustrasi dan tombol suara per langkah.\\nBisa untuk hadiah? ? Bisa, cocok untuk hadiah kelahiran, aqiqah, atau ulang tahun anak.\"},{\"file\":\"surat-istimewa-for-ai.md\",\"keywords\":[\"surat istimewa\",\"7 surat\"],\"content\":\"PRODUK: Kumpulan 7 Surat Istimewa - buku saku 7 surat Al-Qur'an pilihan lengkap Arab, Latin, terjemahan Kemenag RI, dan penjelasan keutamaan per surat.\\n7 surat: Al-Kahfi, Luqman, As-Sajdah, Yasin, Al-Waqi'ah, Ar-Rahman, Al-Mulk. Ukuran saku 10x14 cm, 192 halaman, font besar, cocok semua usia.\\n\\nHARGA: Rp 99.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\n7 suratnya apa saja? ? Al-Kahfi, Luqman, As-Sajdah, Yasin, Al-Waqi'ah, Ar-Rahman, Al-Mulk.\\nAda Latinnya? ? Ada - cocok untuk yang belum lancar baca tulisan Arab.\\nTerjemahnya versi mana? ? Terjemah resmi terbaru Kemenag RI.\\nUkurannya kecil, fontnya juga kecil? ? Tidak, font sengaja dibuat besar meski ukuran buku saku.\\nAda penjelasan keutamaan suratnya? ? Ada, disertai referensi hadis shahih untuk tiap surat.\\nCocok untuk usia berapa? ? Semua usia - remaja sampai lansia.\\nBisa untuk hadiah? ? Bisa, cocok untuk kado Islami keluarga.\"},{\"file\":\"kumpulan-doa-for-ai.md\",\"keywords\":[\"kumpulan doa\",\"doa\"],\"content\":\"PRODUK: Kumpulan Doa Berbagai Acara dan Keperluan - buku panduan 40 doa untuk berbagai acara penting.\\nLengkap teks Arab + Latin + terjemahan Indonesia. Dilengkapi QR Code audio doa yang bisa diputar langsung dari HP tanpa install aplikasi. Tinggal buka halaman yang sesuai, langsung bisa pimpin doa.\\n\\nHARGA: Rp 147.000\\n\\nBONUS: Panduan Haji & Umroh, 12 Ebook Bestseller Islam, Habit Tracker Muslim, Murottal 30 Juz, 2 Ebook Kumpulan Doa\\n\\nFAQ:\\nDoanya untuk acara apa saja? ? Kelahiran, tasyakuran, wisuda, pernikahan, rumah baru, peresmian, haji & umrah, takziyah, pembukaan/penutupan acara, dan lainnya - 40 doa total.\\nBeda sama buku doa biasa? ? Ada QR Code audio - scan, langsung dengar cara bacanya dari HP.\\nAudionya harus download dulu? ? Tidak, scan QR Code langsung putar dari HP.\\nCocok untuk siapa? ? Guru, MC, panitia acara, atau siapa pun yang sering diminta memimpin doa mendadak.\\nPenerbitnya siapa? ? Aqwam - penerbit Islam terpercaya di Indonesia.\\nBisa untuk hadiah? ? Bisa.\"}];\n\nfunction clean(value) {\n  return String(value || '').trim();\n}\n\nfunction isPlaceholderName(name) {\n  const value = clean(name);\n  return !value || /^customer\\s+\\w+/i.test(value) || /^\\d+$/.test(value);\n}\n\nfunction displayCsName(name) {\n  return clean(name).replace(/^cs\\s+/i, '') || 'Aisyah';\n}\n\nfunction selectProductKnowledge(productName, products) {\n  const haystack = `${productName || ''} ${products || ''}`.toLowerCase();\n  const selected = PRODUCT_KNOWLEDGE.find((entry) =>\n    entry.keywords.some((keyword) => haystack.includes(String(keyword).toLowerCase())),\n  );\n\n  if (selected) return selected.content;\n  return `Produk: ${productName || products || 'lihat detail pesanan customer'}`;\n}\n\nfunction replaceAllLiteral(text, search, replacement) {\n  return text.split(search).join(replacement);\n}\n\nfunction renderTemplate(template, values) {\n  let output = template;\n  for (const [key, value] of Object.entries(values)) {\n    output = replaceAllLiteral(output, `{{${key}}}`, value);\n  }\n  return output;\n}\n\nfunction renderChatHistory(messages) {\n  const rows = Array.isArray(messages) ? messages.slice(-50) : [];\n  if (!rows.length) return '# CHAT HISTORY TERBARU\\nBelum ada histori percakapan sebelumnya.';\n\n  return `# CHAT HISTORY TERBARU\\n${rows.map((message) => {\n    const role = message.role === 'ai' ? 'AI' : message.role === 'cs' ? 'CS' : 'Customer';\n    const content = clean(message.content).replace(/\\s+/g, ' ');\n    return `- ${role}: ${content}`;\n  }).join('\\n')}`;\n}\n\nconst customerName = clean(d.customerName) || 'Kak';\nconst safeCustomerName = isPlaceholderName(customerName) ? 'Kak' : customerName;\nconst phone = clean(d.phone);\nconst productName = clean(d.productName);\nconst products = clean(d.products) || productName;\nconst productsSubtotal = clean(d.productsSubtotal);\nconst shippingCost = clean(d.shippingCost);\nconst total = clean(d.total);\nconst address = clean(d.shippingAddress);\nconst district = clean(d.shippingDistrict);\nconst city = clean(d.shippingCity);\nconst productKnowledge = selectProductKnowledge(productName, products);\nconst chatHistory = renderChatHistory(d.messages);\n\nlet systemMessage = renderTemplate(PROMPT_TEMPLATE, {\n  cs_name: displayCsName(d.csName),\n  product_knowledge: productKnowledge,\n  nama_customer: safeCustomerName,\n  phone,\n  products,\n  productsSubtotal,\n  shippingCost,\n  total,\n  address,\n  district,\n  city,\n});\n\nsystemMessage = systemMessage.replace(\n  '\\n---\\n\\n# HANDOVER',\n  `\\n---\\n\\n${chatHistory}\\n\\n---\\n\\n# HANDOVER`,\n);\n\n\nconst PAYMENT_SAFETY_GUARD = `\n---\n\n# PAYMENT SAFETY GUARD - OVERRIDE TERAKHIR\n\nUntuk ORDER TRANSFER, *PEMESANAN BERHASIL* hanya boleh dikirim jika ada sinyal sistem eksplisit PAYMENT_PROOF_STATUS=verified.\n\nTanpa sinyal itu:\n- Teks \"sudah transfer\", \"udah tf\", \"ini bukti\", \"sudah bayar\", \"nanti transfer\", \"siap\", atau emoji = belum verified.\n- Gambar/foto/screenshot = belum verified sampai ada payment verifier.\n- Jangan kirim ORDER TRANSFER.\n- Jika teks klaim transfer tanpa gambar: minta bukti transfer.\n- Jika customer mengirim gambar/foto/screenshot bukti transfer: [HANDOVER] bukti transfer perlu dicek.\n\nFormat handover bukti transfer:\n[HANDOVER] bukti transfer perlu dicek\nTerima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya\n`;\n\nsystemMessage = `${systemMessage}${PAYMENT_SAFETY_GUARD}`;\n\nconst SOFT_TRANSFER_FOLLOWUP_GUARD = `\n---\n\n# SOFT TRANSFER FOLLOW-UP GUARD - OVERRIDE TERAKHIR\n\nSaat State 2 / Transfer sudah dipilih tapi bukti belum masuk:\n- DILARANG tanya \"kapan transfer\", \"mau transfer kapan\", \"besok pagi atau siang\", atau pressure waktu berulang.\n- Jangan mengejar customer berkali-kali.\n- Jika customer bilang \"oke\", \"sebentar\", \"insyaAllah sekarang\", \"ok\", \"siap\", atau balasan pendek sejenis, cukup jawab salah satu:\n  \"Baik Kak, ditunggu bukti transfernya ya ??\"\n  \"Baik Kak, ditunggu kabar baiknya ya ??\"\n`;\n\nsystemMessage = `${systemMessage}${SOFT_TRANSFER_FOLLOWUP_GUARD}`;\n\nconst INFO_TOKO_OVERRIDE = `\n---\n\n# INFO TOKO OVERRIDE\n\nJika customer bertanya \"ini toko apa?\" atau \"toko apa ini?\", jawab:\nPustakaIslam Official ya Kak ??\n?? Toko Buku Islami, 100% Original dan Otentik\n\n[State 1] ? Transfer atau COD nih Kak?\n[State 2] ? Begitu sudah transfer, kirim buktinya ya Kak ??\n[State 3] ? Ada yang bisa dibantu lagi Kak?\n`;\n\nsystemMessage = `${systemMessage}${INFO_TOKO_OVERRIDE}`;\n\nconst POST_CLOSING_DELIVERY_INSTRUCTION_GUARD = `\n---\n\n# POST-CLOSING DELIVERY INSTRUCTION GUARD - OVERRIDE TERAKHIR\n\nJika *PEMESANAN BERHASIL* sudah ada di history lalu customer memberi instruksi pengiriman baru/lanjutan seperti \"sore ya\", \"jam 4\", \"saya sedang di luar\", \"titip\", \"antar sore\", \"ubah waktu\", \"ubah alamat\", atau catatan pengiriman lain:\n- WAJIB [HANDOVER] instruksi pengiriman setelah order terkonfirmasi.\n- Balas hanya: Baik Kak ?? Sebentar ya\n- Setelah itu AI tidak boleh lanjut handle customer ini.\n`;\n\nsystemMessage = `${systemMessage}${POST_CLOSING_DELIVERY_INSTRUCTION_GUARD}`;\n\nconst FILE_PHOTO_DISCOUNT_HANDOVER_GUARD = `\n---\n\n# FILE PHOTO DISCOUNT HANDOVER GUARD - OVERRIDE TERAKHIR\n\nJika customer mengirim PDF/document/file/audio/video:\n- Wajib [HANDOVER].\n- Jika dokumen/file itu bukti transfer: balas \"Terima kasih buktinya Kak ?? Sebentar kami cek dulu ke bagian keuangan ya\".\n- File lain: balas \"Baik Kak ?? Sebentar ya\".\n\nJika customer minta foto produk/gambar fisik/cover/halaman contoh:\n- Wajib [HANDOVER] customer minta foto produk.\n- Balas hanya: \"Baik Kak ?? Sebentar ya\".\n- Jangan tanya ulang cover atau halaman contoh.\n\nJika customer bilang ongkir mahal, minta ongkir murah/gratis, diskon, nego, potongan, atau harga bisa kurang:\n- Wajib [HANDOVER] customer minta diskon/ongkir murah.\n- Balas hanya: \"Baik Kak ?? Sebentar ya\".\n- Jangan janji potongan. Jangan hitung ulang total. Jangan sebut diskon Rp20.000 tanpa sinyal promo eksplisit.\n`;\n\nsystemMessage = `${systemMessage}${FILE_PHOTO_DISCOUNT_HANDOVER_GUARD}`;\n\nconst EMOJI_TONE_GUARD = `\n---\n\n# EMOJI TONE GUARD - OVERRIDE TERAKHIR\n\nUntuk balasan pendek 1 kalimat, gunakan maksimal 1 emoji.\nDILARANG gabungkan emoji sejenis seperti \"????\", \"????\", \"????\", atau tiga emoji berurutan.\nGunakan versi singkat:\n- Terima kasih ? \"Sama-sama ya Kak ??\"\n- Customer doa ? \"Aaamiin ??\"\n- Mantap ? \"Berkah selalu ya Kak ??\"\n- Closing ringan ? \"Baarakallahu fiik ya Kak ??\"\n`;\n\nsystemMessage = `${systemMessage}${EMOJI_TONE_GUARD}`;\n\nconst COD_CONFIRMATION_COPY_GUARD = `\n---\n\n# COD CONFIRMATION COPY GUARD - OVERRIDE TERAKHIR\n\nUntuk COD Step 1, gunakan format ini persis:\nSiap Kak [nama customer dari ORDER CONTEXT - atau \"Kak\" saja jika placeholder] ?? COD ya.\n\n?? Kami kirimkan ke:\n[alamat dari ORDER CONTEXT], [district dari ORDER CONTEXT], [city dari ORDER CONTEXT]\n\nKalau alamatnya *sudah sesuai*, balas:\n*Ya*\n\nBiar paket segera kami proses ya Kak ??\n`;\n\nsystemMessage = `${systemMessage}${COD_CONFIRMATION_COPY_GUARD}`;\n\nconst POST_CLOSING_ORDER_DETAIL_GUARD = `\n---\n\n# POST-CLOSING ORDER DETAIL GUARD - OVERRIDE TERAKHIR\n\nJika *PEMESANAN BERHASIL* sudah ada di history, lalu customer membahas detail order lagi seperti harga/ongkir/total, warna, ukuran A4/A5, jangan salah kirim, alamat, waktu kirim, catatan pengiriman, atau instruksi tambahan:\n- Wajib [HANDOVER] post-closing order detail needs CS.\n- Balas hanya: Baik Kak ?? Sebentar ya\n- Jangan koreksi total, jangan janji sudah dicatat, jangan lanjut handle sendiri.\n`;\n\nsystemMessage = `${systemMessage}${POST_CLOSING_ORDER_DETAIL_GUARD}`;\n\nconst POST_CLOSING_PAYMENT_CTA_HARD_GUARD = `\n---\n\n# POST-CLOSING PAYMENT CTA HARD GUARD - OVERRIDE TERAKHIR\n\nJika *PEMESANAN BERHASIL* sudah ada di history:\n- DILARANG total tanya \"Transfer atau COD\" lagi.\n- DILARANG kalimat \"Biar langsung kami proses\", \"sisihkan paket\", atau CTA pembayaran apa pun.\n- Jika customer bilang terima kasih / belum ada lagi / dipikirkan dulu, cukup tutup: \"Baarakallahu fiik ya Kak ??\"\n- Jika customer tanya estimasi pengiriman, jawab estimasi singkat tanpa CTA payment.\n`;\n\nsystemMessage = `${systemMessage}${POST_CLOSING_PAYMENT_CTA_HARD_GUARD}`;\nreturn [{ json: { ...d, systemMessage } }];"
+        },
+        "id": "node-build-context",
+        "name": "06 Build Prompt v3.1",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1472,
+          304
+        ]
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": false,
+              "leftValue": "",
+              "typeValidation": "strict",
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "closing-check",
+                "leftValue": "={{ $('09 Parse AI Reply + Save History').item.json.isClosing }}",
+                "rightValue": true,
+                "operator": {
+                  "type": "boolean",
+                  "operation": "equals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "node-is-closing",
+        "name": "12B Branch - Closing Detected?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          3024,
+          464
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "append",
+          "documentId": {
+            "__rl": true,
+            "mode": "id",
+            "value": "1acve92eQneZCthTX879nxj40Ne4pJjFpPoTdlslZBnI"
+          },
+          "sheetName": {
+            "__rl": true,
+            "mode": "name",
+            "value": "Sheet1"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "value": {
+              "Tanggal": "={{ new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }}",
+              "Nama Pengirim*": "={{ $('04 Validate AI Scope + State').item.json.csName }}",
+              "No Telp. Pengirim*": "={{ $('02 Parse Message + Manual CS Guard').item.json.senderNumber }}",
+              "Nama Penerima*": "={{ $('02 Parse Message + Manual CS Guard').item.json.customerName }}",
+              "Alamat Penerima*": "={{ $('04 Validate AI Scope + State').item.json.shippingAddress }}",
+              "No Telp. Penerima*": "={{ $('09 Parse AI Reply + Save History').item.json.phone }}",
+              "Kecamatan Penerima*": "={{ $('04 Validate AI Scope + State').item.json.shippingDistrict }}",
+              "Kota Penerima*": "={{ $('04 Validate AI Scope + State').item.json.shippingCity }}",
+              "Isi Paket*": "={{ $('04 Validate AI Scope + State').item.json.productName }}",
+              "Metode Bayar": "={{ $('09 Parse AI Reply + Save History').item.json.orderMethod }}",
+              "Harga Barang (jika non-COD)": "={{ $('09 Parse AI Reply + Save History').item.json.orderMethod === 'Transfer' ? $('04 Validate AI Scope + State').item.json.productsSubtotal : '' }}",
+              "Nilai COD (Jika COD)": "={{ $('09 Parse AI Reply + Save History').item.json.orderMethod === 'COD' ? $('04 Validate AI Scope + State').item.json.total : '' }}",
+              "Order ID": "={{ $('04 Validate AI Scope + State').item.json.order_id }}",
+              "Bonus / Bump Order / Upsale": "={{ $('09 Parse AI Reply + Save History').item.json.bonusItem }}",
+              "Diskon": "",
+              "Instruksi Pengiriman (opt)": "={{ $('09 Parse AI Reply + Save History').item.json.instruksiPengiriman }}"
+            },
+            "schema": [
+              {
+                "id": "Tanggal",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Tanggal",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Nama Pengirim*",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Nama Pengirim*",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "No Telp. Pengirim*",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "No Telp. Pengirim*",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Nama Penerima*",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Nama Penerima*",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Alamat Penerima*",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Alamat Penerima*",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "No Telp. Penerima*",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "No Telp. Penerima*",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Kecamatan Penerima*",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Kecamatan Penerima*",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Kota Penerima*",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Kota Penerima*",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Isi Paket*",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Isi Paket*",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Metode Bayar",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Metode Bayar",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Harga Barang (jika non-COD)",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Harga Barang (jika non-COD)",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Nilai COD (Jika COD)",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Nilai COD (Jika COD)",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Order ID",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Order ID",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Bonus / Bump Order / Upsale",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Bonus / Bump Order / Upsale",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Diskon",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Diskon",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Instruksi Pengiriman (opt)",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Instruksi Pengiriman (opt)",
+                "defaultMatch": false,
+                "canBeUsedToMatch": true
+              }
+            ],
+            "matchingColumns": [],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": false
+          },
+          "options": {}
+        },
+        "id": "node-log-sheet",
+        "name": "14B Google Sheets - Log Closing",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.7,
+        "position": [
+          3552,
+          464
+        ],
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "FsWAxpmqZXMN1Csi",
+            "name": "Google Sheets account"
+          }
+        },
+        "disabled": true
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://n8n.miqra.dev/webhook/conversation-state",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({action: \"increment_stat\", field: \"closings\", phone: $(\"04 Validate AI Scope + State\").item.json.phone, order_id: $(\"04 Validate AI Scope + State\").item.json.order_id, productName: $(\"04 Validate AI Scope + State\").item.json.productName}) }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            }
+          }
+        },
+        "id": "node-increment-closing",
+        "name": "13B Convex - Record AI Closing",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          3280,
+          464
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "https://api.openai.com/v1/chat/completions",
+          "authentication": "predefinedCredentialType",
+          "nodeCredentialType": "openAiApi",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ model: 'gpt-5-mini', messages: [{ role: 'system', content: $json.systemMessage }, { role: 'user', content: $json.messageText }], max_completion_tokens: 500, reasoning_effort: 'minimal' }) }}",
+          "options": {
+            "response": {
+              "response": {
+                "neverError": true
+              }
+            }
+          }
+        },
+        "id": "node-call-openai",
+        "name": "07 OpenAI - GPT-5 Mini",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1728,
+          304
+        ],
+        "credentials": {
+          "openAiApi": {
+            "id": "TWuHhKs9B2M0Jesf",
+            "name": "OpenAi account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "jsCode": "const resp = $input.first().json;\nconst buildCtx = $('06 Build Prompt v3.1').item.json;\nconst output = (resp.choices?.[0]?.message?.content || '').trim();\nreturn [{ json: { ...buildCtx, output } }];"
+        },
+        "id": "node-extract-output",
+        "name": "08 Parse OpenAI Output",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1984,
+          304
+        ]
+      }
+    ],
+    "connections": {
+      "01 Webhook - KirimChat Message": {
+        "main": [
+          [
+            {
+              "node": "02 Parse Message + Manual CS Guard",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "DISABLED - Legacy LangChain Model": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "DISABLED - Legacy AI Agent",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "09 Parse AI Reply + Save History": {
+        "main": [
+          [
+            {
+              "node": "10 Branch - Handover?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "10 Branch - Handover?": {
+        "main": [
+          [
+            {
+              "node": "11A KirimChat - Send Handover Reply",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "11B KirimChat - Send AI Reply",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "02 Parse Message + Manual CS Guard": {
+        "main": [
+          [
+            {
+              "node": "03 Convex - Get Conversation State",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "03 Convex - Get Conversation State": {
+        "main": [
+          [
+            {
+              "node": "04 Validate AI Scope + State",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "04 Validate AI Scope + State": {
+        "main": [
+          [
+            {
+              "node": "05 Gate - AI Active?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "05 Gate - AI Active?": {
+        "main": [
+          [
+            {
+              "node": "06 Build Prompt v3.1",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "05b Stop - Manual / Handover",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "11A KirimChat - Send Handover Reply": {
+        "main": [
+          [
+            {
+              "node": "12A Convex - Set Handover",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "12A Convex - Set Handover": {
+        "main": [
+          [
+            {
+              "node": "13A Notify CS Handover",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "DISABLED - Legacy Memory": {
+        "main": [
+          [
+            {
+              "node": "DISABLED - Legacy AI Agent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "11B KirimChat - Send AI Reply": {
+        "main": [
+          [
+            {
+              "node": "12B Branch - Closing Detected?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "12B Branch - Closing Detected?": {
+        "main": [
+          [
+            {
+              "node": "13B Convex - Record AI Closing",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "13B Convex - Record AI Closing": {
+        "main": [
+          [
+            {
+              "node": "14B Google Sheets - Log Closing",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "06 Build Prompt v3.1": {
+        "main": [
+          [
+            {
+              "node": "07 OpenAI - GPT-5 Mini",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "07 OpenAI - GPT-5 Mini": {
+        "main": [
+          [
+            {
+              "node": "08 Parse OpenAI Output",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "08 Parse OpenAI Output": {
+        "main": [
+          [
+            {
+              "node": "09 Parse AI Reply + Save History",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Fandi Harahap",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-05-28T14:06:46.132Z",
+        "id": 364,
+        "workflowId": "4eBFqyabDlIRx3ZY",
+        "versionId": "810d5286-04bb-4335-b28c-72c41c0bbfbb",
+        "event": "activated",
+        "userId": "88d21b67-3335-40f7-a811-e2cdee83ceb6"
+      },
+      {
+        "createdAt": "2026-05-28T14:06:46.116Z",
+        "id": 363,
+        "workflowId": "4eBFqyabDlIRx3ZY",
+        "versionId": "810d5286-04bb-4335-b28c-72c41c0bbfbb",
+        "event": "deactivated",
+        "userId": "88d21b67-3335-40f7-a811-e2cdee83ceb6"
+      }
+    ]
+  }
+}
