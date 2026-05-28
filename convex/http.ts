@@ -118,6 +118,20 @@ http.route({
       return jsonResponse(result);
     }
 
+    if (action === "upsert_shipping_recap") {
+      const result = await ctx.runMutation(api.shippingRecaps.upsertFromN8n, {
+        customerPhone: String(body.customerPhone || body.phone || ""),
+        customerName: body.customerName ? String(body.customerName) : undefined,
+        csName: body.csName ? String(body.csName) : undefined,
+        csPhone: body.csPhone || body.csNumber ? String(body.csPhone || body.csNumber) : undefined,
+        orderIdBerdu: body.orderIdBerdu || body.order_id ? String(body.orderIdBerdu || body.order_id) : undefined,
+        sourceMessageId: body.sourceMessageId || body.messageId ? String(body.sourceMessageId || body.messageId) : undefined,
+        sourceMessageText: String(body.sourceMessageText || body.message || ""),
+        closedAt: body.closedAt ? Number(body.closedAt) : undefined,
+      });
+      return jsonResponse(result);
+    }
+
 
     if (action === "list_all") {
       const result = await ctx.runQuery(api.state.listConversations, {

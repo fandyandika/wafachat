@@ -13,6 +13,7 @@ import type * as http from "../http.js";
 import type * as lib from "../lib.js";
 import type * as messages from "../messages.js";
 import type * as settings from "../settings.js";
+import type * as shippingRecaps from "../shippingRecaps.js";
 import type * as state from "../state.js";
 
 import type {
@@ -27,6 +28,7 @@ declare const fullApi: ApiFromModules<{
   lib: typeof lib;
   messages: typeof messages;
   settings: typeof settings;
+  shippingRecaps: typeof shippingRecaps;
   state: typeof state;
 }>;
 
