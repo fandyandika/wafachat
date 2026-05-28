@@ -30,6 +30,13 @@ function normalizeText(value: string): string {
   return value.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 }
 
+function cleanMarkdown(value: string): string {
+  return value
+    .replace(/[*_`]/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
@@ -47,13 +54,13 @@ function detectPaymentMethod(text: string): PaymentMethod {
 
 function extractLineValue(text: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = text.match(new RegExp(`^\\s*${escaped}\\s*:\\s*(.+)$`, "im"));
-  return match?.[1]?.trim() ?? "";
+  const match = text.match(new RegExp(`^\\s*[*_\`]*${escaped}[*_\`]*\\s*:\\s*(.+)$`, "im"));
+  return cleanMarkdown(match?.[1]?.trim() ?? "");
 }
 
 function extractShippingBlock(text: string): string {
   const match = text.match(
-    /(?:Dikirim ke|Dikirimkan ke)\s*:\s*\n([\s\S]+?)(?:\n\s*(?:PEMBAYARAN|ORDER|Catatan|Baarakallahu|$))/i,
+    /(?:Dikirim ke|Dikirimkan ke)\s*:\s*\n([\s\S]+?)(?:\n\s*(?:📱|📌|PEMBAYARAN|ORDER|Catatan|_Catatan|Pastikan|Semoga|Baarakallahu|$))/i,
   );
   return match?.[1]?.trim() ?? "";
 }
@@ -67,7 +74,9 @@ function parseRecipient(block: string) {
   const firstParts = first.split("|").map((part) => part.trim());
   const recipientName = firstParts[0] ?? "";
   const recipientPhone = normalizePhone(firstParts[1] ?? "");
-  const recipientAddress = lines.slice(1).join(" ").trim();
+  const recipientAddress = cleanMarkdown(lines.slice(1).join(" ").trim())
+    .replace(/\s*(?:📱|📌|Pastikan|_Pastikan|Semoga|Baarakallahu)[\s\S]*$/i, "")
+    .trim();
   const addressParts = recipientAddress
     .split(",")
     .map((part) => part.trim())
@@ -125,6 +134,13 @@ function normalizeComparable(value: string | undefined): string {
   return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function normalizeProductName(value: string | undefined): string {
+  return cleanMarkdown(value ?? "")
+    .replace(/\(\s*\d+\s*x\s*\)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim() || "Unknown";
+}
+
 function compareWithOrder(parsed: ReturnType<typeof parseClosingMessage>, order: Doc<"orders"> | null) {
   const flags = [...parsed.flags];
   let inferredDiscount: number | undefined;
@@ -134,11 +150,10 @@ function compareWithOrder(parsed: ReturnType<typeof parseClosingMessage>, order:
     return { flags: unique(flags), inferredDiscount };
   }
 
-  if (
-    parsed.recipientAddress &&
-    normalizeComparable(order.shippingAddress) &&
-    normalizeComparable(parsed.recipientAddress) !== normalizeComparable(order.shippingAddress)
-  ) {
+  const finalAddress = normalizeComparable(parsed.recipientAddress);
+  const originalAddress = normalizeComparable([order.shippingAddress, order.shippingDistrict, order.shippingCity].filter(Boolean).join(", "));
+  const baseOrderAddress = normalizeComparable(order.shippingAddress);
+  if (finalAddress && originalAddress && !finalAddress.includes(baseOrderAddress) && !originalAddress.includes(finalAddress)) {
     flags.push("ADDRESS_CHANGED");
   }
 
@@ -297,6 +312,99 @@ export const upsertFromN8n = mutation({
     });
 
     return { success: true, recapId, status, flags, _action: "upsert_shipping_recap" };
+  },
+});
+
+export const backfillFromMessages = mutation({
+  args: {
+    limit: v.optional(v.number()),
+    startAt: v.optional(v.number()),
+    endAt: v.optional(v.number()),
+    force: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(args.limit ?? 300, 1000);
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_customerPhone_createdAt")
+      .order("desc")
+      .take(limit);
+    let scanned = 0;
+    let upserted = 0;
+    let skipped = 0;
+    const recapIds: Id<"shippingRecaps">[] = [];
+
+    for (const message of messages) {
+      if (args.startAt && message.createdAt < args.startAt) continue;
+      if (args.endAt && message.createdAt > args.endAt) continue;
+      if (message.direction !== "outbound") continue;
+      if (!String(message.content || "").includes("PEMESANAN BERHASIL")) continue;
+      scanned += 1;
+
+      const order = await findOrder(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
+      const conversation = await findConversation(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
+      const parsed = parseClosingMessage(message.content);
+      const comparison = compareWithOrder(parsed, order);
+      const existing = await findExistingRecap(ctx, {
+        orderIdBerdu: message.orderId || order?.orderId,
+        customerPhone: message.customerPhone,
+        conversationId: conversation?._id,
+      });
+      const flags = comparison.flags;
+      const status: RecapStatus = flags.length > 0 ? "needs_review" : parsed.status;
+      const payload = {
+        orderIdBerdu: message.orderId || order?.orderId,
+        conversationId: conversation?._id,
+        customerPhone: message.customerPhone,
+        customerName: order?.customerName ?? conversation?.customerName ?? "",
+        csName: order?.assignedCsName ?? conversation?.assignedCsName ?? "",
+        csPhone: order?.assignedCsNumber,
+        orderedAt: order?.createdAt,
+        closedAt: message.createdAt,
+        recipientName: parsed.recipientName,
+        recipientPhone: parsed.recipientPhone,
+        recipientAddress: parsed.recipientAddress,
+        recipientDistrict: parsed.recipientDistrict,
+        recipientCity: parsed.recipientCity,
+        packageContent: parsed.packageContent,
+        paymentMethod: parsed.paymentMethod,
+        nonCodItemPrice: parsed.nonCodItemPrice,
+        codValue: parsed.codValue,
+        shippingCost: parsed.shippingCost,
+        total: parsed.total,
+        discount: parsed.discount,
+        inferredDiscount: comparison.inferredDiscount,
+        status,
+        flags,
+        sourceMessageId: message.externalMessageId ?? message._id,
+        sourceMessageText: message.content,
+        updatedAt: Date.now(),
+      };
+
+      if (existing && existing.sourceMessageId === payload.sourceMessageId && !args.force) {
+        skipped += 1;
+        continue;
+      }
+
+      let recapId: Id<"shippingRecaps">;
+      if (existing) {
+        recapId = existing._id;
+        await ctx.db.patch(existing._id, {
+          ...payload,
+          version: existing.version + 1,
+        });
+      } else {
+        recapId = await ctx.db.insert("shippingRecaps", {
+          ...payload,
+          version: 1,
+          createdAt: Date.now(),
+        });
+      }
+      recapIds.push(recapId);
+      upserted += 1;
+    }
+
+    return { success: true, scanned, upserted, skipped, recapIds };
   },
 });
 
@@ -485,12 +593,12 @@ export const getPerformance = query({
       .order("desc")
       .collect();
 
-    const validClosings = recaps.filter((row) => row.status === "ready" || row.status === "exported");
+    const validClosings = recaps.filter((row) => row.status !== "cancelled" && row.status !== "cancelled_after_export");
     const productMap = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number }>();
     const csMap = new Map<string, { csName: string; leads: number; closing: number; revenue: number; discount: number }>();
 
     for (const order of orders) {
-      const product = order.productName || order.products || "Unknown";
+      const product = normalizeProductName(order.productName || order.products);
       const productRow = productMap.get(product) ?? { product, leads: 0, closing: 0, revenue: 0, discount: 0 };
       productRow.leads += 1;
       productMap.set(product, productRow);
@@ -502,7 +610,7 @@ export const getPerformance = query({
     }
 
     for (const recap of validClosings) {
-      const product = recap.packageContent || "Unknown";
+      const product = normalizeProductName(recap.packageContent);
       const revenue = recap.total ?? recap.codValue ?? recap.nonCodItemPrice ?? 0;
       const discount = recap.discount ?? (args.includeInferredDiscount ? recap.inferredDiscount ?? 0 : 0);
       const productRow = productMap.get(product) ?? { product, leads: 0, closing: 0, revenue: 0, discount: 0 };

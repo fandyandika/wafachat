@@ -8,8 +8,8 @@ import { ConvexClientProvider } from "./ConvexClientProvider";
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 
 export const metadata: Metadata = {
-  title: 'CS AI Panel',
-  description: 'PustakaIslam CS Control Panel',
+  title: 'WaFaChat',
+  description: 'WaFaChat CS Control Panel',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

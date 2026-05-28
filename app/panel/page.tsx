@@ -98,6 +98,7 @@ type QueueKey = 'active' | 'handover' | 'closed' | 'all';
 type PanelView = 'dashboard' | 'shipping' | 'performance';
 type RecapStatus = 'ready' | 'needs_review' | 'exported' | 'cancelled' | 'cancelled_after_export';
 type PaymentFilter = 'all' | 'cod' | 'transfer';
+type DateRangeKey = 'today' | 'yesterday' | '7d';
 
 interface ShippingRecap {
   _id: Id<'shippingRecaps'>;
@@ -165,30 +166,41 @@ export default function PanelPage() {
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>('all');
   const [recapSearch, setRecapSearch] = useState('');
   const [selectedRecap, setSelectedRecap] = useState<ShippingRecap | null>(null);
+  const [dateRange, setDateRange] = useState<DateRangeKey>('today');
 
-  const todayRange = useMemo(() => {
+  const selectedDateRange = useMemo(() => {
     const now = new Date();
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
     const end = new Date(now);
     end.setHours(23, 59, 59, 999);
+
+    if (dateRange === 'yesterday') {
+      start.setDate(start.getDate() - 1);
+      end.setDate(end.getDate() - 1);
+    }
+
+    if (dateRange === '7d') {
+      start.setDate(start.getDate() - 6);
+    }
+
     return { startAt: start.getTime(), endAt: end.getTime() };
-  }, []);
+  }, [dateRange]);
 
   const conversationsData = useQuery(api.state.listConversations, { includeClosed: true });
   const statsData = useQuery(api.state.getDailyStats, {});
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
   const shippingRecapsData = useQuery(api.shippingRecaps.list, {
-    startAt: todayRange.startAt,
-    endAt: todayRange.endAt,
+    startAt: selectedDateRange.startAt,
+    endAt: selectedDateRange.endAt,
     status: recapStatus === 'all' ? undefined : recapStatus,
     paymentMethod: paymentFilter === 'all' ? undefined : paymentFilter,
     search: recapSearch || undefined,
     limit: 75,
   });
   const performanceData = useQuery(api.shippingRecaps.getPerformance, {
-    startAt: todayRange.startAt,
-    endAt: todayRange.endAt,
+    startAt: selectedDateRange.startAt,
+    endAt: selectedDateRange.endAt,
     includeInferredDiscount: false,
   });
   const setConversationStatus = useMutation(api.state.setConversationStatusFromN8n);
@@ -611,6 +623,7 @@ export default function PanelPage() {
             {panelView === 'shipping' && (
               <ShippingRecapPanel
                 actionLoading={actionLoading}
+                dateRange={dateRange}
                 paymentFilter={paymentFilter}
                 readyCount={readyRecaps.length}
                 recapSearch={recapSearch}
@@ -618,6 +631,7 @@ export default function PanelPage() {
                 rows={shippingRecaps}
                 onCancel={cancelRecap}
                 onDownload={downloadRecapCsv}
+                onDateRangeChange={setDateRange}
                 onOpenDetail={setSelectedRecap}
                 onPaymentFilterChange={setPaymentFilter}
                 onReady={markReadyRecap}
@@ -627,7 +641,9 @@ export default function PanelPage() {
               />
             )}
 
-            {panelView === 'performance' && <PerformancePanel data={performance} />}
+            {panelView === 'performance' && (
+              <PerformancePanel data={performance} dateRange={dateRange} onDateRangeChange={setDateRange} />
+            )}
           </div>
         </main>
       </div>
@@ -707,12 +723,14 @@ function MetricSkeleton() {
 
 function ShippingRecapPanel({
   actionLoading,
+  dateRange,
   paymentFilter,
   readyCount,
   recapSearch,
   recapStatus,
   rows,
   onCancel,
+  onDateRangeChange,
   onDownload,
   onOpenDetail,
   onPaymentFilterChange,
@@ -722,12 +740,14 @@ function ShippingRecapPanel({
   onUndoCancel,
 }: {
   actionLoading: string | null;
+  dateRange: DateRangeKey;
   paymentFilter: PaymentFilter;
   readyCount: number;
   recapSearch: string;
   recapStatus: RecapStatus | 'all';
   rows: ShippingRecap[];
   onCancel: (recap: ShippingRecap) => void;
+  onDateRangeChange: (range: DateRangeKey) => void;
   onDownload: () => void;
   onOpenDetail: (recap: ShippingRecap) => void;
   onPaymentFilterChange: (filter: PaymentFilter) => void;
@@ -742,6 +762,11 @@ function ShippingRecapPanel({
     { label: 'Perlu Cek', value: 'needs_review' },
     { label: 'Sudah Export', value: 'exported' },
     { label: 'Cancel', value: 'cancelled' },
+  ];
+  const dateItems: Array<{ label: string; value: DateRangeKey }> = [
+    { label: 'Hari Ini', value: 'today' },
+    { label: 'Kemarin', value: 'yesterday' },
+    { label: '7 Hari', value: '7d' },
   ];
 
   return (
@@ -775,6 +800,17 @@ function ShippingRecapPanel({
               onClick={() => onStatusChange(item.value)}
               size="sm"
               variant={recapStatus === item.value ? 'default' : 'outline'}
+            >
+              {item.label}
+            </Button>
+          ))}
+          <Separator className="h-9" orientation="vertical" />
+          {dateItems.map((item) => (
+            <Button
+              key={item.value}
+              onClick={() => onDateRangeChange(item.value)}
+              size="sm"
+              variant={dateRange === item.value ? 'default' : 'outline'}
             >
               {item.label}
             </Button>
@@ -888,7 +924,15 @@ function ShippingRecapPanel({
   );
 }
 
-function PerformancePanel({ data }: { data?: PerformanceData }) {
+function PerformancePanel({
+  data,
+  dateRange,
+  onDateRangeChange,
+}: {
+  data?: PerformanceData;
+  dateRange: DateRangeKey;
+  onDateRangeChange: (range: DateRangeKey) => void;
+}) {
   const cards = [
     { label: 'Total Leads', value: data?.totalLeads ?? 0 },
     { label: 'Total Closing', value: data?.totalClosing ?? 0 },
@@ -899,9 +943,26 @@ function PerformancePanel({ data }: { data?: PerformanceData }) {
     { label: 'Total Diskon', value: formatRupiah(data?.totalDiscount) },
     { label: 'Cancel', value: data?.cancelled ?? 0 },
   ];
+  const dateItems: Array<{ label: string; value: DateRangeKey }> = [
+    { label: 'Hari Ini', value: 'today' },
+    { label: 'Kemarin', value: 'yesterday' },
+    { label: '7 Hari', value: '7d' },
+  ];
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap gap-2">
+        {dateItems.map((item) => (
+          <Button
+            key={item.value}
+            onClick={() => onDateRangeChange(item.value)}
+            size="sm"
+            variant={dateRange === item.value ? 'default' : 'outline'}
+          >
+            {item.label}
+          </Button>
+        ))}
+      </div>
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {cards.map((card) => (
           <Card key={card.label} size="sm">
