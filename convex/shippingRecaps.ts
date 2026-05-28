@@ -37,6 +37,11 @@ function cleanMarkdown(value: string): string {
     .trim();
 }
 
+function isGeneratedCustomerName(value: string | undefined): boolean {
+  const text = cleanMarkdown(value ?? "");
+  return !text || /^Customer\s+\d{3,}$/i.test(text) || /Dikirim(?:kan)?\s+ke\s*:?/i.test(text);
+}
+
 function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
@@ -174,6 +179,41 @@ function compareWithOrder(parsed: ReturnType<typeof parseClosingMessage>, order:
   return { flags: unique(flags), inferredDiscount };
 }
 
+function applyOrderFallbacks(parsed: ReturnType<typeof parseClosingMessage>, order: Doc<"orders"> | null) {
+  if (!order) return parsed;
+
+  const orderAddress = [order.shippingAddress, order.shippingDistrict, order.shippingCity].filter(Boolean).join(", ");
+  const recipientName = isGeneratedCustomerName(parsed.recipientName) ? order.customerName : parsed.recipientName;
+  const recipientPhone = parsed.recipientPhone || normalizePhone(order.customerPhone);
+  const recipientAddress = parsed.recipientAddress || orderAddress;
+  const recipientDistrict = parsed.recipientDistrict || order.shippingDistrict || "";
+  const recipientCity = parsed.recipientCity || order.shippingCity || "";
+
+  let flags = parsed.flags;
+  if (recipientDistrict) flags = flags.filter((flag) => flag !== "MISSING_DISTRICT");
+  if (recipientCity) flags = flags.filter((flag) => flag !== "MISSING_CITY");
+  if (
+    recipientName &&
+    recipientPhone &&
+    recipientAddress &&
+    parsed.packageContent &&
+    parsed.paymentMethod !== "unknown"
+  ) {
+    flags = flags.filter((flag) => flag !== "PARSE_LOW_CONFIDENCE");
+  }
+
+  return {
+    ...parsed,
+    recipientName,
+    recipientPhone,
+    recipientAddress,
+    recipientDistrict,
+    recipientCity,
+    status: flags.length > 0 ? ("needs_review" as RecapStatus) : ("ready" as RecapStatus),
+    flags: unique(flags),
+  };
+}
+
 async function findOrder(ctx: { db: any }, args: { orderIdBerdu?: string; customerPhone: string }) {
   if (args.orderIdBerdu) {
     const byOrderId = await ctx.db
@@ -243,7 +283,7 @@ export const upsertFromN8n = mutation({
     const closedAt = args.closedAt ?? now;
     const order = await findOrder(ctx, { orderIdBerdu: args.orderIdBerdu, customerPhone: args.customerPhone });
     const conversation = await findConversation(ctx, { orderIdBerdu: args.orderIdBerdu, customerPhone: args.customerPhone });
-    const parsed = parseClosingMessage(args.sourceMessageText);
+    const parsed = applyOrderFallbacks(parseClosingMessage(args.sourceMessageText), order);
     const comparison = compareWithOrder(parsed, order);
     const existing = await findExistingRecap(ctx, {
       orderIdBerdu: args.orderIdBerdu ?? order?.orderId,
@@ -261,7 +301,7 @@ export const upsertFromN8n = mutation({
       orderIdBerdu: args.orderIdBerdu ?? order?.orderId,
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
-      customerName: args.customerName ?? order?.customerName ?? conversation?.customerName ?? "",
+      customerName: isGeneratedCustomerName(args.customerName) ? order?.customerName ?? conversation?.customerName ?? "" : args.customerName ?? order?.customerName ?? conversation?.customerName ?? "",
       csName: args.csName ?? order?.assignedCsName ?? conversation?.assignedCsName ?? "",
       csPhone: args.csPhone ?? order?.assignedCsNumber,
       orderedAt: order?.createdAt,
@@ -343,7 +383,7 @@ export const backfillFromMessages = mutation({
 
       const order = await findOrder(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
       const conversation = await findConversation(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
-      const parsed = parseClosingMessage(message.content);
+      const parsed = applyOrderFallbacks(parseClosingMessage(message.content), order);
       const comparison = compareWithOrder(parsed, order);
       const existing = await findExistingRecap(ctx, {
         orderIdBerdu: message.orderId || order?.orderId,
@@ -570,6 +610,59 @@ export const markExported = mutation({
       });
     }
     return { success: true, count: args.recapIds.length, exportBatchId: args.exportBatchId };
+  },
+});
+
+export const repairRecipientNamesFromOrders = mutation({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(args.limit ?? 200, 1000);
+    const rows = await ctx.db.query("shippingRecaps").order("desc").take(limit);
+    const repaired: Array<{ recapId: Id<"shippingRecaps">; orderId?: string; recipientName: string }> = [];
+    let skipped = 0;
+
+    for (const row of rows) {
+      const needsRepair = isGeneratedCustomerName(row.recipientName) || isGeneratedCustomerName(row.customerName);
+      if (!needsRepair) {
+        skipped += 1;
+        continue;
+      }
+
+      const order = await findOrder(ctx, { orderIdBerdu: row.orderIdBerdu, customerPhone: row.customerPhone });
+      if (!order || isGeneratedCustomerName(order.customerName)) {
+        skipped += 1;
+        continue;
+      }
+
+      const parsed = applyOrderFallbacks(parseClosingMessage(row.sourceMessageText), order);
+      const comparison = compareWithOrder(parsed, order);
+      const nextStatus: RecapStatus =
+        row.status === "exported" || row.status === "cancelled" || row.status === "cancelled_after_export"
+          ? row.status
+          : comparison.flags.length > 0
+            ? "needs_review"
+            : parsed.status;
+
+      await ctx.db.patch(row._id, {
+        customerName: order.customerName,
+        recipientName: parsed.recipientName || order.customerName,
+        recipientPhone: parsed.recipientPhone || normalizePhone(order.customerPhone),
+        recipientAddress:
+          parsed.recipientAddress ||
+          [order.shippingAddress, order.shippingDistrict, order.shippingCity].filter(Boolean).join(", "),
+        recipientDistrict: parsed.recipientDistrict || order.shippingDistrict || "",
+        recipientCity: parsed.recipientCity || order.shippingCity || "",
+        flags: comparison.flags,
+        status: nextStatus,
+        updatedAt: Date.now(),
+      });
+
+      repaired.push({ recapId: row._id, orderId: row.orderIdBerdu, recipientName: parsed.recipientName || order.customerName });
+    }
+
+    return { success: true, repaired: repaired.length, skipped, sample: repaired.slice(0, 10) };
   },
 });
 
