@@ -166,7 +166,7 @@ export default function PanelPage() {
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>('all');
   const [recapSearch, setRecapSearch] = useState('');
   const [selectedRecap, setSelectedRecap] = useState<ShippingRecap | null>(null);
-  const [dateRange, setDateRange] = useState<DateRangeKey>('today');
+  const [dateRange, setDateRange] = useState<DateRangeKey>('7d');
 
   const selectedDateRange = useMemo(() => {
     const now = new Date();
