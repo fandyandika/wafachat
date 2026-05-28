@@ -2,7 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 
-type RecapStatus = "ready" | "needs_review" | "exported" | "cancelled" | "cancelled_after_export";
+type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
 
 const INTERNAL_TEST_PHONES = new Set(["6285715682110"]);
@@ -11,6 +11,7 @@ const statusValidator = v.union(
   v.literal("ready"),
   v.literal("needs_review"),
   v.literal("exported"),
+  v.literal("delivered"),
   v.literal("cancelled"),
   v.literal("cancelled_after_export"),
 );
@@ -658,6 +659,72 @@ export const markExported = mutation({
   },
 });
 
+export const markDelivered = mutation({
+  args: { recapIds: v.array(v.id("shippingRecaps")) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    for (const recapId of args.recapIds) {
+      const row = await ctx.db.get(recapId);
+      if (!row) continue;
+      await ctx.db.patch(recapId, { status: "delivered", deliveredAt: now, updatedAt: now });
+      await ctx.db.insert("events", {
+        conversationId: row.conversationId,
+        orderId: row.orderIdBerdu,
+        customerPhone: row.customerPhone,
+        type: "shipping_recap_delivered",
+        actor: "cs",
+        metadata: { recapId },
+        createdAt: now,
+      });
+    }
+    return { success: true, count: args.recapIds.length };
+  },
+});
+
+export const undoDelivered = mutation({
+  args: { recapId: v.id("shippingRecaps") },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.recapId);
+    if (!row) return { success: false, error: "recap not found" };
+    await ctx.db.patch(args.recapId, { status: "exported", deliveredAt: undefined, updatedAt: Date.now() });
+    return { success: true, recapId: args.recapId };
+  },
+});
+
+export const markReadyBulk = mutation({
+  args: { recapIds: v.array(v.id("shippingRecaps")) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    for (const recapId of args.recapIds) {
+      await ctx.db.patch(recapId, { status: "ready", flags: [], updatedAt: now });
+    }
+    return { success: true, count: args.recapIds.length };
+  },
+});
+
+export const markCancelledBulk = mutation({
+  args: { recapIds: v.array(v.id("shippingRecaps")), reason: v.string() },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    for (const recapId of args.recapIds) {
+      const row = await ctx.db.get(recapId);
+      if (!row) continue;
+      const status: RecapStatus = row.status === "exported" || row.status === "delivered" ? "cancelled_after_export" : "cancelled";
+      await ctx.db.patch(recapId, { status, cancelReason: args.reason, cancelledAt: now, updatedAt: now });
+      await ctx.db.insert("events", {
+        conversationId: row.conversationId,
+        orderId: row.orderIdBerdu,
+        customerPhone: row.customerPhone,
+        type: "shipping_recap_cancelled",
+        actor: "cs",
+        metadata: { recapId, reason: args.reason, status },
+        createdAt: now,
+      });
+    }
+    return { success: true, count: args.recapIds.length };
+  },
+});
+
 export const importBerduVerifiedRows = mutation({
   args: {
     rows: v.array(berduVerifiedRowValidator),
@@ -679,7 +746,7 @@ export const importBerduVerifiedRows = mutation({
         conversationId: conversation?._id,
       });
       const status: RecapStatus =
-        existing?.status === "exported" || existing?.status === "cancelled" || existing?.status === "cancelled_after_export"
+        existing?.status === "exported" || existing?.status === "delivered" || existing?.status === "cancelled" || existing?.status === "cancelled_after_export"
           ? existing.status
           : "ready";
       const flags = unique([...(existing?.flags ?? []).filter((flag) => flag !== "MISSING_ORDER_CONTEXT"), "BERDU_VERIFIED"]);
@@ -780,7 +847,7 @@ export const repairRecipientNamesFromOrders = mutation({
       const parsed = applyOrderFallbacks(parseClosingMessage(row.sourceMessageText), order);
       const comparison = compareWithOrder(parsed, order);
       const nextStatus: RecapStatus =
-        row.status === "exported" || row.status === "cancelled" || row.status === "cancelled_after_export"
+        row.status === "exported" || row.status === "delivered" || row.status === "cancelled" || row.status === "cancelled_after_export"
           ? row.status
           : comparison.flags.length > 0
             ? "needs_review"
@@ -834,6 +901,7 @@ export const getPerformance = query({
         row.status !== "cancelled_after_export" &&
         !isInternalTestPhone(row.customerPhone),
     );
+    const totalDelivered = recaps.filter((row) => row.status === "delivered" && !isInternalTestPhone(row.customerPhone)).length;
     const berduVerifiedRows = validCandidateRows.filter((row) => row.flags.includes("BERDU_VERIFIED"));
     const validClosingRows = berduVerifiedRows.length > 0 ? berduVerifiedRows : validCandidateRows;
     const latestOrderByPhone = new Map<string, Doc<"orders">>();
@@ -902,6 +970,7 @@ export const getPerformance = query({
       totalTransfer: validClosings.filter((row) => row.paymentMethod === "transfer").length,
       totalRevenue,
       totalDiscount,
+      delivered: totalDelivered,
       cancelled: recaps.filter(
         (row) =>
           (row.status === "cancelled" || row.status === "cancelled_after_export") &&

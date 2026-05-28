@@ -26,6 +26,24 @@ import {
 
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   Card,
   CardAction,
@@ -96,9 +114,10 @@ interface Stats {
 
 type QueueKey = 'active' | 'handover' | 'closed' | 'all';
 type PanelView = 'dashboard' | 'shipping' | 'performance';
-type RecapStatus = 'ready' | 'needs_review' | 'exported' | 'cancelled' | 'cancelled_after_export';
+type RecapStatus = 'ready' | 'needs_review' | 'exported' | 'delivered' | 'cancelled' | 'cancelled_after_export';
 type PaymentFilter = 'all' | 'cod' | 'transfer';
-type DateRangeKey = 'today' | 'yesterday' | '7d';
+type DateRangeKey = 'today' | 'yesterday' | '7d' | '30d' | 'month';
+type RecapSort = 'newest' | 'oldest' | 'value_asc' | 'value_desc' | 'status';
 
 interface ShippingRecap {
   _id: Id<'shippingRecaps'>;
@@ -133,6 +152,7 @@ interface ShippingRecap {
   exportedAt?: number;
   exportBatchId?: string;
   cancelReason?: string;
+  deliveredAt?: number;
 }
 
 interface PerformanceData {
@@ -143,6 +163,7 @@ interface PerformanceData {
   totalTransfer: number;
   totalRevenue: number;
   totalDiscount: number;
+  delivered: number;
   cancelled: number;
   products: Array<{ product: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
   cs: Array<{ csName: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
@@ -167,6 +188,9 @@ export default function PanelPage() {
   const [recapSearch, setRecapSearch] = useState('');
   const [selectedRecap, setSelectedRecap] = useState<ShippingRecap | null>(null);
   const [dateRange, setDateRange] = useState<DateRangeKey>('7d');
+  const [recapSort, setRecapSort] = useState<RecapSort>('newest');
+  const [selectedRecapIds, setSelectedRecapIds] = useState<Set<string>>(new Set());
+  const [bulkCancelOpen, setBulkCancelOpen] = useState(false);
 
   const selectedDateRange = useMemo(() => {
     const now = new Date();
@@ -182,6 +206,14 @@ export default function PanelPage() {
 
     if (dateRange === '7d') {
       start.setDate(start.getDate() - 6);
+    }
+
+    if (dateRange === '30d') {
+      start.setDate(start.getDate() - 29);
+    }
+
+    if (dateRange === 'month') {
+      start.setDate(1);
     }
 
     return { startAt: start.getTime(), endAt: end.getTime() };
@@ -214,6 +246,10 @@ export default function PanelPage() {
   const markRecapCancelled = useMutation(api.shippingRecaps.markCancelled);
   const undoRecapCancelled = useMutation(api.shippingRecaps.undoCancelled);
   const markRecapsExported = useMutation(api.shippingRecaps.markExported);
+  const markRecapsDelivered = useMutation(api.shippingRecaps.markDelivered);
+  const undoRecapDelivered = useMutation(api.shippingRecaps.undoDelivered);
+  const markReadyBulk = useMutation(api.shippingRecaps.markReadyBulk);
+  const markCancelledBulk = useMutation(api.shippingRecaps.markCancelledBulk);
 
   useEffect(() => {
     if (conversationsData !== undefined && statsData !== undefined && globalEnabledData !== undefined) {
@@ -309,6 +345,40 @@ export default function PanelPage() {
     setActionLoading(null);
   };
 
+  const markDeliveredRecap = async (recap: ShippingRecap) => {
+    setActionLoading(recap._id + ':delivered');
+    await markRecapsDelivered({ recapIds: [recap._id] });
+    setActionLoading(null);
+  };
+
+  const undoDeliveredRecap = async (recap: ShippingRecap) => {
+    setActionLoading(recap._id + ':undo-delivered');
+    await undoRecapDelivered({ recapId: recap._id });
+    setActionLoading(null);
+  };
+
+  const bulkMarkReady = async (ids: string[]) => {
+    setActionLoading('bulk:ready');
+    await markReadyBulk({ recapIds: ids as Id<'shippingRecaps'>[] });
+    setSelectedRecapIds(new Set());
+    setActionLoading(null);
+  };
+
+  const bulkMarkDelivered = async (ids: string[]) => {
+    setActionLoading('bulk:delivered');
+    await markRecapsDelivered({ recapIds: ids as Id<'shippingRecaps'>[] });
+    setSelectedRecapIds(new Set());
+    setActionLoading(null);
+  };
+
+  const bulkCancel = async (ids: string[]) => {
+    setActionLoading('bulk:cancel');
+    await markCancelledBulk({ recapIds: ids as Id<'shippingRecaps'>[], reason: 'cancelled from panel' });
+    setSelectedRecapIds(new Set());
+    setBulkCancelOpen(false);
+    setActionLoading(null);
+  };
+
   const readyRecaps = shippingRecaps.filter((row) => row.status === 'ready');
 
   const markReadyRecap = async (recap: ShippingRecap) => {
@@ -329,14 +399,15 @@ export default function PanelPage() {
     setActionLoading(null);
   };
 
-  const downloadRecapCsv = async () => {
-    if (readyRecaps.length === 0) return;
+  const downloadRecapCsv = async (rowsToExport?: ShippingRecap[]) => {
+    const toExport = rowsToExport ?? readyRecaps;
+    if (toExport.length === 0) return;
     const exportBatchId = 'export-' + new Date().toISOString().replace(/[:.]/g, '-');
     setActionLoading('shipping-export');
     const response = await fetch('/api/shipping-recaps/export', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rows: readyRecaps }),
+      body: JSON.stringify({ rows: toExport }),
     });
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
@@ -345,7 +416,8 @@ export default function PanelPage() {
     link.download = `wafachat-rekap-pengiriman-${stats.date || 'today'}.csv`;
     link.click();
     URL.revokeObjectURL(url);
-    await markRecapsExported({ recapIds: readyRecaps.map((row) => row._id), exportBatchId });
+    await markRecapsExported({ recapIds: toExport.map((row) => row._id), exportBatchId });
+    setSelectedRecapIds(new Set());
     setActionLoading(null);
   };
 
@@ -621,24 +693,66 @@ export default function PanelPage() {
             )}
 
             {panelView === 'shipping' && (
-              <ShippingRecapPanel
-                actionLoading={actionLoading}
-                dateRange={dateRange}
-                paymentFilter={paymentFilter}
-                readyCount={readyRecaps.length}
-                recapSearch={recapSearch}
-                recapStatus={recapStatus}
-                rows={shippingRecaps}
-                onCancel={cancelRecap}
-                onDownload={downloadRecapCsv}
-                onDateRangeChange={setDateRange}
-                onOpenDetail={setSelectedRecap}
-                onPaymentFilterChange={setPaymentFilter}
-                onReady={markReadyRecap}
-                onSearchChange={setRecapSearch}
-                onStatusChange={setRecapStatus}
-                onUndoCancel={undoCancelRecap}
-              />
+              <>
+                <ShippingRecapPanel
+                  actionLoading={actionLoading}
+                  dateRange={dateRange}
+                  paymentFilter={paymentFilter}
+                  readyCount={readyRecaps.length}
+                  recapSearch={recapSearch}
+                  recapSort={recapSort}
+                  recapStatus={recapStatus}
+                  rows={shippingRecaps}
+                  selectedIds={selectedRecapIds}
+                  onBulkCancel={() => setBulkCancelOpen(true)}
+                  onBulkDelivered={() => bulkMarkDelivered(Array.from(selectedRecapIds))}
+                  onBulkExport={() => {
+                    const selected = shippingRecaps.filter((r) => selectedRecapIds.has(r._id));
+                    const readySelected = selected.filter((r) => r.status === 'ready');
+                    downloadRecapCsv(readySelected.length > 0 ? readySelected : undefined);
+                  }}
+                  onBulkReady={() => bulkMarkReady(Array.from(selectedRecapIds))}
+                  onCancel={cancelRecap}
+                  onDelivered={markDeliveredRecap}
+                  onDownload={() => downloadRecapCsv()}
+                  onDateRangeChange={setDateRange}
+                  onOpenDetail={setSelectedRecap}
+                  onPaymentFilterChange={setPaymentFilter}
+                  onReady={markReadyRecap}
+                  onSearchChange={setRecapSearch}
+                  onSelectAll={(ids) => setSelectedRecapIds(new Set(ids))}
+                  onSelectRow={(id, checked) => {
+                    setSelectedRecapIds((prev) => {
+                      const next = new Set(prev);
+                      if (checked) next.add(id); else next.delete(id);
+                      return next;
+                    });
+                  }}
+                  onSortChange={setRecapSort}
+                  onStatusChange={setRecapStatus}
+                  onUndoCancel={undoCancelRecap}
+                  onUndoDelivered={undoDeliveredRecap}
+                />
+                <AlertDialog open={bulkCancelOpen} onOpenChange={setBulkCancelOpen}>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Batalkan {selectedRecapIds.size} pesanan?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Pesanan yang dibatalkan tidak akan masuk ke export. Tindakan ini bisa di-undo satu per satu.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Batal</AlertDialogCancel>
+                      <AlertDialogAction
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        onClick={() => bulkCancel(Array.from(selectedRecapIds))}
+                      >
+                        Ya, Batalkan
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </>
             )}
 
             {panelView === 'performance' && (
@@ -727,200 +841,426 @@ function ShippingRecapPanel({
   paymentFilter,
   readyCount,
   recapSearch,
+  recapSort,
   recapStatus,
   rows,
+  selectedIds,
+  onBulkCancel,
+  onBulkDelivered,
+  onBulkExport,
+  onBulkReady,
   onCancel,
   onDateRangeChange,
+  onDelivered,
   onDownload,
   onOpenDetail,
   onPaymentFilterChange,
   onReady,
   onSearchChange,
+  onSelectAll,
+  onSelectRow,
+  onSortChange,
   onStatusChange,
   onUndoCancel,
+  onUndoDelivered,
 }: {
   actionLoading: string | null;
   dateRange: DateRangeKey;
   paymentFilter: PaymentFilter;
   readyCount: number;
   recapSearch: string;
+  recapSort: RecapSort;
   recapStatus: RecapStatus | 'all';
   rows: ShippingRecap[];
+  selectedIds: Set<string>;
+  onBulkCancel: () => void;
+  onBulkDelivered: () => void;
+  onBulkExport: () => void;
+  onBulkReady: () => void;
   onCancel: (recap: ShippingRecap) => void;
   onDateRangeChange: (range: DateRangeKey) => void;
+  onDelivered: (recap: ShippingRecap) => void;
   onDownload: () => void;
   onOpenDetail: (recap: ShippingRecap) => void;
   onPaymentFilterChange: (filter: PaymentFilter) => void;
   onReady: (recap: ShippingRecap) => void;
   onSearchChange: (value: string) => void;
+  onSelectAll: (ids: string[]) => void;
+  onSelectRow: (id: string, checked: boolean) => void;
+  onSortChange: (sort: RecapSort) => void;
   onStatusChange: (status: RecapStatus | 'all') => void;
   onUndoCancel: (recap: ShippingRecap) => void;
+  onUndoDelivered: (recap: ShippingRecap) => void;
 }) {
-  const statusItems: Array<{ label: string; value: RecapStatus | 'all' }> = [
-    { label: 'Semua', value: 'all' },
-    { label: 'Siap Export', value: 'ready' },
-    { label: 'Perlu Cek', value: 'needs_review' },
-    { label: 'Sudah Export', value: 'exported' },
-    { label: 'Cancel', value: 'cancelled' },
-  ];
+  const counts = {
+    all: rows.length,
+    needs_review: rows.filter((r) => r.status === 'needs_review').length,
+    ready: rows.filter((r) => r.status === 'ready').length,
+    exported: rows.filter((r) => r.status === 'exported').length,
+    delivered: rows.filter((r) => r.status === 'delivered').length,
+    cancelled: rows.filter((r) => r.status === 'cancelled' || r.status === 'cancelled_after_export').length,
+  };
+
+  const sortedRows = useMemo(() => {
+    const sorted = [...rows];
+    if (recapSort === 'oldest') return sorted.sort((a, b) => a.closedAt - b.closedAt);
+    if (recapSort === 'value_asc') return sorted.sort((a, b) => (a.codValue ?? a.total ?? 0) - (b.codValue ?? b.total ?? 0));
+    if (recapSort === 'value_desc') return sorted.sort((a, b) => (b.codValue ?? b.total ?? 0) - (a.codValue ?? a.total ?? 0));
+    if (recapSort === 'status') return sorted.sort((a, b) => a.status.localeCompare(b.status));
+    return sorted.sort((a, b) => b.closedAt - a.closedAt);
+  }, [rows, recapSort]);
+
+  const selectableIds = sortedRows
+    .filter((r) => r.status !== 'cancelled' && r.status !== 'cancelled_after_export')
+    .map((r) => r._id);
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+  const someSelected = selectedIds.size > 0;
+
   const dateItems: Array<{ label: string; value: DateRangeKey }> = [
-    { label: 'Hari Ini', value: 'today' },
-    { label: 'Kemarin', value: 'yesterday' },
-    { label: '7 Hari', value: '7d' },
+    { label: 'Hari ini', value: 'today' },
+    { label: '7 hari', value: '7d' },
+    { label: '30 hari', value: '30d' },
+    { label: 'Bulan ini', value: 'month' },
   ];
+  const statusItems: Array<{ label: string; value: RecapStatus | 'all'; count: number }> = [
+    { label: 'Semua', value: 'all', count: counts.all },
+    { label: '⚠ Perlu Review', value: 'needs_review', count: counts.needs_review },
+    { label: '✓ Siap Export', value: 'ready', count: counts.ready },
+    { label: '📤 Diekspor', value: 'exported', count: counts.exported },
+    { label: '✅ Terkirim', value: 'delivered', count: counts.delivered },
+    { label: '✕ Dibatalkan', value: 'cancelled', count: counts.cancelled },
+  ];
+
+  // Stats for summary cards
+  const totalCodValue = rows
+    .filter((r) => r.status !== 'cancelled' && r.status !== 'cancelled_after_export')
+    .reduce((sum, r) => sum + (r.codValue ?? r.total ?? 0), 0);
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <CardTitle>Rekap Pengiriman</CardTitle>
-            <CardDescription>Closing final untuk bulk upload pengiriman. Default data adalah hari ini.</CardDescription>
-          </div>
-          <Button disabled={readyCount === 0 || actionLoading === 'shipping-export'} onClick={onDownload}>
-            <CheckCircle2 className="size-4" />
-            Download Excel ({readyCount})
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          <div className="relative min-w-[260px] flex-1 sm:max-w-sm">
-            <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-            <input
-              aria-label="Search shipping recap"
-              className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
-              onChange={(event) => onSearchChange(event.target.value)}
-              value={recapSearch}
-            />
-          </div>
-          {statusItems.map((item) => (
-            <Button
-              key={item.value}
-              onClick={() => onStatusChange(item.value)}
-              size="sm"
-              variant={recapStatus === item.value ? 'default' : 'outline'}
-            >
-              {item.label}
-            </Button>
-          ))}
-          <Separator className="h-9" orientation="vertical" />
-          {dateItems.map((item) => (
-            <Button
-              key={item.value}
-              onClick={() => onDateRangeChange(item.value)}
-              size="sm"
-              variant={dateRange === item.value ? 'default' : 'outline'}
-            >
-              {item.label}
-            </Button>
-          ))}
-          <Button
-            onClick={() => onPaymentFilterChange(paymentFilter === 'cod' ? 'all' : 'cod')}
-            size="sm"
-            variant={paymentFilter === 'cod' ? 'default' : 'outline'}
-          >
-            COD
-          </Button>
-          <Button
-            onClick={() => onPaymentFilterChange(paymentFilter === 'transfer' ? 'all' : 'transfer')}
-            size="sm"
-            variant={paymentFilter === 'transfer' ? 'default' : 'outline'}
-          >
-            Transfer
-          </Button>
-        </div>
+    <div className="space-y-4">
+      {/* Stats cards */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+        {[
+          { label: 'Total Periode', value: counts.all, tone: 'text-sky-400' },
+          { label: 'Perlu Review', value: counts.needs_review, tone: 'text-amber-400' },
+          { label: 'Siap Export', value: counts.ready, tone: 'text-blue-400' },
+          { label: 'Sudah Terkirim', value: counts.delivered, tone: 'text-emerald-400' },
+          { label: 'Nilai COD', value: formatRupiah(totalCodValue), tone: 'text-violet-400' },
+        ].map((c) => (
+          <Card key={c.label} size="sm">
+            <CardHeader>
+              <CardDescription className="text-xs">{c.label}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className={cn('text-xl font-bold tabular-nums', c.tone)}>{c.value}</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
-        <div className="overflow-hidden rounded-lg border">
-          <Table>
-            <TableHeader>
+      {/* Filter bar */}
+      <Card>
+        <CardContent className="space-y-3 pt-4">
+          {/* Row 1: Date */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="min-w-[52px] text-xs font-medium text-muted-foreground">Periode:</span>
+            {dateItems.map((item) => (
+              <Button
+                key={item.value}
+                onClick={() => onDateRangeChange(item.value)}
+                size="sm"
+                variant={dateRange === item.value ? 'default' : 'outline'}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </div>
+
+          {/* Row 2: Status chips */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="min-w-[52px] text-xs font-medium text-muted-foreground">Status:</span>
+            {statusItems.map((item) => (
+              <button
+                key={item.value}
+                onClick={() => onStatusChange(item.value)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                  recapStatus === item.value
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground',
+                )}
+                type="button"
+              >
+                {item.label}
+                <span className={cn(
+                  'rounded-full px-1.5 py-0.5 text-[10px] font-semibold',
+                  recapStatus === item.value ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-muted',
+                )}>
+                  {item.count}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {/* Row 3: Search + payment + sort */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="min-w-[52px] text-xs font-medium text-muted-foreground">Cari:</span>
+            <div className="relative min-w-[200px] flex-1">
+              <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
+              <input
+                aria-label="Cari rekap pengiriman"
+                className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+                onChange={(event) => onSearchChange(event.target.value)}
+                placeholder="Nama, kota, produk, Order ID…"
+                value={recapSearch}
+              />
+            </div>
+            <div className="flex items-center gap-1 rounded-md border bg-muted/30 p-0.5">
+              {(['all', 'cod', 'transfer'] as PaymentFilter[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => onPaymentFilterChange(p)}
+                  className={cn(
+                    'rounded px-3 py-1 text-xs font-medium transition-colors',
+                    paymentFilter === p ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                  )}
+                  type="button"
+                >
+                  {p === 'all' ? 'Semua' : p.toUpperCase()}
+                </button>
+              ))}
+            </div>
+            <Select value={recapSort} onValueChange={(v) => onSortChange(v as RecapSort)}>
+              <SelectTrigger className="h-9 w-[160px] text-xs">
+                <SelectValue placeholder="Urutkan" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="newest">Terbaru dulu</SelectItem>
+                <SelectItem value="oldest">Terlama dulu</SelectItem>
+                <SelectItem value="value_desc">Nilai ↓</SelectItem>
+                <SelectItem value="value_asc">Nilai ↑</SelectItem>
+                <SelectItem value="status">Status</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              disabled={readyCount === 0 || actionLoading === 'shipping-export'}
+              onClick={onDownload}
+              size="sm"
+            >
+              <CheckCircle2 className="size-4" />
+              Export Semua ({readyCount})
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Bulk action bar */}
+      {someSelected && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-primary-foreground">
+          <Checkbox
+            checked={allSelected}
+            onCheckedChange={(checked) => {
+              if (checked) onSelectAll(selectableIds);
+              else onSelectAll([]);
+            }}
+            className="border-primary-foreground/50 data-[state=checked]:bg-primary-foreground data-[state=checked]:text-primary"
+          />
+          <span className="text-sm font-medium">{selectedIds.size} pesanan dipilih</span>
+          <div className="flex-1" />
+          <Button
+            disabled={!!actionLoading}
+            onClick={onBulkReady}
+            size="sm"
+            variant="secondary"
+          >
+            ✓ Tandai Siap Export
+          </Button>
+          <Button
+            disabled={!!actionLoading || actionLoading === 'shipping-export'}
+            onClick={onBulkExport}
+            size="sm"
+            variant="secondary"
+          >
+            📤 Export Terpilih
+          </Button>
+          <Button
+            disabled={!!actionLoading}
+            onClick={onBulkDelivered}
+            size="sm"
+            className="bg-emerald-600 text-white hover:bg-emerald-700"
+          >
+            ✅ Tandai Terkirim
+          </Button>
+          <Button
+            disabled={!!actionLoading}
+            onClick={onBulkCancel}
+            size="sm"
+            variant="destructive"
+          >
+            ✕ Batalkan
+          </Button>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="overflow-hidden rounded-lg border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-10">
+                <Checkbox
+                  checked={allSelected}
+                  onCheckedChange={(checked) => {
+                    if (checked) onSelectAll(selectableIds);
+                    else onSelectAll([]);
+                  }}
+                  aria-label="Pilih semua"
+                />
+              </TableHead>
+              <TableHead className="w-8 text-muted-foreground">#</TableHead>
+              <TableHead>Penerima & Alamat</TableHead>
+              <TableHead>CS</TableHead>
+              <TableHead>Produk</TableHead>
+              <TableHead>Metode</TableHead>
+              <TableHead>Nilai</TableHead>
+              <TableHead>Tanggal</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Aksi</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sortedRows.length === 0 ? (
               <TableRow>
-                <TableHead>Closing</TableHead>
-                <TableHead>Penerima</TableHead>
-                <TableHead>Isi paket</TableHead>
-                <TableHead>Bayar</TableHead>
-                <TableHead>Total/COD</TableHead>
-                <TableHead>Kecamatan/Kota</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Aksi</TableHead>
+                <TableCell className="h-24 text-center text-muted-foreground" colSpan={10}>
+                  Belum ada rekap pengiriman pada filter ini.
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.length === 0 ? (
-                <TableRow>
-                  <TableCell className="h-24 text-center text-muted-foreground" colSpan={8}>
-                    Belum ada rekap pengiriman pada filter ini.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row) => (
-                  <TableRow key={row._id}>
+            ) : (
+              sortedRows.map((row, idx) => {
+                const isCancelled = row.status === 'cancelled' || row.status === 'cancelled_after_export';
+                const isSelected = selectedIds.has(row._id);
+                return (
+                  <TableRow
+                    key={row._id}
+                    className={cn(
+                      isSelected && 'bg-primary/5',
+                      isCancelled && 'opacity-50',
+                    )}
+                  >
+                    <TableCell>
+                      <Checkbox
+                        checked={isSelected}
+                        disabled={isCancelled}
+                        onCheckedChange={(checked) => onSelectRow(row._id, Boolean(checked))}
+                        aria-label={`Pilih ${row.recipientName}`}
+                      />
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
+                    <TableCell>
+                      <button
+                        className={cn('text-left font-medium hover:underline', isCancelled && 'line-through text-muted-foreground')}
+                        onClick={() => onOpenDetail(row)}
+                      >
+                        {row.recipientName || row.customerName || 'Unknown'}
+                      </button>
+                      <div className="text-xs text-muted-foreground">{row.recipientDistrict}, {row.recipientCity}</div>
+                      <div className="font-mono text-xs text-muted-foreground/60">{row.recipientPhone || row.customerPhone}</div>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {row.csName || '-'}
+                    </TableCell>
+                    <TableCell className="max-w-[180px]">
+                      <div className="truncate text-sm font-medium">{row.packageContent || '-'}</div>
+                      {row.flags.length > 0 && (
+                        <Badge className="mt-1 w-fit text-[10px]" variant="outline">{row.flags.length} flag</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          row.paymentMethod === 'cod' ? 'border-amber-500/40 text-amber-600' : '',
+                          row.paymentMethod === 'transfer' ? 'border-violet-500/40 text-violet-600' : '',
+                        )}
+                      >
+                        {row.paymentMethod.toUpperCase()}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="tabular-nums font-medium">
+                      {formatRupiah(row.codValue ?? row.total ?? row.nonCodItemPrice)}
+                    </TableCell>
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                       {formatDateTime(row.closedAt)}
                     </TableCell>
                     <TableCell>
-                      <button className="text-left font-medium hover:underline" onClick={() => onOpenDetail(row)}>
-                        {row.recipientName || row.customerName || 'Unknown'}
-                      </button>
-                      <div className="font-mono text-xs text-muted-foreground">{row.recipientPhone || row.customerPhone}</div>
-                    </TableCell>
-                    <TableCell className="max-w-[220px] truncate">{row.packageContent || '-'}</TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{row.paymentMethod.toUpperCase()}</Badge>
-                    </TableCell>
-                    <TableCell>{formatRupiah(row.codValue ?? row.total ?? row.nonCodItemPrice)}</TableCell>
-                    <TableCell className="max-w-[220px] truncate">
-                      {[row.recipientDistrict, row.recipientCity].filter(Boolean).join(', ') || '-'}
+                      <RecapStatusBadge status={row.status} />
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-col gap-1">
-                        <RecapStatusBadge status={row.status} />
-                        {row.flags.length > 0 && (
-                          <Badge className="w-fit" variant="outline">{row.flags.length} flag</Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-2">
+                      <div className="flex items-center justify-end gap-1.5">
                         {row.status === 'needs_review' && (
                           <Button
                             disabled={actionLoading === row._id + ':ready'}
                             onClick={() => onReady(row)}
                             size="sm"
-                            variant="secondary"
+                            variant="outline"
+                            className="text-blue-600 border-blue-200 hover:bg-blue-50"
                           >
-                            Ready
+                            ✓ Siap
                           </Button>
                         )}
-                        {row.status === 'cancelled' || row.status === 'cancelled_after_export' ? (
+                        {row.status === 'exported' && (
+                          <Button
+                            disabled={actionLoading === row._id + ':delivered'}
+                            onClick={() => onDelivered(row)}
+                            size="sm"
+                            variant="outline"
+                            className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                          >
+                            ✅ Terkirim
+                          </Button>
+                        )}
+                        {row.status === 'delivered' && (
+                          <Button
+                            disabled={actionLoading === row._id + ':undo-delivered'}
+                            onClick={() => onUndoDelivered(row)}
+                            size="sm"
+                            variant="ghost"
+                            className="text-xs text-muted-foreground"
+                          >
+                            ↩ Undo
+                          </Button>
+                        )}
+                        {(row.status === 'cancelled' || row.status === 'cancelled_after_export') ? (
                           <Button
                             disabled={actionLoading === row._id + ':undo-cancel'}
                             onClick={() => onUndoCancel(row)}
                             size="sm"
-                            variant="outline"
+                            variant="ghost"
+                            className="text-xs text-muted-foreground"
                           >
-                            Undo
+                            ↩ Pulihkan
                           </Button>
-                        ) : (
+                        ) : row.status !== 'delivered' && (
                           <Button
                             disabled={actionLoading === row._id + ':cancel'}
                             onClick={() => onCancel(row)}
                             size="sm"
-                            variant="outline"
+                            variant="ghost"
+                            className="text-muted-foreground hover:text-destructive"
                           >
-                            Cancel
+                            ✕
                           </Button>
                         )}
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      </CardContent>
-    </Card>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
   );
 }
 
@@ -933,72 +1273,177 @@ function PerformancePanel({
   dateRange: DateRangeKey;
   onDateRangeChange: (range: DateRangeKey) => void;
 }) {
-  const cards = [
-    { label: 'Total Leads', value: data?.totalLeads ?? 0 },
-    { label: 'Total Closing', value: data?.totalClosing ?? 0 },
-    { label: 'CR', value: `${data?.overallCr ?? 0}%` },
-    { label: 'Total COD', value: data?.totalCod ?? 0 },
-    { label: 'Total Transfer', value: data?.totalTransfer ?? 0 },
-    { label: 'Omzet Closing', value: formatRupiah(data?.totalRevenue) },
-    { label: 'Total Diskon', value: formatRupiah(data?.totalDiscount) },
-    { label: 'Cancel', value: data?.cancelled ?? 0 },
-  ];
+  const [perfTab, setPerfTab] = useState<'summary' | 'cs' | 'product'>('summary');
+
   const dateItems: Array<{ label: string; value: DateRangeKey }> = [
-    { label: 'Hari Ini', value: 'today' },
-    { label: 'Kemarin', value: 'yesterday' },
-    { label: '7 Hari', value: '7d' },
+    { label: 'Hari ini', value: 'today' },
+    { label: '7 hari', value: '7d' },
+    { label: '30 hari', value: '30d' },
+    { label: 'Bulan ini', value: 'month' },
   ];
+  const tabs = [
+    { key: 'summary' as const, label: 'Ringkasan' },
+    { key: 'cs' as const, label: 'Per CS' },
+    { key: 'product' as const, label: 'Per Produk' },
+  ];
+
+  const kpiCards = [
+    { label: 'Total Percakapan', value: data?.totalLeads ?? 0, tone: 'text-sky-500' },
+    { label: 'Total Closing', value: data?.totalClosing ?? 0, tone: 'text-emerald-500' },
+    { label: 'Conversion Rate', value: `${data?.overallCr ?? 0}%`, tone: 'text-violet-500' },
+    { label: 'COD', value: data?.totalCod ?? 0, tone: 'text-amber-500' },
+    { label: 'Transfer', value: data?.totalTransfer ?? 0, tone: 'text-blue-500' },
+    { label: 'Omzet', value: formatRupiah(data?.totalRevenue), tone: 'text-emerald-600' },
+    { label: 'Terkirim', value: data?.delivered ?? 0, tone: 'text-teal-500' },
+    { label: 'Dibatalkan', value: data?.cancelled ?? 0, tone: 'text-destructive' },
+  ];
+
+  const sortedCS = [...(data?.cs ?? [])].sort((a, b) => b.closing - a.closing);
+  const maxCSClosing = sortedCS[0]?.closing ?? 1;
+  const sortedProducts = [...(data?.products ?? [])].sort((a, b) => b.closing - a.closing);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap gap-2">
-        {dateItems.map((item) => (
-          <Button
-            key={item.value}
-            onClick={() => onDateRangeChange(item.value)}
-            size="sm"
-            variant={dateRange === item.value ? 'default' : 'outline'}
-          >
-            {item.label}
-          </Button>
-        ))}
+    <div className="space-y-4">
+      {/* Topbar: tabs + date */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex gap-1 rounded-lg border bg-muted/30 p-1">
+          {tabs.map((tab) => (
+            <button
+              key={tab.key}
+              onClick={() => setPerfTab(tab.key)}
+              className={cn(
+                'rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+                perfTab === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+              )}
+              type="button"
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {dateItems.map((item) => (
+            <Button
+              key={item.value}
+              onClick={() => onDateRangeChange(item.value)}
+              size="sm"
+              variant={dateRange === item.value ? 'default' : 'outline'}
+            >
+              {item.label}
+            </Button>
+          ))}
+        </div>
       </div>
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {cards.map((card) => (
+
+      {/* KPI row */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
+        {kpiCards.map((card) => (
           <Card key={card.label} size="sm">
             <CardHeader>
-              <CardDescription>{card.label}</CardDescription>
-              <CardTitle>{card.value}</CardTitle>
+              <CardDescription className="text-[11px]">{card.label}</CardDescription>
             </CardHeader>
+            <CardContent>
+              <div className={cn('text-lg font-bold tabular-nums', card.tone)}>{card.value}</div>
+            </CardContent>
           </Card>
         ))}
-      </section>
+      </div>
 
-      <PerformanceTable
-        columns={['Produk', 'Leads', 'Closing', 'CR', 'Omzet', 'Diskon']}
-        rows={(data?.products ?? []).map((row) => [
-          row.product,
-          row.leads,
-          row.closing,
-          `${row.cr}%`,
-          formatRupiah(row.revenue),
-          formatRupiah(row.discount),
-        ])}
-        title="Performance Produk"
-      />
+      {/* Tab content */}
+      {perfTab === 'summary' && (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <PerformanceTable
+            columns={['Produk', 'Leads', 'Closing', 'CR', 'Omzet']}
+            rows={sortedProducts.map((row) => [
+              row.product,
+              row.leads,
+              row.closing,
+              `${row.cr}%`,
+              formatRupiah(row.revenue),
+            ])}
+            title="Produk Terlaris"
+          />
+          <PerformanceTable
+            columns={['CS', 'Leads', 'Closing', 'CR', 'Omzet']}
+            rows={sortedCS.map((row) => [
+              row.csName,
+              row.leads,
+              row.closing,
+              `${row.cr}%`,
+              formatRupiah(row.revenue),
+            ])}
+            title="Ranking CS"
+          />
+        </div>
+      )}
 
-      <PerformanceTable
-        columns={['CS', 'Leads', 'Closing', 'CR', 'Omzet', 'Diskon']}
-        rows={(data?.cs ?? []).map((row) => [
-          row.csName,
-          row.leads,
-          row.closing,
-          `${row.cr}%`,
-          formatRupiah(row.revenue),
-          formatRupiah(row.discount),
-        ])}
-        title="Performance CS"
-      />
+      {perfTab === 'cs' && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Performa per CS</CardTitle>
+            <CardDescription>Diurutkan berdasarkan closing</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-hidden rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-8">#</TableHead>
+                    <TableHead>CS</TableHead>
+                    <TableHead>Percakapan</TableHead>
+                    <TableHead>Closing</TableHead>
+                    <TableHead>Conversion Rate</TableHead>
+                    <TableHead>Omzet</TableHead>
+                    <TableHead>Diskon</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sortedCS.length === 0 ? (
+                    <TableRow><TableCell colSpan={7} className="h-24 text-center text-muted-foreground">Belum ada data.</TableCell></TableRow>
+                  ) : sortedCS.map((row, idx) => (
+                    <TableRow key={row.csName}>
+                      <TableCell className="text-sm font-bold text-muted-foreground">
+                        {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : idx + 1}
+                      </TableCell>
+                      <TableCell className="font-medium">{row.csName}</TableCell>
+                      <TableCell>{row.leads}</TableCell>
+                      <TableCell className="font-bold text-emerald-600">{row.closing}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-emerald-500"
+                              style={{ width: `${row.cr}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-semibold text-emerald-600">{row.cr}%</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="font-medium">{formatRupiah(row.revenue)}</TableCell>
+                      <TableCell className="text-muted-foreground">{formatRupiah(row.discount)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {perfTab === 'product' && (
+        <PerformanceTable
+          columns={['Produk', 'Leads', 'Closing', 'CR', 'Omzet', 'Diskon']}
+          rows={sortedProducts.map((row) => [
+            row.product,
+            row.leads,
+            row.closing,
+            `${row.cr}%`,
+            formatRupiah(row.revenue),
+            formatRupiah(row.discount),
+          ])}
+          title="Performance per Produk"
+        />
+      )}
     </div>
   );
 }
@@ -1661,23 +2106,27 @@ function OutcomeBadge({ outcome }: { outcome: 'ai_won' | 'manual_won' | 'cancell
 }
 
 function RecapStatusBadge({ status }: { status: RecapStatus }) {
-  if (status === 'ready') {
-    return <Badge className="border-emerald-500/30 text-emerald-400" variant="outline">Siap Export</Badge>;
+  if (status === 'needs_review') {
+    return <Badge className="border-amber-500/40 bg-amber-50 text-amber-700" variant="outline">⚠ Perlu Review</Badge>;
   }
 
-  if (status === 'needs_review') {
-    return <Badge variant="destructive">Perlu Cek</Badge>;
+  if (status === 'ready') {
+    return <Badge className="border-blue-500/40 bg-blue-50 text-blue-700" variant="outline">✓ Siap Export</Badge>;
   }
 
   if (status === 'exported') {
-    return <Badge variant="secondary">Sudah Export</Badge>;
+    return <Badge className="border-emerald-500/40 bg-emerald-50 text-emerald-700" variant="outline">📤 Diekspor</Badge>;
+  }
+
+  if (status === 'delivered') {
+    return <Badge className="border-teal-500/40 bg-teal-50 text-teal-700 font-semibold" variant="outline">✅ Terkirim</Badge>;
   }
 
   if (status === 'cancelled_after_export') {
-    return <Badge className="border-destructive/30 text-destructive" variant="outline">Cancel After Export</Badge>;
+    return <Badge className="border-destructive/30 text-destructive line-through" variant="outline">Dibatalkan</Badge>;
   }
 
-  return <Badge className="border-destructive/30 text-destructive" variant="outline">Cancel</Badge>;
+  return <Badge className="border-destructive/30 text-destructive line-through" variant="outline">Dibatalkan</Badge>;
 }
 
 function ReadinessRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
