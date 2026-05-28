@@ -178,6 +178,66 @@ Large data handling:
 - Default to today so old orders do not clutter the active workflow.
 - Export only the filtered/selected rows.
 
+## Performance Dashboard Extension
+
+After `shippingRecaps` exists, add a `Performance` view that summarizes lead, closing, conversion rate, product performance, and discount usage from clean Convex data.
+
+This should use these source-of-truth rules:
+
+- `Total Leads`: unique Berdu orders from Convex `orders`.
+- `Total Closing`: unique final recaps from `shippingRecaps`, not raw chat messages.
+- Overall CR: `Total Closing / Total Leads * 100`.
+- Product leads: unique leads grouped by product name.
+- Product closing: unique `ready`, `exported`, or reviewed final recaps grouped by product/package.
+- Product CR: product closing divided by product leads.
+- CS discount: sum of explicit `discount` on final recaps, grouped by CS.
+
+Lead identity priority:
+
+1. `orderId`
+2. `customerPhone + productName + Jakarta order date`
+
+Closing identity priority:
+
+1. `orderIdBerdu`
+2. `conversationId`
+3. `customerPhone + packageContent + Jakarta closing date`
+
+Performance filters:
+
+- `Hari ini`
+- `Kemarin`
+- `7 Hari`
+- `Bulan ini`
+- `Custom date`
+- Product
+- CS
+- Payment method: `Semua`, `COD`, `Transfer`
+
+Performance cards:
+
+- Total leads
+- Total closing
+- Overall CR
+- Total COD
+- Total transfer
+- Closing revenue
+- Total discount
+- Cancelled orders
+
+Performance tables:
+
+- Product table: product, leads, closing, CR, revenue, discount.
+- CS table: CS, leads, closing, CR, revenue, discount.
+
+Discount rules:
+
+- Prefer explicit `discount` from `shippingRecaps`.
+- If discount is not explicit but the final total is lower than the original order total, calculate `inferredDiscount` and flag the row with `INFERRED_DISCOUNT`.
+- Do not mix inferred discount into final CS discount totals unless the admin enables an `Include inferred` toggle.
+
+Performance should be implemented after the recap/export workflow because accurate closing and discount analytics depend on the latest final recap snapshot.
+
 ## Status Workflow
 
 Statuses:
@@ -275,4 +335,3 @@ Practical expectation: 1-5 seconds under normal webhook conditions.
 4. Add dashboard `Rekap Pengiriman` table with filters/search/sort/detail drawer.
 5. Add Excel export endpoint/action.
 6. Deploy and verify with real examples.
-
