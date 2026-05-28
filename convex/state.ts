@@ -122,6 +122,47 @@ async function getLatestConversationByPhone(ctx: { db: any }, phone: string) {
     .first();
 }
 
+export const repairDailyStats = mutation({
+  args: {
+    date: v.string(),
+    orders: v.optional(v.number()),
+    closings: v.optional(v.number()),
+    aiClosings: v.optional(v.number()),
+    manualClosings: v.optional(v.number()),
+    cancelled: v.optional(v.number()),
+    handovers: v.optional(v.number()),
+    closedToday: v.optional(v.number()),
+    clearOrderKeys: v.optional(v.boolean()),
+    clearClosingKeys: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const stats = await ctx.db
+      .query("dailyStats")
+      .withIndex("by_date", (q) => q.eq("date", args.date))
+      .unique();
+
+    if (!stats) return { success: false, error: "stats not found", date: args.date };
+
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    if (args.orders !== undefined) patch.orders = args.orders;
+    if (args.closings !== undefined) patch.closings = args.closings;
+    if (args.aiClosings !== undefined) patch.aiClosings = args.aiClosings;
+    if (args.manualClosings !== undefined) patch.manualClosings = args.manualClosings;
+    if (args.cancelled !== undefined) patch.cancelled = args.cancelled;
+    if (args.handovers !== undefined) patch.handovers = args.handovers;
+    if (args.closedToday !== undefined) patch.closedToday = args.closedToday;
+    if (args.clearOrderKeys) patch.orderKeys = [];
+    if (args.clearClosingKeys) {
+      patch.closingKeys = [];
+      patch.aiClosingKeys = [];
+      patch.manualClosingKeys = [];
+    }
+
+    await ctx.db.patch(stats._id, patch);
+    return { success: true, date: args.date, patch };
+  },
+});
+
 async function getConversationForArgs(ctx: { db: any }, args: { orderId?: string; phone?: string }) {
   if (args.orderId) {
     const byOrder = await ctx.db

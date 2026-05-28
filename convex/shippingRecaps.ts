@@ -48,6 +48,7 @@ function parseRupiah(value: string | undefined): number | undefined {
 function normalizePhone(value: string | undefined): string {
   const digits = String(value ?? "").replace(/[^\d]/g, "");
   if (digits.startsWith("0")) return `62${digits.slice(1)}`;
+  if (digits.startsWith("8")) return `62${digits}`;
   return digits;
 }
 
@@ -514,9 +515,11 @@ export const list = query({
           .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
           .order("desc")
           .take(limit * 4);
+    const hasBerduVerified = rows.some((row) => row.flags.includes("BERDU_VERIFIED"));
 
     const search = String(args.search ?? "").trim().toLowerCase();
     return rows
+      .filter((row) => !hasBerduVerified || row.flags.includes("BERDU_VERIFIED"))
       .filter((row) => !args.paymentMethod || row.paymentMethod === args.paymentMethod)
       .filter((row) => {
         if (!search) return true;
