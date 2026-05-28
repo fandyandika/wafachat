@@ -499,6 +499,7 @@ export const list = query({
     status: v.optional(statusValidator),
     paymentMethod: v.optional(paymentMethodValidator),
     search: v.optional(v.string()),
+    csName: v.optional(v.string()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -521,6 +522,7 @@ export const list = query({
     const search = String(args.search ?? "").trim().toLowerCase();
     return rows
       .filter((row) => !hasBerduVerified || row.flags.includes("BERDU_VERIFIED"))
+      .filter((row) => !args.csName || row.csName === args.csName)
       .filter((row) => !args.paymentMethod || row.paymentMethod === args.paymentMethod)
       .filter((row) => {
         if (!search) return true;
@@ -879,13 +881,12 @@ export const getPerformance = query({
     startAt: v.number(),
     endAt: v.number(),
     includeInferredDiscount: v.optional(v.boolean()),
+    csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const orders = await ctx.db
       .query("orders")
-      .withIndex("by_aiEligible_createdAt", (q) =>
-        q.eq("aiEligible", true).gte("createdAt", args.startAt).lte("createdAt", args.endAt),
-      )
+      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
 
     const recaps = await ctx.db
@@ -894,14 +895,19 @@ export const getPerformance = query({
       .order("desc")
       .collect();
 
-    const realOrders = orders.filter((order) => !isInternalTestPhone(order.customerPhone));
+    const realOrders = orders.filter(
+      (order) => !isInternalTestPhone(order.customerPhone) && (!args.csName || order.assignedCsName === args.csName),
+    );
     const validCandidateRows = recaps.filter(
       (row) =>
         row.status !== "cancelled" &&
         row.status !== "cancelled_after_export" &&
+        (!args.csName || row.csName === args.csName) &&
         !isInternalTestPhone(row.customerPhone),
     );
-    const totalDelivered = recaps.filter((row) => row.status === "delivered" && !isInternalTestPhone(row.customerPhone)).length;
+    const totalDelivered = recaps.filter(
+      (row) => row.status === "delivered" && (!args.csName || row.csName === args.csName) && !isInternalTestPhone(row.customerPhone),
+    ).length;
     const berduVerifiedRows = validCandidateRows.filter((row) => row.flags.includes("BERDU_VERIFIED"));
     const validClosingRows = berduVerifiedRows.length > 0 ? berduVerifiedRows : validCandidateRows;
     const latestOrderByPhone = new Map<string, Doc<"orders">>();
@@ -974,6 +980,7 @@ export const getPerformance = query({
       cancelled: recaps.filter(
         (row) =>
           (row.status === "cancelled" || row.status === "cancelled_after_export") &&
+          (!args.csName || row.csName === args.csName) &&
           !isInternalTestPhone(row.customerPhone),
       ).length,
       products: Array.from(productMap.values()).map((row) => ({

@@ -4,11 +4,12 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   ConversationStatus,
   getJakartaDate,
-  isAisyah,
   makeOrderKey,
   makeTransitionKey,
+  normalizePhone,
   unique,
 } from "./lib";
+import { getCsFeatureConfig } from "./csConfigs";
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.literal("closed"));
 
@@ -115,9 +116,10 @@ async function patchClosingStatsWithKey(
 }
 
 async function getLatestConversationByPhone(ctx: { db: any }, phone: string) {
+  const normalizedPhone = normalizePhone(phone);
   return await ctx.db
     .query("conversations")
-    .withIndex("by_customerPhone_updatedAt", (q: any) => q.eq("customerPhone", phone))
+    .withIndex("by_customerPhone_updatedAt", (q: any) => q.eq("customerPhone", normalizedPhone))
     .order("desc")
     .first();
 }
@@ -194,13 +196,16 @@ export const upsertOrderFromN8n = mutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const orderId = args.order_id || makeOrderKey({ phone: args.phone, productName: args.productName });
+    const phone = normalizePhone(args.phone);
+    const orderId = args.order_id || makeOrderKey({ phone, productName: args.productName });
     const customerName = args.customerName || "";
-    const aiEligible = isAisyah(args.csName);
+    const csConfig = await getCsFeatureConfig(ctx, args.csName);
+    const reportable = csConfig.isActive && csConfig.reportingEnabled;
+    const aiEligible = reportable && csConfig.aiAssistantEnabled;
 
     const existingCustomer = await ctx.db
       .query("customers")
-      .withIndex("by_phone", (q) => q.eq("phone", args.phone))
+      .withIndex("by_phone", (q) => q.eq("phone", phone))
       .unique();
 
     if (existingCustomer) {
@@ -210,7 +215,7 @@ export const upsertOrderFromN8n = mutation({
       });
     } else {
       await ctx.db.insert("customers", {
-        phone: args.phone,
+        phone,
         name: customerName,
         firstSeenAt: now,
         lastSeenAt: now,
@@ -219,7 +224,7 @@ export const upsertOrderFromN8n = mutation({
 
     const orderPayload = {
       orderId,
-      customerPhone: args.phone,
+      customerPhone: phone,
       customerName,
       assignedCsName: args.csName,
       assignedCsNumber: args.csNumber,
@@ -248,7 +253,7 @@ export const upsertOrderFromN8n = mutation({
     }
 
     let conversationId: Id<"conversations"> | null = null;
-    if (aiEligible) {
+    if (reportable) {
       const existingConversation = await ctx.db
         .query("conversations")
         .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
@@ -260,17 +265,17 @@ export const upsertOrderFromN8n = mutation({
           customerName,
           assignedCsName: args.csName,
           status: existingConversation.status === "closed" ? "active" : existingConversation.status,
-          aiEnabled: true,
+          aiEnabled: aiEligible,
           updatedAt: now,
         });
       } else {
         conversationId = await ctx.db.insert("conversations", {
           orderId,
-          customerPhone: args.phone,
+          customerPhone: phone,
           customerName,
           assignedCsName: args.csName,
           status: "active",
-          aiEnabled: true,
+          aiEnabled: aiEligible,
           note: "",
           createdAt: now,
           updatedAt: now,
@@ -280,21 +285,26 @@ export const upsertOrderFromN8n = mutation({
       await patchStatsWithKey(ctx, {
         field: "orders",
         keyField: "orderKeys",
-        key: makeOrderKey({ orderId, phone: args.phone, productName: args.productName }),
+        key: makeOrderKey({ orderId, phone, productName: args.productName }),
       });
     }
 
     await ctx.db.insert("events", {
       conversationId: conversationId ?? undefined,
       orderId,
-      customerPhone: args.phone,
+      customerPhone: phone,
       type: "order_upserted",
       actor: "n8n",
-      metadata: { aiEligible, csName: args.csName },
+      metadata: {
+        aiEligible,
+        reportable,
+        orderAutomationEnabled: csConfig.orderAutomationEnabled,
+        csName: args.csName,
+      },
       createdAt: now,
     });
 
-    return { success: true, phone: args.phone, orderId, aiEligible, conversationId };
+    return { success: true, phone, orderId, aiEligible, reportable, conversationId };
   },
 });
 
@@ -769,7 +779,7 @@ export const recordStatEventFromN8n = mutation({
 });
 
 export const listConversations = query({
-  args: { includeClosed: v.optional(v.boolean()) },
+  args: { includeClosed: v.optional(v.boolean()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const statuses: ConversationStatus[] = args.includeClosed
       ? ["handover", "active", "closed"]
@@ -787,7 +797,7 @@ export const listConversations = query({
     }
 
     const conversations = rows
-      .filter((conversation) => isAisyah(conversation.assignedCsName))
+      .filter((conversation) => !args.csName || conversation.assignedCsName === args.csName)
       .filter((conversation) => conversation.status !== "closed" || getJakartaDate(conversation.updatedAt) === today);
     const stats = await ctx.db
       .query("dailyStats")
@@ -897,15 +907,18 @@ export const health = query({
 export const getConversationContextForN8n = query({
   args: { phone: v.string(), messageLimit: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const conversation = await getLatestConversationByPhone(ctx, args.phone);
+    const phone = normalizePhone(args.phone);
+    const conversation = await getLatestConversationByPhone(ctx, phone);
     const globalEnabled = await getGlobalEnabled(ctx);
 
     if (!conversation) {
       return {
         success: true,
-        phone: args.phone,
+        phone,
         status: "active",
         globalEnabled,
+        aiEnabled: false,
+        canAiReply: false,
         csName: "",
         productName: "",
         order_id: "",
@@ -918,6 +931,7 @@ export const getConversationContextForN8n = query({
       .query("orders")
       .withIndex("by_orderId", (q) => q.eq("orderId", conversation.orderId))
       .unique();
+    const csConfig = await getCsFeatureConfig(ctx, conversation.assignedCsName);
 
     const limit = Math.min(args.messageLimit ?? 50, 50);
     const messages = await ctx.db
@@ -931,6 +945,10 @@ export const getConversationContextForN8n = query({
       phone: conversation.customerPhone,
       status: conversation.status,
       globalEnabled,
+      aiEnabled: conversation.aiEnabled,
+      canAiReply: globalEnabled && conversation.aiEnabled && conversation.status === "active",
+      reportingEnabled: csConfig.isActive && csConfig.reportingEnabled,
+      orderAutomationEnabled: csConfig.isActive && csConfig.orderAutomationEnabled,
       note: conversation.note,
       updated_at: new Date(conversation.updatedAt).toISOString(),
       csName: conversation.assignedCsName,

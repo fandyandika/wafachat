@@ -10,6 +10,13 @@ export function isAisyah(csName: string): boolean {
   return normalizeCsName(csName).includes("aisyah");
 }
 
+export function normalizePhone(value: string | undefined): string {
+  const digits = String(value ?? "").replace(/[^\d]/g, "");
+  if (digits.startsWith("0")) return `62${digits.slice(1)}`;
+  if (digits.startsWith("8")) return `62${digits}`;
+  return digits;
+}
+
 export function getJakartaDate(timestamp = Date.now()): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Jakarta",

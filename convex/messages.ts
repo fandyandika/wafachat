@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { normalizePhone } from "./lib";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
   if (args.orderId) {
@@ -10,9 +11,10 @@ async function getConversationForMessage(ctx: { db: any }, args: { orderId?: str
     if (byOrder) return byOrder;
   }
 
+  const phone = normalizePhone(args.customerPhone);
   return await ctx.db
     .query("conversations")
-    .withIndex("by_customerPhone_updatedAt", (q: any) => q.eq("customerPhone", args.customerPhone))
+    .withIndex("by_customerPhone_updatedAt", (q: any) => q.eq("customerPhone", phone))
     .order("desc")
     .first();
 }
@@ -85,7 +87,7 @@ export const appendMessageFromN8n = mutation({
   },
   handler: async (ctx, args) => {
     const conversation = await getConversationForMessage(ctx, {
-      customerPhone: args.phone,
+      customerPhone: normalizePhone(args.phone),
       orderId: args.order_id,
     });
 

@@ -30,6 +30,8 @@ export default defineSchema({
   })
     .index("by_orderId", ["orderId"])
     .index("by_customerPhone", ["customerPhone"])
+    .index("by_createdAt", ["createdAt"])
+    .index("by_assignedCsName_createdAt", ["assignedCsName", "createdAt"])
     .index("by_aiEligible_createdAt", ["aiEligible", "createdAt"]),
 
   conversations: defineTable({
@@ -48,6 +50,22 @@ export default defineSchema({
     .index("by_status_updatedAt", ["status", "updatedAt"])
     .index("by_customerPhone_updatedAt", ["customerPhone", "updatedAt"])
     .index("by_assignedCsName_status", ["assignedCsName", "status"]),
+
+  csConfigs: defineTable({
+    normalizedName: v.string(),
+    csName: v.string(),
+    csPhone: v.optional(v.string()),
+    provider: v.optional(v.string()),
+    providerNumberId: v.optional(v.string()),
+    orderAutomationEnabled: v.boolean(),
+    aiAssistantEnabled: v.boolean(),
+    reportingEnabled: v.boolean(),
+    isActive: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_normalizedName", ["normalizedName"])
+    .index("by_active", ["isActive"]),
 
   messages: defineTable({
     conversationId: v.id("conversations"),
@@ -167,6 +185,7 @@ export default defineSchema({
     .index("by_customerPhone", ["customerPhone"])
     .index("by_closedAt", ["closedAt"])
     .index("by_status_closedAt", ["status", "closedAt"])
+    .index("by_csName_closedAt", ["csName", "closedAt"])
     .index("by_paymentMethod_closedAt", ["paymentMethod", "closedAt"]),
 
   settings: defineTable({

@@ -170,6 +170,14 @@ interface PerformanceData {
   cs: Array<{ csName: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
 }
 
+interface CsConfig {
+  csName: string;
+  orderAutomationEnabled: boolean;
+  aiAssistantEnabled: boolean;
+  reportingEnabled: boolean;
+  isActive: boolean;
+}
+
 const navItems = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { key: 'shipping', label: 'Rekap Pengiriman', icon: CheckCircle2 },
@@ -192,6 +200,7 @@ export default function PanelPage() {
   const [recapSort, setRecapSort] = useState<RecapSort>('newest');
   const [selectedRecapIds, setSelectedRecapIds] = useState<Set<string>>(new Set());
   const [bulkCancelOpen, setBulkCancelOpen] = useState(false);
+  const [selectedCsName, setSelectedCsName] = useState('all');
 
   const selectedDateRange = useMemo(() => {
     const now = new Date();
@@ -220,21 +229,25 @@ export default function PanelPage() {
     return { startAt: start.getTime(), endAt: end.getTime() };
   }, [dateRange]);
 
-  const conversationsData = useQuery(api.state.listConversations, { includeClosed: true });
+  const csFilter = selectedCsName === 'all' ? undefined : selectedCsName;
+  const conversationsData = useQuery(api.state.listConversations, { includeClosed: true, csName: csFilter });
   const statsData = useQuery(api.state.getDailyStats, {});
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
+  const csConfigsData = useQuery(api.csConfigs.list, {});
   const shippingRecapsData = useQuery(api.shippingRecaps.list, {
     startAt: selectedDateRange.startAt,
     endAt: selectedDateRange.endAt,
     status: recapStatus === 'all' ? undefined : recapStatus,
     paymentMethod: paymentFilter === 'all' ? undefined : paymentFilter,
     search: recapSearch || undefined,
+    csName: csFilter,
     limit: 75,
   });
   const performanceData = useQuery(api.shippingRecaps.getPerformance, {
     startAt: selectedDateRange.startAt,
     endAt: selectedDateRange.endAt,
     includeInferredDiscount: false,
+    csName: csFilter,
   });
   const setConversationStatus = useMutation(api.state.setConversationStatusFromN8n);
   const markNotClosing = useMutation(api.state.markConversationNotClosing);
@@ -259,6 +272,7 @@ export default function PanelPage() {
   }, [conversationsData, globalEnabledData, statsData]);
 
   const conversations = (conversationsData ?? []) as Conversation[];
+  const csConfigs = (csConfigsData ?? []) as CsConfig[];
   const shippingRecaps = (shippingRecapsData ?? []) as ShippingRecap[];
   const performance = performanceData as PerformanceData | undefined;
   const stats: Stats = {
@@ -273,6 +287,10 @@ export default function PanelPage() {
   };
   const globalEnabled = globalEnabledData !== false;
   const loading = conversationsData === undefined || statsData === undefined || globalEnabledData === undefined;
+
+  useEffect(() => {
+    setSelectedRecapIds(new Set());
+  }, [selectedCsName]);
 
   const toggleGlobal = async () => {
     const next = !globalEnabled;
@@ -586,6 +604,19 @@ export default function PanelPage() {
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
+                <Select value={selectedCsName} onValueChange={(value) => setSelectedCsName(value ?? 'all')}>
+                  <SelectTrigger className="h-9 w-[180px]">
+                    <SelectValue placeholder="Semua CS" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua CS</SelectItem>
+                    {csConfigs.map((config) => (
+                      <SelectItem key={config.csName} value={config.csName}>
+                        {config.csName.replace(/^CS\s+/i, '')}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <ThemeToggle />
                 <div className="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs text-muted-foreground">
                   <RefreshCw className="size-3.5" />
