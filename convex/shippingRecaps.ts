@@ -727,6 +727,49 @@ export const markCancelledBulk = mutation({
   },
 });
 
+export const markLatestCancelledByPhone = mutation({
+  args: {
+    customerPhone: v.string(),
+    orderIdBerdu: v.optional(v.string()),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const phone = normalizePhone(args.customerPhone);
+    const rows = args.orderIdBerdu
+      ? await ctx.db
+          .query("shippingRecaps")
+          .withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", normalizeOrderId(args.orderIdBerdu)))
+          .take(1)
+      : await ctx.db
+          .query("shippingRecaps")
+          .withIndex("by_customerPhone", (q) => q.eq("customerPhone", phone))
+          .order("desc")
+          .take(1);
+    const row = rows[0];
+    if (!row) return { success: false, error: "recap not found", phone };
+
+    const now = Date.now();
+    const status: RecapStatus = row.status === "exported" || row.status === "delivered" ? "cancelled_after_export" : "cancelled";
+    await ctx.db.patch(row._id, {
+      status,
+      cancelReason: args.reason || "-Cancel",
+      cancelledAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.insert("events", {
+      conversationId: row.conversationId,
+      orderId: row.orderIdBerdu,
+      customerPhone: row.customerPhone,
+      type: "shipping_recap_cancelled",
+      actor: "cs",
+      metadata: { recapId: row._id, reason: args.reason || "-Cancel", status, source: "chat_command" },
+      createdAt: now,
+    });
+
+    return { success: true, recapId: row._id, status, phone };
+  },
+});
+
 export const importBerduVerifiedRows = mutation({
   args: {
     rows: v.array(berduVerifiedRowValidator),

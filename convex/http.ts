@@ -108,6 +108,8 @@ http.route({
       const result = await ctx.runMutation(api.messages.appendMessageFromN8n, {
         phone: String(body.phone || ""),
         order_id: body.order_id ? String(body.order_id) : undefined,
+        customerName: body.customerName ? String(body.customerName) : undefined,
+        csName: body.csName ? String(body.csName) : undefined,
         role: body.role,
         direction: body.direction,
         content: String(body.content || ""),
@@ -138,6 +140,15 @@ http.route({
         rows: Array.isArray(body.rows) ? body.rows : [],
       });
       return jsonResponse(result);
+    }
+
+    if (action === "cancel_shipping_recap") {
+      const result = await ctx.runMutation(api.shippingRecaps.markLatestCancelledByPhone, {
+        customerPhone: String(body.customerPhone || body.phone || ""),
+        orderIdBerdu: body.orderIdBerdu || body.order_id ? String(body.orderIdBerdu || body.order_id) : undefined,
+        reason: body.reason ? String(body.reason) : undefined,
+      });
+      return jsonResponse({ ...result, _action: "cancel_shipping_recap" });
     }
 
 

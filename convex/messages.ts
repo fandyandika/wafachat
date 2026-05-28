@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { normalizePhone } from "./lib";
+import { getCsFeatureConfig } from "./csConfigs";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
   if (args.orderId) {
@@ -78,6 +79,8 @@ export const appendMessageFromN8n = mutation({
   args: {
     phone: v.string(),
     order_id: v.optional(v.string()),
+    customerName: v.optional(v.string()),
+    csName: v.optional(v.string()),
     role: v.union(v.literal("customer"), v.literal("ai"), v.literal("cs"), v.literal("system")),
     direction: v.union(v.literal("inbound"), v.literal("outbound")),
     content: v.string(),
@@ -86,19 +89,44 @@ export const appendMessageFromN8n = mutation({
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const conversation = await getConversationForMessage(ctx, {
-      customerPhone: normalizePhone(args.phone),
+    const phone = normalizePhone(args.phone);
+    let conversation = await getConversationForMessage(ctx, {
+      customerPhone: phone,
       orderId: args.order_id,
     });
 
     if (!conversation) {
-      return {
-        success: false,
-        error: "conversation not found",
-        phone: args.phone,
-        order_id: args.order_id ?? "",
-        _action: "append_message",
-      };
+      const now = Date.now();
+      const csName = args.csName || "Unknown";
+      const csConfig = await getCsFeatureConfig(ctx, csName);
+      const orderId = args.order_id || `manual:${phone}`;
+      const conversationId = await ctx.db.insert("conversations", {
+        orderId,
+        customerPhone: phone,
+        customerName: args.customerName || "",
+        assignedCsName: csName,
+        status: "handover",
+        aiEnabled: false,
+        note: "created from webhook message",
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      conversation = await ctx.db.get(conversationId);
+
+      await ctx.db.insert("events", {
+        conversationId,
+        orderId,
+        customerPhone: phone,
+        type: "order_upserted",
+        actor: "n8n",
+        metadata: {
+          source: "message_append_fallback",
+          reportingEnabled: csConfig.reportingEnabled,
+          aiEnabled: false,
+        },
+        createdAt: now,
+      });
     }
 
     const createdAt = args.createdAt ?? Date.now();
