@@ -75,6 +75,31 @@ export const listMessages = query({
   },
 });
 
+export const deleteMessage = mutation({
+  args: { messageId: v.id("messages") },
+  handler: async (ctx, args) => {
+    const message = await ctx.db.get(args.messageId);
+    if (!message) return { success: false, error: "message not found" };
+
+    await ctx.db.delete(args.messageId);
+    await ctx.db.insert("events", {
+      conversationId: message.conversationId,
+      orderId: message.orderId,
+      customerPhone: message.customerPhone,
+      type: "message_inbound",
+      actor: "n8n",
+      metadata: {
+        deletedMessageId: args.messageId,
+        deletedRole: message.role,
+        deletedDirection: message.direction,
+      },
+      createdAt: Date.now(),
+    });
+
+    return { success: true, messageId: args.messageId };
+  },
+});
+
 export const appendMessageFromN8n = mutation({
   args: {
     phone: v.string(),
