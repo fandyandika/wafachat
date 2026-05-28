@@ -27,6 +27,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { ThemeToggle } from '@/components/theme-toggle';
 import {
   Select,
   SelectContent,
@@ -585,6 +586,7 @@ export default function PanelPage() {
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3">
+                <ThemeToggle />
                 <div className="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs text-muted-foreground">
                   <RefreshCw className="size-3.5" />
                   <span>Updated {lastUpdated || '-'}</span>
