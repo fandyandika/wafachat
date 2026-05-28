@@ -5,6 +5,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 type RecapStatus = "ready" | "needs_review" | "exported" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
 
+const INTERNAL_TEST_PHONES = new Set(["6285715682110"]);
+
 const statusValidator = v.union(
   v.literal("ready"),
   v.literal("needs_review"),
@@ -23,7 +25,9 @@ function parseRupiah(value: string | undefined): number | undefined {
 }
 
 function normalizePhone(value: string | undefined): string {
-  return String(value ?? "").replace(/[^\d]/g, "");
+  const digits = String(value ?? "").replace(/[^\d]/g, "");
+  if (digits.startsWith("0")) return `62${digits.slice(1)}`;
+  return digits;
 }
 
 function normalizeText(value: string): string {
@@ -144,6 +148,10 @@ function normalizeProductName(value: string | undefined): string {
     .replace(/\(\s*\d+\s*x\s*\)/gi, "")
     .replace(/\s+/g, " ")
     .trim() || "Unknown";
+}
+
+function isInternalTestPhone(value: string | undefined): boolean {
+  return INTERNAL_TEST_PHONES.has(normalizePhone(value));
 }
 
 function compareWithOrder(parsed: ReturnType<typeof parseClosingMessage>, order: Doc<"orders"> | null) {
@@ -686,11 +694,34 @@ export const getPerformance = query({
       .order("desc")
       .collect();
 
-    const validClosings = recaps.filter((row) => row.status !== "cancelled" && row.status !== "cancelled_after_export");
+    const realOrders = orders.filter((order) => !isInternalTestPhone(order.customerPhone));
+    const validClosingRows = recaps.filter(
+      (row) =>
+        row.status !== "cancelled" &&
+        row.status !== "cancelled_after_export" &&
+        !isInternalTestPhone(row.customerPhone),
+    );
+    const latestOrderByPhone = new Map<string, Doc<"orders">>();
+    const latestClosingByPhone = new Map<string, Doc<"shippingRecaps">>();
+
+    for (const order of realOrders) {
+      const phone = normalizePhone(order.customerPhone);
+      const existing = latestOrderByPhone.get(phone);
+      if (!existing || order.createdAt > existing.createdAt) latestOrderByPhone.set(phone, order);
+    }
+
+    for (const recap of validClosingRows) {
+      const phone = normalizePhone(recap.customerPhone);
+      const existing = latestClosingByPhone.get(phone);
+      if (!existing || recap.closedAt > existing.closedAt) latestClosingByPhone.set(phone, recap);
+    }
+
+    const uniqueOrders = Array.from(latestOrderByPhone.values());
+    const validClosings = Array.from(latestClosingByPhone.values());
     const productMap = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number }>();
     const csMap = new Map<string, { csName: string; leads: number; closing: number; revenue: number; discount: number }>();
 
-    for (const order of orders) {
+    for (const order of uniqueOrders) {
       const product = normalizeProductName(order.productName || order.products);
       const productRow = productMap.get(product) ?? { product, leads: 0, closing: 0, revenue: 0, discount: 0 };
       productRow.leads += 1;
@@ -720,7 +751,7 @@ export const getPerformance = query({
       csMap.set(csName, csRow);
     }
 
-    const totalLeads = orders.length;
+    const totalLeads = uniqueOrders.length;
     const totalClosing = validClosings.length;
     const totalDiscount = validClosings.reduce(
       (sum, row) => sum + (row.discount ?? (args.includeInferredDiscount ? row.inferredDiscount ?? 0 : 0)),
@@ -736,7 +767,11 @@ export const getPerformance = query({
       totalTransfer: validClosings.filter((row) => row.paymentMethod === "transfer").length,
       totalRevenue,
       totalDiscount,
-      cancelled: recaps.filter((row) => row.status === "cancelled" || row.status === "cancelled_after_export").length,
+      cancelled: recaps.filter(
+        (row) =>
+          (row.status === "cancelled" || row.status === "cancelled_after_export") &&
+          !isInternalTestPhone(row.customerPhone),
+      ).length,
       products: Array.from(productMap.values()).map((row) => ({
         ...row,
         cr: row.leads > 0 ? Math.round((row.closing / row.leads) * 1000) / 10 : 0,
