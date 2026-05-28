@@ -95,15 +95,63 @@ interface Stats {
 }
 
 type QueueKey = 'active' | 'handover' | 'closed' | 'all';
+type PanelView = 'dashboard' | 'shipping' | 'performance';
+type RecapStatus = 'ready' | 'needs_review' | 'exported' | 'cancelled' | 'cancelled_after_export';
+type PaymentFilter = 'all' | 'cod' | 'transfer';
+
+interface ShippingRecap {
+  _id: Id<'shippingRecaps'>;
+  orderIdBerdu?: string;
+  customerPhone: string;
+  customerName: string;
+  csName: string;
+  csPhone?: string;
+  orderedAt?: number;
+  closedAt: number;
+  recipientName: string;
+  recipientPhone: string;
+  recipientAddress: string;
+  recipientDistrict: string;
+  recipientCity: string;
+  packageContent: string;
+  paymentMethod: 'cod' | 'transfer' | 'unknown';
+  nonCodItemPrice?: number;
+  codValue?: number;
+  shippingCost?: number;
+  total?: number;
+  discount?: number;
+  inferredDiscount?: number;
+  bumpOrder?: string;
+  upsell?: string;
+  specialBonus?: string;
+  shippingInstruction?: string;
+  status: RecapStatus;
+  flags: string[];
+  sourceMessageText: string;
+  version: number;
+  exportedAt?: number;
+  exportBatchId?: string;
+  cancelReason?: string;
+}
+
+interface PerformanceData {
+  totalLeads: number;
+  totalClosing: number;
+  overallCr: number;
+  totalCod: number;
+  totalTransfer: number;
+  totalRevenue: number;
+  totalDiscount: number;
+  cancelled: number;
+  products: Array<{ product: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
+  cs: Array<{ csName: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
+}
 
 const navItems = [
-  { label: 'Dashboard', icon: LayoutDashboard, active: true },
-  { label: 'Conversations', icon: MessagesSquare },
-  { label: 'CS Team', icon: UsersRound },
-  { label: 'Automation', icon: SlidersHorizontal },
-  { label: 'Reports', icon: BarChart3 },
-  { label: 'Settings', icon: Settings },
-];
+  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { key: 'shipping', label: 'Rekap Pengiriman', icon: CheckCircle2 },
+  { key: 'performance', label: 'Performance', icon: BarChart3 },
+] as const;
 
 export default function PanelPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -112,10 +160,37 @@ export default function PanelPage() {
   const [selectedQueue, setSelectedQueue] = useState<QueueKey>('active');
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
+  const [panelView, setPanelView] = useState<PanelView>('dashboard');
+  const [recapStatus, setRecapStatus] = useState<RecapStatus | 'all'>('all');
+  const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>('all');
+  const [recapSearch, setRecapSearch] = useState('');
+  const [selectedRecap, setSelectedRecap] = useState<ShippingRecap | null>(null);
+
+  const todayRange = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 999);
+    return { startAt: start.getTime(), endAt: end.getTime() };
+  }, []);
 
   const conversationsData = useQuery(api.state.listConversations, { includeClosed: true });
   const statsData = useQuery(api.state.getDailyStats, {});
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
+  const shippingRecapsData = useQuery(api.shippingRecaps.list, {
+    startAt: todayRange.startAt,
+    endAt: todayRange.endAt,
+    status: recapStatus === 'all' ? undefined : recapStatus,
+    paymentMethod: paymentFilter === 'all' ? undefined : paymentFilter,
+    search: recapSearch || undefined,
+    limit: 75,
+  });
+  const performanceData = useQuery(api.shippingRecaps.getPerformance, {
+    startAt: todayRange.startAt,
+    endAt: todayRange.endAt,
+    includeInferredDiscount: false,
+  });
   const setConversationStatus = useMutation(api.state.setConversationStatusFromN8n);
   const markNotClosing = useMutation(api.state.markConversationNotClosing);
   const markClosing = useMutation(api.state.markConversationClosing);
@@ -123,6 +198,10 @@ export default function PanelPage() {
   const undoCancelled = useMutation(api.state.undoConversationCancelled);
   const deleteOrder = useMutation(api.state.deleteConversationOrder);
   const setGlobalAiEnabled = useMutation(api.settings.setGlobalAiEnabled);
+  const markRecapReady = useMutation(api.shippingRecaps.markReady);
+  const markRecapCancelled = useMutation(api.shippingRecaps.markCancelled);
+  const undoRecapCancelled = useMutation(api.shippingRecaps.undoCancelled);
+  const markRecapsExported = useMutation(api.shippingRecaps.markExported);
 
   useEffect(() => {
     if (conversationsData !== undefined && statsData !== undefined && globalEnabledData !== undefined) {
@@ -131,6 +210,8 @@ export default function PanelPage() {
   }, [conversationsData, globalEnabledData, statsData]);
 
   const conversations = (conversationsData ?? []) as Conversation[];
+  const shippingRecaps = (shippingRecapsData ?? []) as ShippingRecap[];
+  const performance = performanceData as PerformanceData | undefined;
   const stats: Stats = {
     orders: statsData?.orders ?? 0,
     closings: statsData?.closings ?? 0,
@@ -213,6 +294,46 @@ export default function PanelPage() {
       setSelectedConversation(null);
     }
     setPendingDelete(null);
+    setActionLoading(null);
+  };
+
+  const readyRecaps = shippingRecaps.filter((row) => row.status === 'ready');
+
+  const markReadyRecap = async (recap: ShippingRecap) => {
+    setActionLoading(recap._id + ':ready');
+    await markRecapReady({ recapId: recap._id });
+    setActionLoading(null);
+  };
+
+  const cancelRecap = async (recap: ShippingRecap) => {
+    setActionLoading(recap._id + ':cancel');
+    await markRecapCancelled({ recapId: recap._id, reason: 'cancelled from panel' });
+    setActionLoading(null);
+  };
+
+  const undoCancelRecap = async (recap: ShippingRecap) => {
+    setActionLoading(recap._id + ':undo-cancel');
+    await undoRecapCancelled({ recapId: recap._id });
+    setActionLoading(null);
+  };
+
+  const downloadRecapCsv = async () => {
+    if (readyRecaps.length === 0) return;
+    const exportBatchId = 'export-' + new Date().toISOString().replace(/[:.]/g, '-');
+    setActionLoading('shipping-export');
+    const response = await fetch('/api/shipping-recaps/export', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rows: readyRecaps }),
+    });
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `wafachat-rekap-pengiriman-${stats.date || 'today'}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    await markRecapsExported({ recapIds: readyRecaps.map((row) => row._id), exportBatchId });
     setActionLoading(null);
   };
 
@@ -335,18 +456,18 @@ export default function PanelPage() {
           <nav className="flex-1 space-y-1 px-3">
             {navItems.map((item) => (
               <button
-                key={item.label}
+                key={item.key}
                 className={cn(
                   'flex h-9 w-full items-center gap-2 rounded-lg px-3 text-left text-sm transition-colors',
-                  item.active
+                  panelView === item.key
                     ? 'bg-primary text-primary-foreground'
                     : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                 )}
+                onClick={() => setPanelView(item.key)}
                 type="button"
               >
                 <item.icon className="size-4" />
                 <span>{item.label}</span>
-                {!item.active && <span className="ml-auto text-[10px] text-muted-foreground/70">soon</span>}
               </button>
             ))}
           </nav>
@@ -370,7 +491,9 @@ export default function PanelPage() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-xl font-semibold tracking-tight">Dashboard</h1>
+                  <h1 className="text-xl font-semibold tracking-tight">
+                    {panelView === 'dashboard' ? 'Dashboard' : panelView === 'shipping' ? 'Rekap Pengiriman' : 'Performance'}
+                  </h1>
                   <Badge variant="secondary">pustakaislam.net</Badge>
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">
@@ -403,7 +526,12 @@ export default function PanelPage() {
             </div>
             <div className="mt-4 flex gap-2 overflow-x-auto pb-1 md:hidden">
               {navItems.map((item) => (
-                <Badge key={item.label} variant={item.active ? 'default' : 'secondary'}>
+                <Badge
+                  key={item.key}
+                  onClick={() => setPanelView(item.key)}
+                  role="button"
+                  variant={panelView === item.key ? 'default' : 'secondary'}
+                >
                   {item.label}
                 </Badge>
               ))}
@@ -411,70 +539,95 @@ export default function PanelPage() {
           </header>
 
           <div className="space-y-6 p-4 md:p-6">
-            <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
-              {loading
-                ? Array.from({ length: 9 }).map((_, index) => <MetricSkeleton key={index} />)
-                : cards.map((card) => <MetricCard key={card.label} {...card} />)}
-            </section>
+            {panelView === 'dashboard' && (
+              <>
+                <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+                  {loading
+                    ? Array.from({ length: 9 }).map((_, index) => <MetricSkeleton key={index} />)
+                    : cards.map((card) => <MetricCard key={card.label} {...card} />)}
+                </section>
 
-            <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-              <div className="space-y-6">
-                <ConversationPanel
-                  title="Conversation queue"
-                  description="Search, triage, and act on support-AI conversations."
-                  queueItems={queueItems}
-                  rows={visibleRows}
-                  actionLoading={actionLoading}
-                  loading={loading}
-                  searchQuery={searchQuery}
-                  selectedQueue={selectedQueue}
-                  onDeleteOrder={setPendingDelete}
-                  onMarkCancelled={cancelOrder}
-                  onMarkClosing={markWonManual}
-                  onNotClosing={notClosing}
-                  onUndoCancelled={undoCancelOrder}
-                  onOpenDetail={setSelectedConversation}
-                  onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
-                  onResumeAI={(conversation) => setStatus(conversation.phone, 'active', undefined, conversation.order_id)}
-                  onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
-                  onSearchChange={setSearchQuery}
-                  onSelectQueue={setSelectedQueue}
-                />
-              </div>
+                <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+                  <div className="space-y-6">
+                    <ConversationPanel
+                      title="Conversation queue"
+                      description="Search, triage, and act on support-AI conversations."
+                      queueItems={queueItems}
+                      rows={visibleRows}
+                      actionLoading={actionLoading}
+                      loading={loading}
+                      searchQuery={searchQuery}
+                      selectedQueue={selectedQueue}
+                      onDeleteOrder={setPendingDelete}
+                      onMarkCancelled={cancelOrder}
+                      onMarkClosing={markWonManual}
+                      onNotClosing={notClosing}
+                      onUndoCancelled={undoCancelOrder}
+                      onOpenDetail={setSelectedConversation}
+                      onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
+                      onResumeAI={(conversation) => setStatus(conversation.phone, 'active', undefined, conversation.order_id)}
+                      onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
+                      onSearchChange={setSearchQuery}
+                      onSelectQueue={setSelectedQueue}
+                    />
+                  </div>
 
-              <aside className="space-y-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">System readiness</CardTitle>
-                    <CardDescription>Operational checks for this panel.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <ReadinessRow label="n8n State Manager" value="Connected" ok />
-                    <ReadinessRow label="Outcome dedup" value="order_id" ok />
-                    <ReadinessRow label="Global AI switch" value={globalEnabled ? 'Enabled' : 'Disabled'} ok={globalEnabled} />
-                    <Separator />
-                    <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-                      Future modules are staged in the sidebar. Dashboard is the only active surface in this slice.
-                    </div>
-                  </CardContent>
-                </Card>
+                  <aside className="space-y-4">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base">System readiness</CardTitle>
+                        <CardDescription>Operational checks for this panel.</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <ReadinessRow label="n8n State Manager" value="Connected" ok />
+                        <ReadinessRow label="Outcome dedup" value="order_id" ok />
+                        <ReadinessRow label="Global AI switch" value={globalEnabled ? 'Enabled' : 'Disabled'} ok={globalEnabled} />
+                        <Separator />
+                        <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+                          Rekap Pengiriman and Performance are sourced from Convex realtime data.
+                        </div>
+                      </CardContent>
+                    </Card>
 
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="text-base">Today formula</CardTitle>
-                    <CardDescription>How the main metrics are calculated.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-2 text-sm text-muted-foreground">
-                    <Formula label="Orders" value="unique phone + product" />
-                    <Formula label="AI Closing" value="AI detected" />
-                    <Formula label="Manual Closing" value="CS marked" />
-                    <Formula label="Cancelled" value="CS marked" />
-                    <Formula label="Closing rate" value="closing / orders" />
-                    <Formula label="Handover rate" value="current handovers / orders" />
-                  </CardContent>
-                </Card>
-              </aside>
-            </section>
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="text-base">Today formula</CardTitle>
+                        <CardDescription>How the main metrics are calculated.</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-2 text-sm text-muted-foreground">
+                        <Formula label="Orders" value="unique phone + product" />
+                        <Formula label="AI Closing" value="AI detected" />
+                        <Formula label="Manual Closing" value="CS marked" />
+                        <Formula label="Cancelled" value="CS marked" />
+                        <Formula label="Closing rate" value="closing / orders" />
+                        <Formula label="Handover rate" value="current handovers / orders" />
+                      </CardContent>
+                    </Card>
+                  </aside>
+                </section>
+              </>
+            )}
+
+            {panelView === 'shipping' && (
+              <ShippingRecapPanel
+                actionLoading={actionLoading}
+                paymentFilter={paymentFilter}
+                readyCount={readyRecaps.length}
+                recapSearch={recapSearch}
+                recapStatus={recapStatus}
+                rows={shippingRecaps}
+                onCancel={cancelRecap}
+                onDownload={downloadRecapCsv}
+                onOpenDetail={setSelectedRecap}
+                onPaymentFilterChange={setPaymentFilter}
+                onReady={markReadyRecap}
+                onSearchChange={setRecapSearch}
+                onStatusChange={setRecapStatus}
+                onUndoCancel={undoCancelRecap}
+              />
+            )}
+
+            {panelView === 'performance' && <PerformancePanel data={performance} />}
           </div>
         </main>
       </div>
@@ -492,6 +645,12 @@ export default function PanelPage() {
         onPauseAI={(conversation) => setStatus(conversation.phone, 'handover', 'manual by CS', conversation.order_id)}
         onResumeAI={(conversation) => setStatus(conversation.phone, 'active', undefined, conversation.order_id)}
         onSelesai={(conversation) => setStatus(conversation.phone, 'closed', undefined, conversation.order_id)}
+      />
+      <ShippingRecapDetailSheet
+        recap={selectedRecap}
+        onOpenChange={(open) => {
+          if (!open) setSelectedRecap(null);
+        }}
       />
       <ConfirmDeleteDialog
         conversation={pendingDelete}
@@ -541,6 +700,284 @@ function MetricSkeleton() {
       <CardContent>
         <Skeleton className="h-8 w-14" />
         <Skeleton className="mt-2 h-3 w-28" />
+      </CardContent>
+    </Card>
+  );
+}
+
+function ShippingRecapPanel({
+  actionLoading,
+  paymentFilter,
+  readyCount,
+  recapSearch,
+  recapStatus,
+  rows,
+  onCancel,
+  onDownload,
+  onOpenDetail,
+  onPaymentFilterChange,
+  onReady,
+  onSearchChange,
+  onStatusChange,
+  onUndoCancel,
+}: {
+  actionLoading: string | null;
+  paymentFilter: PaymentFilter;
+  readyCount: number;
+  recapSearch: string;
+  recapStatus: RecapStatus | 'all';
+  rows: ShippingRecap[];
+  onCancel: (recap: ShippingRecap) => void;
+  onDownload: () => void;
+  onOpenDetail: (recap: ShippingRecap) => void;
+  onPaymentFilterChange: (filter: PaymentFilter) => void;
+  onReady: (recap: ShippingRecap) => void;
+  onSearchChange: (value: string) => void;
+  onStatusChange: (status: RecapStatus | 'all') => void;
+  onUndoCancel: (recap: ShippingRecap) => void;
+}) {
+  const statusItems: Array<{ label: string; value: RecapStatus | 'all' }> = [
+    { label: 'Semua', value: 'all' },
+    { label: 'Siap Export', value: 'ready' },
+    { label: 'Perlu Cek', value: 'needs_review' },
+    { label: 'Sudah Export', value: 'exported' },
+    { label: 'Cancel', value: 'cancelled' },
+  ];
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <CardTitle>Rekap Pengiriman</CardTitle>
+            <CardDescription>Closing final untuk bulk upload pengiriman. Default data adalah hari ini.</CardDescription>
+          </div>
+          <Button disabled={readyCount === 0 || actionLoading === 'shipping-export'} onClick={onDownload}>
+            <CheckCircle2 className="size-4" />
+            Download Excel ({readyCount})
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          <div className="relative min-w-[260px] flex-1 sm:max-w-sm">
+            <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
+            <input
+              aria-label="Search shipping recap"
+              className="h-9 w-full rounded-md border border-border bg-background pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+              onChange={(event) => onSearchChange(event.target.value)}
+              value={recapSearch}
+            />
+          </div>
+          {statusItems.map((item) => (
+            <Button
+              key={item.value}
+              onClick={() => onStatusChange(item.value)}
+              size="sm"
+              variant={recapStatus === item.value ? 'default' : 'outline'}
+            >
+              {item.label}
+            </Button>
+          ))}
+          <Button
+            onClick={() => onPaymentFilterChange(paymentFilter === 'cod' ? 'all' : 'cod')}
+            size="sm"
+            variant={paymentFilter === 'cod' ? 'default' : 'outline'}
+          >
+            COD
+          </Button>
+          <Button
+            onClick={() => onPaymentFilterChange(paymentFilter === 'transfer' ? 'all' : 'transfer')}
+            size="sm"
+            variant={paymentFilter === 'transfer' ? 'default' : 'outline'}
+          >
+            Transfer
+          </Button>
+        </div>
+
+        <div className="overflow-hidden rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Closing</TableHead>
+                <TableHead>Penerima</TableHead>
+                <TableHead>Isi paket</TableHead>
+                <TableHead>Bayar</TableHead>
+                <TableHead>Total/COD</TableHead>
+                <TableHead>Kecamatan/Kota</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Aksi</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.length === 0 ? (
+                <TableRow>
+                  <TableCell className="h-24 text-center text-muted-foreground" colSpan={8}>
+                    Belum ada rekap pengiriman pada filter ini.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                rows.map((row) => (
+                  <TableRow key={row._id}>
+                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                      {formatDateTime(row.closedAt)}
+                    </TableCell>
+                    <TableCell>
+                      <button className="text-left font-medium hover:underline" onClick={() => onOpenDetail(row)}>
+                        {row.recipientName || row.customerName || 'Unknown'}
+                      </button>
+                      <div className="font-mono text-xs text-muted-foreground">{row.recipientPhone || row.customerPhone}</div>
+                    </TableCell>
+                    <TableCell className="max-w-[220px] truncate">{row.packageContent || '-'}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{row.paymentMethod.toUpperCase()}</Badge>
+                    </TableCell>
+                    <TableCell>{formatRupiah(row.codValue ?? row.total ?? row.nonCodItemPrice)}</TableCell>
+                    <TableCell className="max-w-[220px] truncate">
+                      {[row.recipientDistrict, row.recipientCity].filter(Boolean).join(', ') || '-'}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        <RecapStatusBadge status={row.status} />
+                        {row.flags.length > 0 && (
+                          <Badge className="w-fit" variant="outline">{row.flags.length} flag</Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex justify-end gap-2">
+                        {row.status === 'needs_review' && (
+                          <Button
+                            disabled={actionLoading === row._id + ':ready'}
+                            onClick={() => onReady(row)}
+                            size="sm"
+                            variant="secondary"
+                          >
+                            Ready
+                          </Button>
+                        )}
+                        {row.status === 'cancelled' || row.status === 'cancelled_after_export' ? (
+                          <Button
+                            disabled={actionLoading === row._id + ':undo-cancel'}
+                            onClick={() => onUndoCancel(row)}
+                            size="sm"
+                            variant="outline"
+                          >
+                            Undo
+                          </Button>
+                        ) : (
+                          <Button
+                            disabled={actionLoading === row._id + ':cancel'}
+                            onClick={() => onCancel(row)}
+                            size="sm"
+                            variant="outline"
+                          >
+                            Cancel
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PerformancePanel({ data }: { data?: PerformanceData }) {
+  const cards = [
+    { label: 'Total Leads', value: data?.totalLeads ?? 0 },
+    { label: 'Total Closing', value: data?.totalClosing ?? 0 },
+    { label: 'CR', value: `${data?.overallCr ?? 0}%` },
+    { label: 'Total COD', value: data?.totalCod ?? 0 },
+    { label: 'Total Transfer', value: data?.totalTransfer ?? 0 },
+    { label: 'Omzet Closing', value: formatRupiah(data?.totalRevenue) },
+    { label: 'Total Diskon', value: formatRupiah(data?.totalDiscount) },
+    { label: 'Cancel', value: data?.cancelled ?? 0 },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map((card) => (
+          <Card key={card.label} size="sm">
+            <CardHeader>
+              <CardDescription>{card.label}</CardDescription>
+              <CardTitle>{card.value}</CardTitle>
+            </CardHeader>
+          </Card>
+        ))}
+      </section>
+
+      <PerformanceTable
+        columns={['Produk', 'Leads', 'Closing', 'CR', 'Omzet', 'Diskon']}
+        rows={(data?.products ?? []).map((row) => [
+          row.product,
+          row.leads,
+          row.closing,
+          `${row.cr}%`,
+          formatRupiah(row.revenue),
+          formatRupiah(row.discount),
+        ])}
+        title="Performance Produk"
+      />
+
+      <PerformanceTable
+        columns={['CS', 'Leads', 'Closing', 'CR', 'Omzet', 'Diskon']}
+        rows={(data?.cs ?? []).map((row) => [
+          row.csName,
+          row.leads,
+          row.closing,
+          `${row.cr}%`,
+          formatRupiah(row.revenue),
+          formatRupiah(row.discount),
+        ])}
+        title="Performance CS"
+      />
+    </div>
+  );
+}
+
+function PerformanceTable({ columns, rows, title }: { columns: string[]; rows: Array<Array<string | number>>; title: string }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>Hari ini, dihitung dari unique leads dan final recap closing.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-hidden rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                {columns.map((column) => (
+                  <TableHead key={column}>{column}</TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.length === 0 ? (
+                <TableRow>
+                  <TableCell className="h-24 text-center text-muted-foreground" colSpan={columns.length}>
+                    Belum ada data performance pada filter ini.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                rows.map((row, rowIndex) => (
+                  <TableRow key={rowIndex}>
+                    {row.map((cell, cellIndex) => (
+                      <TableCell key={cellIndex}>{cell}</TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </CardContent>
     </Card>
   );
@@ -1019,6 +1456,69 @@ function ConversationDetailSheet({
   );
 }
 
+function ShippingRecapDetailSheet({
+  recap,
+  onOpenChange,
+}: {
+  recap: ShippingRecap | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Sheet open={Boolean(recap)} onOpenChange={onOpenChange}>
+      <SheetContent className="w-full gap-0 overflow-y-auto p-0 sm:max-w-xl">
+        {recap && (
+          <>
+            <SheetHeader className="border-b p-5">
+              <div className="flex items-start justify-between gap-4 pr-8">
+                <div className="min-w-0">
+                  <SheetTitle className="truncate">{recap.recipientName || recap.customerName || 'Unknown recipient'}</SheetTitle>
+                  <SheetDescription className="mt-1 font-mono">{recap.orderIdBerdu || recap.customerPhone}</SheetDescription>
+                </div>
+                <RecapStatusBadge status={recap.status} />
+              </div>
+            </SheetHeader>
+
+            <div className="space-y-5 p-5">
+              <section className="space-y-3">
+                <h2 className="text-sm font-medium">Export fields</h2>
+                <div className="grid gap-2 rounded-lg border bg-muted/20 p-3 text-sm">
+                  <DetailRow label="CS" value={[recap.csName, recap.csPhone].filter(Boolean).join(' | ') || '-'} />
+                  <DetailRow label="Penerima" value={[recap.recipientName, recap.recipientPhone].filter(Boolean).join(' | ') || '-'} />
+                  <DetailRow label="Alamat" value={recap.recipientAddress || '-'} />
+                  <DetailRow label="Kecamatan" value={recap.recipientDistrict || '-'} />
+                  <DetailRow label="Kota" value={recap.recipientCity || '-'} />
+                  <DetailRow label="Isi paket" value={recap.packageContent || '-'} />
+                  <DetailRow label="Bayar" value={recap.paymentMethod.toUpperCase()} />
+                  <DetailRow label="Total" value={formatRupiah(recap.total ?? recap.codValue ?? recap.nonCodItemPrice)} strong />
+                  <DetailRow label="Diskon" value={formatRupiah(recap.discount ?? recap.inferredDiscount)} />
+                </div>
+              </section>
+
+              <section className="space-y-3">
+                <h2 className="text-sm font-medium">Flags</h2>
+                {recap.flags.length === 0 ? (
+                  <div className="rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground">No flags.</div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {recap.flags.map((flag) => (
+                      <Badge key={flag} variant="outline">{flag}</Badge>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="space-y-3">
+                <h2 className="text-sm font-medium">Source message</h2>
+                <div className="whitespace-pre-wrap rounded-lg border bg-muted/20 p-3 text-sm">{recap.sourceMessageText}</div>
+              </section>
+            </div>
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 function ConfirmDeleteDialog({
   conversation,
   loading,
@@ -1099,6 +1599,26 @@ function OutcomeBadge({ outcome }: { outcome: 'ai_won' | 'manual_won' | 'cancell
   );
 }
 
+function RecapStatusBadge({ status }: { status: RecapStatus }) {
+  if (status === 'ready') {
+    return <Badge className="border-emerald-500/30 text-emerald-400" variant="outline">Siap Export</Badge>;
+  }
+
+  if (status === 'needs_review') {
+    return <Badge variant="destructive">Perlu Cek</Badge>;
+  }
+
+  if (status === 'exported') {
+    return <Badge variant="secondary">Sudah Export</Badge>;
+  }
+
+  if (status === 'cancelled_after_export') {
+    return <Badge className="border-destructive/30 text-destructive" variant="outline">Cancel After Export</Badge>;
+  }
+
+  return <Badge className="border-destructive/30 text-destructive" variant="outline">Cancel</Badge>;
+}
+
 function ReadinessRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
   return (
     <div className="flex items-center justify-between gap-3 text-sm">
@@ -1126,4 +1646,19 @@ function formatTime(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function formatDateTime(timestamp: number): string {
+  if (!timestamp) return '-';
+  return new Date(timestamp).toLocaleString('id-ID', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatRupiah(value?: number): string {
+  if (value === undefined || Number.isNaN(value)) return '-';
+  return 'Rp' + new Intl.NumberFormat('id-ID').format(value);
 }
