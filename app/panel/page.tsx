@@ -6,11 +6,13 @@ import {
   Activity,
   BarChart3,
   Bot,
+  BotOff,
   CheckCircle2,
   CircleAlert,
   Clock3,
   ExternalLink,
   LayoutDashboard,
+  Loader2,
   MessageCircle,
   MessagesSquare,
   PauseCircle,
@@ -201,6 +203,8 @@ export default function PanelPage() {
   const [selectedRecapIds, setSelectedRecapIds] = useState<Set<string>>(new Set());
   const [bulkCancelOpen, setBulkCancelOpen] = useState(false);
   const [selectedCsName, setSelectedCsName] = useState('all');
+  const [globalAiConfirmOpen, setGlobalAiConfirmOpen] = useState(false);
+  const [optimisticGlobal, setOptimisticGlobal] = useState<boolean | null>(null);
 
   const selectedDateRange = useMemo(() => {
     const now = new Date();
@@ -292,11 +296,25 @@ export default function PanelPage() {
     setSelectedRecapIds(new Set());
   }, [selectedCsName]);
 
-  const toggleGlobal = async () => {
-    const next = !globalEnabled;
+  const displayGlobalEnabled = optimisticGlobal !== null ? optimisticGlobal : globalEnabled;
+
+  const handleGlobalAiToggle = () => {
+    if (displayGlobalEnabled) {
+      setGlobalAiConfirmOpen(true);
+    } else {
+      void doToggleGlobal(true);
+    }
+  };
+
+  const doToggleGlobal = async (next: boolean) => {
+    setOptimisticGlobal(next);
     setActionLoading('global');
-    await setGlobalAiEnabled({ enabled: next });
-    setActionLoading(null);
+    try {
+      await setGlobalAiEnabled({ enabled: next });
+    } finally {
+      setOptimisticGlobal(null);
+      setActionLoading(null);
+    }
   };
 
   const setStatus = async (phone: string, status: Conversation['status'], note?: string, orderId?: string) => {
@@ -622,23 +640,34 @@ export default function PanelPage() {
                   <RefreshCw className="size-3.5" />
                   <span>Updated {lastUpdated || '-'}</span>
                 </div>
-                <div className="flex h-9 items-center gap-3 rounded-lg border px-3">
-                  <div className="flex items-center gap-2">
-                    <Bot className="size-4 text-muted-foreground" />
-                    <span className="text-sm">Global AI</span>
-                  </div>
-                  <Switch checked={globalEnabled} disabled={actionLoading === 'global'} onCheckedChange={toggleGlobal} />
-                  <Badge
-                    variant="outline"
-                    className={cn(
-                      globalEnabled
-                        ? 'border-emerald-500/30 text-emerald-400'
-                        : 'border-muted-foreground/30 text-muted-foreground',
-                    )}
-                  >
-                    {globalEnabled ? 'ON' : 'OFF'}
-                  </Badge>
-                </div>
+                <button
+                  onClick={handleGlobalAiToggle}
+                  disabled={actionLoading === 'global' || loading}
+                  className={cn(
+                    'flex h-9 items-center gap-2 rounded-lg border px-3 text-sm font-medium transition-all duration-200',
+                    'disabled:cursor-not-allowed disabled:opacity-60',
+                    displayGlobalEnabled
+                      ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
+                      : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                >
+                  {actionLoading === 'global' ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : displayGlobalEnabled ? (
+                    <Bot className="size-4" />
+                  ) : (
+                    <BotOff className="size-4" />
+                  )}
+                  <span>Global AI</span>
+                  <span className={cn(
+                    'rounded px-1.5 py-0.5 text-xs font-bold',
+                    displayGlobalEnabled
+                      ? 'bg-emerald-500/20 text-emerald-400'
+                      : 'bg-muted text-muted-foreground',
+                  )}>
+                    {displayGlobalEnabled ? 'ON' : 'OFF'}
+                  </span>
+                </button>
               </div>
             </div>
             <div className="mt-4 flex gap-2 overflow-x-auto pb-1 md:hidden">
@@ -698,7 +727,7 @@ export default function PanelPage() {
                       <CardContent className="space-y-3">
                         <ReadinessRow label="n8n State Manager" value="Connected" ok />
                         <ReadinessRow label="Outcome dedup" value="order_id" ok />
-                        <ReadinessRow label="Global AI switch" value={globalEnabled ? 'Enabled' : 'Disabled'} ok={globalEnabled} />
+                        <ReadinessRow label="Global AI switch" value={displayGlobalEnabled ? 'Enabled' : 'Disabled'} ok={displayGlobalEnabled} />
                         <Separator />
                         <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
                           Rekap Pengiriman and Performance are sourced from Convex realtime data.
@@ -794,6 +823,33 @@ export default function PanelPage() {
           </div>
         </main>
       </div>
+      {/* Global AI OFF confirmation */}
+      <AlertDialog open={globalAiConfirmOpen} onOpenChange={setGlobalAiConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <BotOff className="size-5 text-destructive" />
+              Matikan Global AI?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Semua percakapan aktif akan berhenti mendapat balasan otomatis dari AI. CS perlu membalas manual sampai AI dinyalakan kembali.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                setGlobalAiConfirmOpen(false);
+                void doToggleGlobal(false);
+              }}
+            >
+              Ya, Matikan AI
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <ConversationDetailSheet
         actionLoading={actionLoading}
         conversation={selectedConversation}
