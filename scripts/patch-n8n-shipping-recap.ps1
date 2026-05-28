@@ -98,6 +98,53 @@ if (isClosing && replyText && replyText.includes('PEMESANAN BERHASIL')) {
   $node.parameters.jsCode = $code.Replace($marker, "$insert`n$marker")
 }
 
+$manualNodeName = '02 Parse Message + Manual CS Guard'
+$manualNode = $workflow.nodes | Where-Object { $_.name -eq $manualNodeName } | Select-Object -First 1
+if (-not $manualNode) {
+  throw "Node not found: $manualNodeName"
+}
+
+$manualCode = [string] $manualNode.parameters.jsCode
+if ($manualCode -notmatch 'upsert_shipping_recap') {
+  $manualInsert = @'
+
+  if (normalizedOutbound.includes('PEMESANAN BERHASIL')) {
+    const sourceMessageText = String(buttonTitle || content || plainText || '');
+    await this.helpers.httpRequest({
+      method: 'POST',
+      url: stateManagerUrl,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'upsert_shipping_recap',
+        phone,
+        order_id: stateResp.order_id || '',
+        customerName: stateResp.customerName || customerName || '',
+        csName: stateResp.csName || 'CS Aisyah',
+        csNumber: stateResp.csNumber || senderNumber || '',
+        sourceMessageId: firstValue(data.message_id, data.id, rawMessage.id),
+        sourceMessageText,
+        closedAt: Date.now(),
+      }),
+      json: true,
+    });
+  }
+'@
+
+  $manualMarker = @'
+  await this.helpers.httpRequest({
+    method: 'POST',
+    url: stateManagerUrl,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'set',
+'@
+
+  if (-not $manualCode.Contains($manualMarker)) {
+    throw 'Manual set marker not found; aborting patch.'
+  }
+  $manualNode.parameters.jsCode = $manualCode.Replace($manualMarker, "$manualInsert`n$manualMarker")
+}
+
 $payload = Clean-WorkflowForUpdate -Workflow $workflow
 $json = $payload | ConvertTo-Json -Depth 100
 Invoke-RestMethod -Method Put -Uri "$baseUrl/api/v1/workflows/$workflowId" -Headers $headers -Body $json | Out-Null
