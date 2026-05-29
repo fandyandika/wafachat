@@ -268,6 +268,7 @@ export default function PanelPage() {
   const undoRecapDelivered = useMutation(api.shippingRecaps.undoDelivered);
   const markReadyBulk = useMutation(api.shippingRecaps.markReadyBulk);
   const markCancelledBulk = useMutation(api.shippingRecaps.markCancelledBulk);
+  const createPanelClosingRecap = useMutation(api.shippingRecaps.createFromPanelClosing);
 
   useEffect(() => {
     if (conversationsData !== undefined && statsData !== undefined && globalEnabledData !== undefined) {
@@ -344,6 +345,11 @@ export default function PanelPage() {
       phone: conversation.phone,
       order_id: conversation.order_id,
       note: 'marked closing by CS',
+    });
+    // Also create a needs_review shipping recap so it appears in Rekap Pengiriman & Performance
+    await createPanelClosingRecap({
+      customerPhone: conversation.phone,
+      orderId: conversation.order_id,
     });
     setActionLoading(null);
   };

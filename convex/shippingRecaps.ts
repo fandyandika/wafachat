@@ -399,6 +399,74 @@ export const upsertFromN8n = mutation({
   },
 });
 
+// Called when a manual CS (e.g. Risma) marks closing from the panel.
+// Creates a needs_review recap using order data — no AI message to parse.
+export const createFromPanelClosing = mutation({
+  args: {
+    customerPhone: v.string(),
+    orderId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const order = await findOrder(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone });
+    const conversation = await findConversation(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone });
+    const existing = await findExistingRecap(ctx, {
+      orderIdBerdu: args.orderId ?? order?.orderId,
+      customerPhone: args.customerPhone,
+      conversationId: conversation?._id,
+    });
+
+    // Don't overwrite already-exported or delivered recaps
+    if (existing && (existing.status === "exported" || existing.status === "delivered")) {
+      return { success: true, recapId: existing._id, status: existing.status, _action: "create_from_panel_closing", skipped: true };
+    }
+
+    const payload = {
+      orderIdBerdu: args.orderId ?? order?.orderId,
+      conversationId: conversation?._id,
+      customerPhone: args.customerPhone,
+      customerName: order?.customerName ?? conversation?.customerName ?? "",
+      csName: order?.assignedCsName ?? conversation?.assignedCsName ?? "",
+      csPhone: order?.assignedCsNumber,
+      orderedAt: order?.createdAt,
+      closedAt: now,
+      recipientName: order?.customerName ?? "",
+      recipientPhone: args.customerPhone,
+      recipientAddress: order?.shippingAddress ?? "",
+      recipientDistrict: order?.shippingDistrict ?? "",
+      recipientCity: order?.shippingCity ?? "",
+      packageContent: order?.productName ?? "",
+      paymentMethod: "unknown" as PaymentMethod,
+      shippingCost: parseRupiah(order?.shippingCost),
+      total: parseRupiah(order?.total),
+      status: "needs_review" as RecapStatus,
+      flags: ["MANUAL_CLOSING"],
+      sourceMessageText: "manual_closing_by_cs",
+      updatedAt: now,
+    };
+
+    let recapId: Id<"shippingRecaps">;
+    if (existing) {
+      recapId = existing._id;
+      await ctx.db.patch(existing._id, { ...payload, version: existing.version + 1 });
+    } else {
+      recapId = await ctx.db.insert("shippingRecaps", { ...payload, version: 1, createdAt: now });
+    }
+
+    await ctx.db.insert("events", {
+      conversationId: conversation?._id,
+      orderId: args.orderId ?? order?.orderId,
+      customerPhone: args.customerPhone,
+      type: "shipping_recap_upserted",
+      actor: "cs",
+      metadata: { recapId, source: "panel_manual_closing" },
+      createdAt: now,
+    });
+
+    return { success: true, recapId, status: "needs_review", _action: "create_from_panel_closing" };
+  },
+});
+
 export const backfillFromMessages = mutation({
   args: {
     limit: v.optional(v.number()),
