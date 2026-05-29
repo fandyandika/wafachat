@@ -405,6 +405,8 @@ export const createFromPanelClosing = mutation({
   args: {
     customerPhone: v.string(),
     orderId: v.optional(v.string()),
+    packageContent: v.optional(v.string()),
+    csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -426,7 +428,7 @@ export const createFromPanelClosing = mutation({
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
       customerName: order?.customerName ?? conversation?.customerName ?? "",
-      csName: order?.assignedCsName ?? conversation?.assignedCsName ?? "",
+      csName: args.csName || order?.assignedCsName || conversation?.assignedCsName || "",
       csPhone: order?.assignedCsNumber,
       orderedAt: order?.createdAt,
       closedAt: now,
@@ -435,7 +437,7 @@ export const createFromPanelClosing = mutation({
       recipientAddress: order?.shippingAddress ?? "",
       recipientDistrict: order?.shippingDistrict ?? "",
       recipientCity: order?.shippingCity ?? "",
-      packageContent: order?.productName || order?.products || "",
+      packageContent: args.packageContent || order?.productName || order?.products || "",
       paymentMethod: "unknown" as PaymentMethod,
       shippingCost: parseRupiah(order?.shippingCost),
       total: parseRupiah(order?.total),

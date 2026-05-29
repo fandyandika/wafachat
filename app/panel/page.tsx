@@ -350,6 +350,8 @@ export default function PanelPage() {
     await createPanelClosingRecap({
       customerPhone: conversation.phone,
       orderId: conversation.order_id,
+      packageContent: conversation.productName || conversation.products,
+      csName: conversation.csName,
     });
     setActionLoading(null);
   };
