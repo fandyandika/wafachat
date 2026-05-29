@@ -435,7 +435,7 @@ export const createFromPanelClosing = mutation({
       recipientAddress: order?.shippingAddress ?? "",
       recipientDistrict: order?.shippingDistrict ?? "",
       recipientCity: order?.shippingCity ?? "",
-      packageContent: order?.productName ?? "",
+      packageContent: order?.productName || order?.products || "",
       paymentMethod: "unknown" as PaymentMethod,
       shippingCost: parseRupiah(order?.shippingCost),
       total: parseRupiah(order?.total),
@@ -1054,7 +1054,8 @@ export const getPerformance = query({
     }
 
     for (const recap of validClosings) {
-      const product = normalizeProductName(recap.packageContent);
+      const matchedOrder = latestOrderByPhone.get(normalizePhone(recap.customerPhone));
+      const product = normalizeProductName(recap.packageContent || matchedOrder?.productName || matchedOrder?.products);
       const revenue = recap.total ?? recap.codValue ?? recap.nonCodItemPrice ?? 0;
       const discount = recap.discount ?? (args.includeInferredDiscount ? recap.inferredDiscount ?? 0 : 0);
       const productRow = productMap.get(product) ?? { product, leads: 0, closing: 0, revenue: 0, discount: 0 };
@@ -1063,7 +1064,7 @@ export const getPerformance = query({
       productRow.discount += discount;
       productMap.set(product, productRow);
 
-      const csName = normalizeCsName(recap.csName);
+      const csName = normalizeCsName(recap.csName || matchedOrder?.assignedCsName);
       const csRow = csMap.get(csName) ?? { csName, leads: 0, closing: 0, revenue: 0, discount: 0 };
       csRow.closing += 1;
       csRow.revenue += revenue;
