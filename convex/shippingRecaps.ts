@@ -1038,6 +1038,33 @@ export const getPerformance = query({
 
     const uniqueOrders = Array.from(latestOrderByPhone.values());
     const validClosings = Array.from(latestClosingByPhone.values());
+
+    // For closings whose order isn't in the date-range window (order created before startAt),
+    // do a targeted fallback lookup by orderIdBerdu or customerPhone.
+    const fallbackOrderByPhone = new Map<string, Doc<"orders">>();
+    for (const recap of validClosings) {
+      const phone = normalizePhone(recap.customerPhone);
+      if (latestOrderByPhone.has(phone)) continue; // already covered by date-range orders
+      if (fallbackOrderByPhone.has(phone)) continue; // already fetched
+      if (recap.packageContent && recap.csName) continue; // no fallback needed
+      // Try by orderIdBerdu first (exact match), then by customerPhone (latest)
+      let order: Doc<"orders"> | null = null;
+      if (recap.orderIdBerdu) {
+        order = await ctx.db
+          .query("orders")
+          .withIndex("by_orderId", (q) => q.eq("orderId", recap.orderIdBerdu!))
+          .unique();
+      }
+      if (!order) {
+        const all = await ctx.db
+          .query("orders")
+          .withIndex("by_customerPhone", (q) => q.eq("customerPhone", phone))
+          .collect();
+        order = all.sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
+      }
+      if (order) fallbackOrderByPhone.set(phone, order);
+    }
+
     const productMap = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number }>();
     const csMap = new Map<string, { csName: string; leads: number; closing: number; revenue: number; discount: number }>();
 
@@ -1054,7 +1081,8 @@ export const getPerformance = query({
     }
 
     for (const recap of validClosings) {
-      const matchedOrder = latestOrderByPhone.get(normalizePhone(recap.customerPhone));
+      const phone = normalizePhone(recap.customerPhone);
+      const matchedOrder = latestOrderByPhone.get(phone) ?? fallbackOrderByPhone.get(phone);
       const product = normalizeProductName(recap.packageContent || matchedOrder?.productName || matchedOrder?.products);
       const revenue = recap.total ?? recap.codValue ?? recap.nonCodItemPrice ?? 0;
       const discount = recap.discount ?? (args.includeInferredDiscount ? recap.inferredDiscount ?? 0 : 0);
