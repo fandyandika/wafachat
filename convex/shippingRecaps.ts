@@ -1142,3 +1142,51 @@ export const getPerformance = query({
     };
   },
 });
+
+// One-off backfill: patch csName on recaps/orders/conversations for a list of Berdu order IDs.
+// Run via: npx convex run shippingRecaps:backfillCsNameByOrderIds '{"orderIds":["O-260528000047","O-260530000074","O-260530000071","O-260530000042"],"csName":"CS Risma"}'
+export const backfillCsNameByOrderIds = mutation({
+  args: { orderIds: v.array(v.string()), csName: v.string() },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const results: Array<{ orderId: string; recap: string; order: string; conversation: string }> = [];
+
+    for (const rawId of args.orderIds) {
+      const orderId = normalizeOrderId(rawId);
+      let recapAction = "not_found";
+      let orderAction = "not_found";
+      let conversationAction = "not_found";
+
+      const recap = await ctx.db
+        .query("shippingRecaps")
+        .withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", orderId))
+        .first();
+      if (recap) {
+        await ctx.db.patch(recap._id, { csName: args.csName, updatedAt: now });
+        recapAction = "patched";
+      }
+
+      const order = await ctx.db
+        .query("orders")
+        .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
+        .unique();
+      if (order) {
+        await ctx.db.patch(order._id, { assignedCsName: args.csName, updatedAt: now });
+        orderAction = "patched";
+      }
+
+      const conversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
+        .unique();
+      if (conversation) {
+        await ctx.db.patch(conversation._id, { assignedCsName: args.csName, updatedAt: now });
+        conversationAction = "patched";
+      }
+
+      results.push({ orderId, recap: recapAction, order: orderAction, conversation: conversationAction });
+    }
+
+    return { success: true, csName: args.csName, results };
+  },
+});
