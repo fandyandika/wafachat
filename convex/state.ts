@@ -13,6 +13,8 @@ import { getCsFeatureConfig } from "./csConfigs";
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.literal("closed"));
 
+const EXCLUDED_PHONES = new Set(["6285715682110", "6285774076061", "628211900201"]);
+
 async function getGlobalEnabled(ctx: { db: any }): Promise<boolean> {
   const setting = await ctx.db
     .query("settings")
@@ -726,6 +728,9 @@ export const recordStatEventFromN8n = mutation({
     source: v.optional(v.union(v.literal("ai"), v.literal("manual"))),
   },
   handler: async (ctx, args) => {
+    if (args.phone && EXCLUDED_PHONES.has(normalizePhone(args.phone))) {
+      return { success: true, skipped: true, reason: "excluded_phone", _action: "increment_stat" };
+    }
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
     const key = makeTransitionKey({
       orderId: args.order_id,
@@ -797,6 +802,7 @@ export const listConversations = query({
     }
 
     const conversations = rows
+      .filter((conversation) => !EXCLUDED_PHONES.has(normalizePhone(conversation.customerPhone)))
       .filter((conversation) => !args.csName || conversation.assignedCsName === args.csName)
       .filter((conversation) => conversation.status !== "closed" || getJakartaDate(conversation.updatedAt) === today);
     const stats = await ctx.db

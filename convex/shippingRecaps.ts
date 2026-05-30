@@ -5,7 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
 
-const INTERNAL_TEST_PHONES = new Set(["6285715682110"]);
+const INTERNAL_TEST_PHONES = new Set(["6285715682110", "6285774076061", "628211900201"]);
 
 const statusValidator = v.union(
   v.literal("ready"),
@@ -437,12 +437,12 @@ export const createFromPanelClosing = mutation({
       recipientAddress: order?.shippingAddress ?? "",
       recipientDistrict: order?.shippingDistrict ?? "",
       recipientCity: order?.shippingCity ?? "",
-      packageContent: args.packageContent || order?.productName || order?.products || "",
+      packageContent: args.packageContent || order?.productName || order?.products || (order ? "" : "Tanpa Order"),
       paymentMethod: "unknown" as PaymentMethod,
       shippingCost: parseRupiah(order?.shippingCost),
       total: parseRupiah(order?.total),
       status: "needs_review" as RecapStatus,
-      flags: ["MANUAL_CLOSING"],
+      flags: order ? ["MANUAL_CLOSING"] : ["MANUAL_CLOSING", "NO_ORDER_DATA"],
       sourceMessageText: "manual_closing_by_cs",
       updatedAt: now,
     };
@@ -591,6 +591,7 @@ export const list = query({
 
     const search = String(args.search ?? "").trim().toLowerCase();
     return rows
+      .filter((row) => !isInternalTestPhone(row.customerPhone))
       .filter((row) => !hasBerduVerified || row.flags.includes("BERDU_VERIFIED"))
       .filter((row) => !args.csName || row.csName === args.csName)
       .filter((row) => !args.paymentMethod || row.paymentMethod === args.paymentMethod)
