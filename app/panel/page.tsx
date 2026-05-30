@@ -100,6 +100,7 @@ interface Conversation {
   order_id?: string;
   updatedAt: string;
   note: string;
+  aiEnabled?: boolean;
   closingSource?: 'ai' | 'manual' | null;
   salesOutcome?: 'pending' | 'ai_won' | 'manual_won' | 'cancelled';
 }
@@ -476,7 +477,7 @@ export default function PanelPage() {
   };
 
   const active = conversations.filter((conversation) => conversation.status === 'active');
-  const handover = conversations.filter((conversation) => conversation.status === 'handover');
+  const handover = conversations.filter((conversation) => conversation.status === 'handover' && conversation.aiEnabled !== false);
   const closed = conversations.filter((conversation) => conversation.status === 'closed');
   const crAI = stats.orders > 0 ? Math.round((stats.closings / stats.orders) * 100) : 0;
   // Stats cards show today-scoped counts; queue tabs still show all unresolved conversations

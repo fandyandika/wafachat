@@ -126,6 +126,67 @@ async function getLatestConversationByPhone(ctx: { db: any }, phone: string) {
     .first();
 }
 
+export const createTestConversation = mutation({
+  args: {
+    phone: v.string(),
+    csName: v.optional(v.string()),
+    productName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const phone = normalizePhone(args.phone);
+    const csName = args.csName ?? "CS Aisyah";
+    const productName = args.productName ?? "Test Product";
+    const orderId = `TEST-${phone}-${Date.now()}`;
+    const csConfig = await getCsFeatureConfig(ctx, csName);
+    const reportable = csConfig.isActive && csConfig.reportingEnabled;
+    const aiEligible = reportable && csConfig.aiAssistantEnabled;
+
+    const existingCustomer = await ctx.db
+      .query("customers")
+      .withIndex("by_phone", (q) => q.eq("phone", phone))
+      .unique();
+    if (existingCustomer) {
+      await ctx.db.patch(existingCustomer._id, { lastSeenAt: now });
+    } else {
+      await ctx.db.insert("customers", { phone, name: "Test Customer", firstSeenAt: now, lastSeenAt: now });
+    }
+
+    await ctx.db.insert("orders", {
+      orderId,
+      customerPhone: phone,
+      customerName: "Test Customer",
+      assignedCsName: csName,
+      productName,
+      products: productName,
+      productsSubtotal: "",
+      shippingCost: "",
+      total: "",
+      shippingAddress: "",
+      shippingDistrict: "",
+      shippingCity: "",
+      source: "berdu" as const,
+      aiEligible,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const conversationId = await ctx.db.insert("conversations", {
+      orderId,
+      customerPhone: phone,
+      customerName: "Test Customer",
+      assignedCsName: csName,
+      status: "active",
+      aiEnabled: aiEligible,
+      note: "",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return { success: true, phone, orderId, conversationId, aiEnabled: aiEligible, csName };
+  },
+});
+
 export const repairDailyStats = mutation({
   args: {
     date: v.string(),
@@ -845,6 +906,7 @@ export const listConversations = query({
         order_id: conversation.orderId,
         updatedAt: new Date(conversation.updatedAt).toISOString(),
         note: conversation.note,
+        aiEnabled: conversation.aiEnabled,
         salesOutcome: cancelled ? "cancelled" : manualClosing ? "manual_won" : aiClosing || totalClosing ? "ai_won" : "pending",
         closingSource: manualClosing ? "manual" : aiClosing || totalClosing ? "ai" : null,
       };
@@ -954,7 +1016,7 @@ export const getConversationContextForN8n = query({
       status: conversation.status,
       globalEnabled,
       aiEnabled: conversation.aiEnabled,
-      canAiReply: globalEnabled && conversation.aiEnabled && conversation.status === "active",
+      canAiReply: globalEnabled && conversation.aiEnabled && conversation.status === "active" && !EXCLUDED_PHONES.has(phone),
       reportingEnabled: csConfig.isActive && csConfig.reportingEnabled,
       orderAutomationEnabled: csConfig.isActive && csConfig.orderAutomationEnabled,
       note: conversation.note,
