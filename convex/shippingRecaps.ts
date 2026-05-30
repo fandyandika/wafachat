@@ -177,7 +177,7 @@ function normalizeProductName(value: string | undefined): string {
     .replace(/\(\s*\d+\s*x\s*\)/gi, "")
     .replace(/\s+-\s+Pilih Paket:.*/i, "")
     .replace(/\s+/g, " ")
-    .trim() || "Unknown";
+    .trim() || "Tanpa Data Produk";
 }
 
 function isInternalTestPhone(value: string | undefined): boolean {
@@ -185,7 +185,7 @@ function isInternalTestPhone(value: string | undefined): boolean {
 }
 
 function normalizeCsName(value: string | undefined): string {
-  const name = cleanMarkdown(value ?? "") || "Unknown";
+  const name = cleanMarkdown(value ?? "") || "Tanpa Data CS";
   if (/^aisyah$/i.test(name)) return "CS Aisyah";
   return name;
 }
@@ -335,18 +335,20 @@ export const upsertFromN8n = mutation({
       conversationId: conversation?._id,
     });
 
+    const resolvedCsName = args.csName || order?.assignedCsName || conversation?.assignedCsName || "";
     const status: RecapStatus = existing?.status === "exported"
       ? "needs_review"
       : comparison.flags.length > 0
         ? "needs_review"
         : parsed.status;
-    const flags = existing?.status === "exported" ? unique([...comparison.flags, "UPDATED_AFTER_EXPORT"]) : comparison.flags;
+    const baseFlags = existing?.status === "exported" ? unique([...comparison.flags, "UPDATED_AFTER_EXPORT"]) : comparison.flags;
+    const flags = resolvedCsName ? baseFlags : unique([...baseFlags, "NO_CS_DATA"]);
     const payload = {
       orderIdBerdu: args.orderIdBerdu ?? order?.orderId,
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
       customerName: isGeneratedCustomerName(args.customerName) ? order?.customerName ?? conversation?.customerName ?? "" : args.customerName ?? order?.customerName ?? conversation?.customerName ?? "",
-      csName: args.csName ?? order?.assignedCsName ?? conversation?.assignedCsName ?? "",
+      csName: resolvedCsName,
       csPhone: args.csPhone ?? order?.assignedCsNumber,
       orderedAt: order?.createdAt,
       closedAt,
@@ -423,12 +425,15 @@ export const createFromPanelClosing = mutation({
       return { success: true, recapId: existing._id, status: existing.status, _action: "create_from_panel_closing", skipped: true };
     }
 
+    const resolvedCsName = args.csName || order?.assignedCsName || conversation?.assignedCsName || "";
+    const panelFlags: string[] = order ? ["MANUAL_CLOSING"] : ["MANUAL_CLOSING", "NO_ORDER_DATA"];
+    if (!resolvedCsName) panelFlags.push("NO_CS_DATA");
     const payload = {
       orderIdBerdu: args.orderId ?? order?.orderId,
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
       customerName: order?.customerName ?? conversation?.customerName ?? "",
-      csName: args.csName || order?.assignedCsName || conversation?.assignedCsName || "",
+      csName: resolvedCsName,
       csPhone: order?.assignedCsNumber,
       orderedAt: order?.createdAt,
       closedAt: now,
@@ -442,7 +447,7 @@ export const createFromPanelClosing = mutation({
       shippingCost: parseRupiah(order?.shippingCost),
       total: parseRupiah(order?.total),
       status: "needs_review" as RecapStatus,
-      flags: order ? ["MANUAL_CLOSING"] : ["MANUAL_CLOSING", "NO_ORDER_DATA"],
+      flags: panelFlags,
       sourceMessageText: "manual_closing_by_cs",
       updatedAt: now,
     };

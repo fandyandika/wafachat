@@ -1282,8 +1282,11 @@ function ShippingRecapPanel({
                       <div className="text-xs text-muted-foreground">{row.recipientDistrict}, {row.recipientCity}</div>
                       <div className="font-mono text-xs text-muted-foreground/60">{row.recipientPhone || row.customerPhone}</div>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {row.csName || '-'}
+                    <TableCell className="text-xs">
+                      {row.csName
+                        ? <span className="text-muted-foreground">{row.csName}</span>
+                        : <span className="font-medium text-amber-500">? Tanpa CS</span>
+                      }
                     </TableCell>
                     <TableCell className="max-w-[180px]">
                       <div className="truncate text-sm font-medium">{row.packageContent || '-'}</div>
@@ -1404,10 +1407,9 @@ function PerformancePanel({
     { label: 'Dibatalkan', value: data?.cancelled ?? 0, tone: 'text-destructive' },
   ];
 
-  const sortedCS = [...(data?.cs ?? [])].filter((r) => r.csName !== 'Unknown').sort((a, b) => b.closing - a.closing);
+  const sortedCS = [...(data?.cs ?? [])].sort((a, b) => b.closing - a.closing);
   const maxCSClosing = sortedCS[0]?.closing ?? 1;
-  const sortedProducts = [...(data?.products ?? [])].filter((r) => r.product !== 'Unknown').sort((a, b) => b.closing - a.closing);
-  const unknownClosings = (data?.products ?? []).find((r) => r.product === 'Unknown')?.closing ?? 0;
+  const sortedProducts = [...(data?.products ?? [])].sort((a, b) => b.closing - a.closing);
 
   return (
     <div className="space-y-4">
@@ -1457,11 +1459,6 @@ function PerformancePanel({
               ])}
               title="Produk Terlaris"
             />
-            {unknownClosings > 0 && (
-              <p className="px-1 text-[11px] text-muted-foreground">
-                {unknownClosings} closing tidak memiliki data produk (tidak ditampilkan).
-              </p>
-            )}
           </div>
           <PerformanceTable
             columns={['CS', 'Leads', 'Closing', 'CR', 'Omzet']}
