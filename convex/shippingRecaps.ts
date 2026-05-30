@@ -592,18 +592,16 @@ export const list = query({
           .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
           .order("desc")
           .take(limit * 4);
-    const hasBerduVerified = rows.some((row) => row.flags.includes("BERDU_VERIFIED"));
-
     const search = String(args.search ?? "").trim().toLowerCase();
     return rows
       .filter((row) => !isInternalTestPhone(row.customerPhone))
-      .filter((row) => !hasBerduVerified || row.flags.includes("BERDU_VERIFIED"))
       .filter((row) => !args.csName || row.csName === args.csName)
       .filter((row) => !args.paymentMethod || row.paymentMethod === args.paymentMethod)
       .filter((row) => {
         if (!search) return true;
         return [
           row.recipientName,
+          row.customerName,
           row.recipientPhone,
           row.customerPhone,
           row.orderIdBerdu,
@@ -1027,8 +1025,7 @@ export const getPerformance = query({
     const totalDelivered = recaps.filter(
       (row) => row.status === "delivered" && (!args.csName || row.csName === args.csName) && !isInternalTestPhone(row.customerPhone),
     ).length;
-    const berduVerifiedRows = validCandidateRows.filter((row) => row.flags.includes("BERDU_VERIFIED"));
-    const validClosingRows = berduVerifiedRows.length > 0 ? berduVerifiedRows : validCandidateRows;
+    const validClosingRows = validCandidateRows;
     const latestOrderByPhone = new Map<string, Doc<"orders">>();
     const latestClosingByPhone = new Map<string, Doc<"shippingRecaps">>();
 

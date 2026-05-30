@@ -479,7 +479,10 @@ export default function PanelPage() {
   const handover = conversations.filter((conversation) => conversation.status === 'handover');
   const closed = conversations.filter((conversation) => conversation.status === 'closed');
   const crAI = stats.orders > 0 ? Math.round((stats.closings / stats.orders) * 100) : 0;
-  const handoverRate = stats.orders > 0 ? Math.round((handover.length / stats.orders) * 100) : 0;
+  // Stats cards show today-scoped counts; queue tabs still show all unresolved conversations
+  const activeTodayCount = active.filter((c) => new Date(c.updatedAt).getTime() >= selectedDateRange.startAt).length;
+  const handoverTodayCount = stats.handovers; // from dailyStats — unique handover events for the selected day
+  const handoverRate = stats.orders > 0 ? Math.round((handoverTodayCount / stats.orders) * 100) : 0;
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const rowsByQueue = {
     active,
@@ -546,22 +549,22 @@ export default function PanelPage() {
       },
       {
         label: 'Handovers',
-        value: handover.length,
-        detail: 'Currently paused',
+        value: handoverTodayCount,
+        detail: `Today · Queue: ${handover.length}`,
         icon: CircleAlert,
         tone: 'text-amber-400',
       },
       {
         label: 'Handover rate',
         value: `${handoverRate}%`,
-        detail: 'Current handover / orders',
+        detail: 'Today handover / orders',
         icon: ShieldCheck,
         tone: 'text-amber-400',
       },
       {
         label: 'Active chats',
-        value: active.length,
-        detail: 'AI currently handles',
+        value: activeTodayCount,
+        detail: `Today · Queue: ${active.length}`,
         icon: MessageCircle,
         tone: 'text-sky-400',
       },
@@ -573,7 +576,7 @@ export default function PanelPage() {
         tone: 'text-muted-foreground',
       },
     ],
-    [active.length, crAI, handover.length, handoverRate, stats],
+    [active.length, activeTodayCount, crAI, handover.length, handoverTodayCount, handoverRate, stats],
   );
 
   return (

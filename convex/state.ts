@@ -266,7 +266,9 @@ export const upsertOrderFromN8n = mutation({
         await ctx.db.patch(existingConversation._id, {
           customerName,
           assignedCsName: args.csName,
-          status: existingConversation.status === "closed" ? "active" : existingConversation.status,
+          status: existingConversation.status === "active" ? "active"
+            : existingConversation.status === "closed" || aiEligible ? "active"
+            : existingConversation.status,
           aiEnabled: aiEligible,
           updatedAt: now,
         });
