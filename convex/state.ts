@@ -343,7 +343,7 @@ export const setConversationStatusFromN8n = mutation({
       updatedAt: now,
     });
 
-    if (args.status === "handover" && previousStatus !== "handover") {
+    if (args.status === "handover" && previousStatus !== "handover" && conversation.aiEnabled) {
       await patchStatsWithKey(ctx, {
         field: "handovers",
         keyField: "handoverKeys",
