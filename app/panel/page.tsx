@@ -360,7 +360,7 @@ export default function PanelPage() {
       customerPhone: conversation.phone,
       orderId: conversation.order_id,
       packageContent: conversation.productName || conversation.products,
-      csName: conversation.csName,
+      csName: conversation.csName || (selectedCsName !== 'all' ? selectedCsName : ''),
     });
     setActionLoading(null);
   };
