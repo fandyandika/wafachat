@@ -32,15 +32,15 @@ const DEFAULT_CONFIGS: CsFeatureConfig[] = [
     csName: "CS Lila",
     orderAutomationEnabled: false,
     aiAssistantEnabled: false,
-    reportingEnabled: true,
-    isActive: true,
+    reportingEnabled: false,
+    isActive: false,
   },
   {
     csName: "CS Azela",
     orderAutomationEnabled: false,
     aiAssistantEnabled: false,
-    reportingEnabled: true,
-    isActive: true,
+    reportingEnabled: false,
+    isActive: false,
   },
 ];
 
