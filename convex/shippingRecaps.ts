@@ -1190,3 +1190,47 @@ export const backfillCsNameByOrderIds = mutation({
     return { success: true, csName: args.csName, results };
   },
 });
+
+// One-off backfill: patch customerName + csName on conversations/orders/recaps by phone number.
+// Run via: npx convex run shippingRecaps:backfillByPhone '{"entries":[{"phone":"6285260251151","customerName":"Fika Syi Farol","csName":"CS Risma"}]}'
+export const backfillByPhone = mutation({
+  args: {
+    entries: v.array(v.object({ phone: v.string(), customerName: v.string(), csName: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const results: Array<{ phone: string; conversations: number; orders: number; recaps: number }> = [];
+
+    for (const entry of args.entries) {
+      const phone = normalizePhone(entry.phone);
+
+      const conversations = await ctx.db
+        .query("conversations")
+        .withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", phone))
+        .collect();
+      for (const conv of conversations) {
+        await ctx.db.patch(conv._id, { customerName: entry.customerName, assignedCsName: entry.csName, updatedAt: now });
+      }
+
+      const orders = await ctx.db
+        .query("orders")
+        .withIndex("by_customerPhone", (q) => q.eq("customerPhone", phone))
+        .collect();
+      for (const order of orders) {
+        await ctx.db.patch(order._id, { customerName: entry.customerName, assignedCsName: entry.csName, updatedAt: now });
+      }
+
+      const recaps = await ctx.db
+        .query("shippingRecaps")
+        .withIndex("by_customerPhone", (q) => q.eq("customerPhone", phone))
+        .collect();
+      for (const recap of recaps) {
+        await ctx.db.patch(recap._id, { customerName: entry.customerName, csName: entry.csName, updatedAt: now });
+      }
+
+      results.push({ phone, conversations: conversations.length, orders: orders.length, recaps: recaps.length });
+    }
+
+    return { success: true, results };
+  },
+});
