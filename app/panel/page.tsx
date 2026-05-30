@@ -119,7 +119,7 @@ type QueueKey = 'active' | 'handover' | 'closed' | 'all';
 type PanelView = 'dashboard' | 'shipping' | 'performance';
 type RecapStatus = 'ready' | 'needs_review' | 'exported' | 'delivered' | 'cancelled' | 'cancelled_after_export';
 type PaymentFilter = 'all' | 'cod' | 'transfer';
-type DateRangeKey = 'today' | 'yesterday' | '7d' | '30d' | 'month';
+type DateRangeKey = 'today' | 'yesterday' | '7d' | '30d' | 'month' | 'custom';
 type RecapSort = 'newest' | 'oldest' | 'value_asc' | 'value_desc' | 'status';
 
 interface ShippingRecap {
@@ -198,7 +198,8 @@ export default function PanelPage() {
   const [paymentFilter, setPaymentFilter] = useState<PaymentFilter>('all');
   const [recapSearch, setRecapSearch] = useState('');
   const [selectedRecap, setSelectedRecap] = useState<ShippingRecap | null>(null);
-  const [dateRange, setDateRange] = useState<DateRangeKey>('7d');
+  const [dateRange, setDateRange] = useState<DateRangeKey>('today');
+  const [customDate, setCustomDate] = useState('');
   const [recapSort, setRecapSort] = useState<RecapSort>('newest');
   const [selectedRecapIds, setSelectedRecapIds] = useState<Set<string>>(new Set());
   const [bulkCancelOpen, setBulkCancelOpen] = useState(false);
@@ -213,29 +214,37 @@ export default function PanelPage() {
     const end = new Date(now);
     end.setHours(23, 59, 59, 999);
 
-    if (dateRange === 'yesterday') {
+    if (dateRange === 'custom' && customDate) {
+      const d = new Date(customDate + 'T12:00:00'); // noon avoids DST edge cases
+      start.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
+      start.setHours(0, 0, 0, 0);
+      end.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
+      end.setHours(23, 59, 59, 999);
+    } else if (dateRange === 'yesterday') {
       start.setDate(start.getDate() - 1);
       end.setDate(end.getDate() - 1);
-    }
-
-    if (dateRange === '7d') {
+    } else if (dateRange === '7d') {
       start.setDate(start.getDate() - 6);
-    }
-
-    if (dateRange === '30d') {
+    } else if (dateRange === '30d') {
       start.setDate(start.getDate() - 29);
-    }
-
-    if (dateRange === 'month') {
+    } else if (dateRange === 'month') {
       start.setDate(1);
     }
 
     return { startAt: start.getTime(), endAt: end.getTime() };
-  }, [dateRange]);
+  }, [dateRange, customDate]);
+
+  // Jakarta date string for the END of selected range — used by getDailyStats
+  const selectedJakartaDate = useMemo(() => {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(new Date(selectedDateRange.endAt));
+  }, [selectedDateRange.endAt]);
 
   const csFilter = selectedCsName === 'all' ? undefined : selectedCsName;
   const conversationsData = useQuery(api.state.listConversations, { includeClosed: true, csName: csFilter });
-  const statsData = useQuery(api.state.getDailyStats, {});
+  const statsData = useQuery(api.state.getDailyStats, { date: selectedJakartaDate });
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
   const csConfigsData = useQuery(api.csConfigs.list, {});
   const shippingRecapsData = useQuery(api.shippingRecaps.list, {
@@ -501,16 +510,16 @@ export default function PanelPage() {
   const cards = useMemo(
     () => [
       {
-        label: 'Orders today',
+        label: 'Orders',
         value: stats.orders,
         detail: 'Unique order count',
         icon: Activity,
         tone: 'text-sky-400',
       },
       {
-        label: 'AI closing',
-        value: stats.ai_closings ?? Math.max(stats.closings - (stats.manual_closings ?? 0), 0),
-        detail: 'Detected by AI',
+        label: 'Total Closing',
+        value: stats.closings,
+        detail: `AI: ${stats.ai_closings ?? 0} · Manual: ${stats.manual_closings ?? 0}`,
         icon: CheckCircle2,
         tone: 'text-emerald-400',
       },
@@ -557,7 +566,7 @@ export default function PanelPage() {
         tone: 'text-sky-400',
       },
       {
-        label: 'Archived today',
+        label: 'Archived',
         value: stats.closed_today,
         detail: 'Chat archived',
         icon: Clock3,
@@ -693,6 +702,43 @@ export default function PanelPage() {
           </header>
 
           <div className="space-y-6 p-4 md:p-6">
+            {/* Global date filter — controls all views */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">Periode:</span>
+              {([
+                { label: 'Hari ini', value: 'today' },
+                { label: 'Kemarin', value: 'yesterday' },
+                { label: '7 hari', value: '7d' },
+                { label: '30 hari', value: '30d' },
+                { label: 'Bulan ini', value: 'month' },
+              ] as Array<{ label: string; value: DateRangeKey }>).map((item) => (
+                <Button
+                  key={item.value}
+                  size="sm"
+                  variant={dateRange === item.value ? 'default' : 'outline'}
+                  onClick={() => setDateRange(item.value)}
+                >
+                  {item.label}
+                </Button>
+              ))}
+              <Button
+                size="sm"
+                variant={dateRange === 'custom' ? 'default' : 'outline'}
+                onClick={() => setDateRange('custom')}
+              >
+                Pilih Tanggal
+              </Button>
+              {dateRange === 'custom' && (
+                <input
+                  type="date"
+                  value={customDate}
+                  max={new Date().toISOString().split('T')[0]}
+                  onChange={(e) => { setCustomDate(e.target.value); }}
+                  className="h-9 rounded-md border bg-background px-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              )}
+            </div>
+
             {panelView === 'dashboard' && (
               <>
                 <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
@@ -766,7 +812,6 @@ export default function PanelPage() {
               <>
                 <ShippingRecapPanel
                   actionLoading={actionLoading}
-                  dateRange={dateRange}
                   paymentFilter={paymentFilter}
                   readyCount={readyRecaps.length}
                   recapSearch={recapSearch}
@@ -785,7 +830,6 @@ export default function PanelPage() {
                   onCancel={cancelRecap}
                   onDelivered={markDeliveredRecap}
                   onDownload={() => downloadRecapCsv()}
-                  onDateRangeChange={setDateRange}
                   onOpenDetail={setSelectedRecap}
                   onPaymentFilterChange={setPaymentFilter}
                   onReady={markReadyRecap}
@@ -826,7 +870,7 @@ export default function PanelPage() {
             )}
 
             {panelView === 'performance' && (
-              <PerformancePanel data={performance} dateRange={dateRange} onDateRangeChange={setDateRange} />
+              <PerformancePanel data={performance} />
             )}
           </div>
         </main>
@@ -934,7 +978,6 @@ function MetricSkeleton() {
 
 function ShippingRecapPanel({
   actionLoading,
-  dateRange,
   paymentFilter,
   readyCount,
   recapSearch,
@@ -947,7 +990,6 @@ function ShippingRecapPanel({
   onBulkExport,
   onBulkReady,
   onCancel,
-  onDateRangeChange,
   onDelivered,
   onDownload,
   onOpenDetail,
@@ -962,7 +1004,6 @@ function ShippingRecapPanel({
   onUndoDelivered,
 }: {
   actionLoading: string | null;
-  dateRange: DateRangeKey;
   paymentFilter: PaymentFilter;
   readyCount: number;
   recapSearch: string;
@@ -975,7 +1016,6 @@ function ShippingRecapPanel({
   onBulkExport: () => void;
   onBulkReady: () => void;
   onCancel: (recap: ShippingRecap) => void;
-  onDateRangeChange: (range: DateRangeKey) => void;
   onDelivered: (recap: ShippingRecap) => void;
   onDownload: () => void;
   onOpenDetail: (recap: ShippingRecap) => void;
@@ -1013,12 +1053,6 @@ function ShippingRecapPanel({
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
   const someSelected = selectedIds.size > 0;
 
-  const dateItems: Array<{ label: string; value: DateRangeKey }> = [
-    { label: 'Hari ini', value: 'today' },
-    { label: '7 hari', value: '7d' },
-    { label: '30 hari', value: '30d' },
-    { label: 'Bulan ini', value: 'month' },
-  ];
   const statusItems: Array<{ label: string; value: RecapStatus | 'all'; count: number }> = [
     { label: 'Semua', value: 'all', count: counts.all },
     { label: '⚠ Perlu Review', value: 'needs_review', count: counts.needs_review },
@@ -1058,22 +1092,7 @@ function ShippingRecapPanel({
       {/* Filter bar */}
       <Card>
         <CardContent className="space-y-3 pt-4">
-          {/* Row 1: Date */}
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="min-w-[52px] text-xs font-medium text-muted-foreground">Periode:</span>
-            {dateItems.map((item) => (
-              <Button
-                key={item.value}
-                onClick={() => onDateRangeChange(item.value)}
-                size="sm"
-                variant={dateRange === item.value ? 'default' : 'outline'}
-              >
-                {item.label}
-              </Button>
-            ))}
-          </div>
-
-          {/* Row 2: Status chips */}
+          {/* Status chips */}
           <div className="flex flex-wrap items-center gap-2">
             <span className="min-w-[52px] text-xs font-medium text-muted-foreground">Status:</span>
             {statusItems.map((item) => (
@@ -1363,21 +1382,11 @@ function ShippingRecapPanel({
 
 function PerformancePanel({
   data,
-  dateRange,
-  onDateRangeChange,
 }: {
   data?: PerformanceData;
-  dateRange: DateRangeKey;
-  onDateRangeChange: (range: DateRangeKey) => void;
 }) {
   const [perfTab, setPerfTab] = useState<'summary' | 'cs' | 'product'>('summary');
 
-  const dateItems: Array<{ label: string; value: DateRangeKey }> = [
-    { label: 'Hari ini', value: 'today' },
-    { label: '7 hari', value: '7d' },
-    { label: '30 hari', value: '30d' },
-    { label: 'Bulan ini', value: 'month' },
-  ];
   const tabs = [
     { key: 'summary' as const, label: 'Ringkasan' },
     { key: 'cs' as const, label: 'Per CS' },
@@ -1395,41 +1404,28 @@ function PerformancePanel({
     { label: 'Dibatalkan', value: data?.cancelled ?? 0, tone: 'text-destructive' },
   ];
 
-  const sortedCS = [...(data?.cs ?? [])].sort((a, b) => b.closing - a.closing);
+  const sortedCS = [...(data?.cs ?? [])].filter((r) => r.csName !== 'Unknown').sort((a, b) => b.closing - a.closing);
   const maxCSClosing = sortedCS[0]?.closing ?? 1;
-  const sortedProducts = [...(data?.products ?? [])].sort((a, b) => b.closing - a.closing);
+  const sortedProducts = [...(data?.products ?? [])].filter((r) => r.product !== 'Unknown').sort((a, b) => b.closing - a.closing);
+  const unknownClosings = (data?.products ?? []).find((r) => r.product === 'Unknown')?.closing ?? 0;
 
   return (
     <div className="space-y-4">
-      {/* Topbar: tabs + date */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex gap-1 rounded-lg border bg-muted/30 p-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setPerfTab(tab.key)}
-              className={cn(
-                'rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
-                perfTab === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-              )}
-              type="button"
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {dateItems.map((item) => (
-            <Button
-              key={item.value}
-              onClick={() => onDateRangeChange(item.value)}
-              size="sm"
-              variant={dateRange === item.value ? 'default' : 'outline'}
-            >
-              {item.label}
-            </Button>
-          ))}
-        </div>
+      {/* Topbar: tabs */}
+      <div className="flex gap-1 rounded-lg border bg-muted/30 p-1 w-fit">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setPerfTab(tab.key)}
+            className={cn(
+              'rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+              perfTab === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+            )}
+            type="button"
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {/* KPI row */}
@@ -1449,17 +1445,24 @@ function PerformancePanel({
       {/* Tab content */}
       {perfTab === 'summary' && (
         <div className="grid gap-4 xl:grid-cols-2">
-          <PerformanceTable
-            columns={['Produk', 'Leads', 'Closing', 'CR', 'Omzet']}
-            rows={sortedProducts.map((row) => [
-              row.product,
-              row.leads,
-              row.closing,
-              `${row.cr}%`,
-              formatRupiah(row.revenue),
-            ])}
-            title="Produk Terlaris"
-          />
+          <div className="space-y-1">
+            <PerformanceTable
+              columns={['Produk', 'Leads', 'Closing', 'CR', 'Omzet']}
+              rows={sortedProducts.map((row) => [
+                row.product,
+                row.leads,
+                row.closing,
+                `${row.cr}%`,
+                formatRupiah(row.revenue),
+              ])}
+              title="Produk Terlaris"
+            />
+            {unknownClosings > 0 && (
+              <p className="px-1 text-[11px] text-muted-foreground">
+                {unknownClosings} closing tidak memiliki data produk (tidak ditampilkan).
+              </p>
+            )}
+          </div>
           <PerformanceTable
             columns={['CS', 'Leads', 'Closing', 'CR', 'Omzet']}
             rows={sortedCS.map((row) => [
