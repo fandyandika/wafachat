@@ -1063,7 +1063,9 @@ export const getPerformance = query({
     ).length;
     const validClosingRows = validCandidateRows;
     const latestOrderByPhone = new Map<string, Doc<"orders">>();
-    const latestClosingByPhone = new Map<string, Doc<"shippingRecaps">>();
+    // Dedup by orderIdBerdu (unique order) with phone fallback.
+    // Phone-only dedup was too aggressive: same customer with 2 separate orders got only 1 closing counted.
+    const latestClosingByKey = new Map<string, Doc<"shippingRecaps">>();
 
     for (const order of realOrders) {
       const phone = normalizePhone(order.customerPhone);
@@ -1072,13 +1074,13 @@ export const getPerformance = query({
     }
 
     for (const recap of validClosingRows) {
-      const phone = normalizePhone(recap.customerPhone);
-      const existing = latestClosingByPhone.get(phone);
-      if (!existing || recap.closedAt > existing.closedAt) latestClosingByPhone.set(phone, recap);
+      const key = recap.orderIdBerdu || normalizePhone(recap.customerPhone);
+      const existing = latestClosingByKey.get(key);
+      if (!existing || recap.closedAt > existing.closedAt) latestClosingByKey.set(key, recap);
     }
 
     const uniqueOrders = Array.from(latestOrderByPhone.values());
-    const validClosings = Array.from(latestClosingByPhone.values());
+    const validClosings = Array.from(latestClosingByKey.values());
 
     // For closings whose order isn't in the date-range window (order created before startAt),
     // do a targeted fallback lookup by orderIdBerdu or customerPhone.

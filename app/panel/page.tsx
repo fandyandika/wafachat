@@ -572,8 +572,8 @@ export default function PanelPage() {
       },
       {
         label: 'Active chats',
-        value: activeTodayCount,
-        detail: `Today · Queue: ${active.length}`,
+        value: active.length,
+        detail: `Today · Updated: ${activeTodayCount}`,
         icon: MessageCircle,
         tone: 'text-sky-400',
       },
@@ -1490,12 +1490,14 @@ function PerformancePanel({
     { key: 'product' as const, label: 'Per Produk' },
   ];
 
+  const unknownPayment = (data?.totalClosing ?? 0) - (data?.totalCod ?? 0) - (data?.totalTransfer ?? 0);
   const kpiCards = [
     { label: 'Total Percakapan', value: data?.totalLeads ?? 0, tone: 'text-sky-500' },
     { label: 'Total Closing', value: data?.totalClosing ?? 0, tone: 'text-emerald-500' },
     { label: 'Conversion Rate', value: `${data?.overallCr ?? 0}%`, tone: 'text-violet-500' },
     { label: 'COD', value: data?.totalCod ?? 0, tone: 'text-amber-500' },
     { label: 'Transfer', value: data?.totalTransfer ?? 0, tone: 'text-blue-500' },
+    { label: 'Metode?', value: unknownPayment, tone: unknownPayment > 0 ? 'text-orange-400' : 'text-muted-foreground' },
     { label: 'Omzet', value: formatRupiah(data?.totalRevenue), tone: 'text-emerald-600' },
     { label: 'Terkirim', value: data?.delivered ?? 0, tone: 'text-teal-500' },
     { label: 'Dibatalkan', value: data?.cancelled ?? 0, tone: 'text-destructive' },
@@ -1525,7 +1527,7 @@ function PerformancePanel({
       </div>
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-9">
         {kpiCards.map((card) => (
           <Card key={card.label} size="sm">
             <CardHeader>
