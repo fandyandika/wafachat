@@ -479,7 +479,11 @@ export default function PanelPage() {
   const active = conversations.filter((conversation) => conversation.status === 'active');
   const handover = conversations.filter((conversation) => conversation.status === 'handover' && conversation.aiEnabled !== false);
   const closed = conversations.filter((conversation) => conversation.status === 'closed');
-  const crAI = stats.orders > 0 ? Math.round((stats.closings / stats.orders) * 100) : 0;
+  // Closing stats from shippingRecaps (same source as Performance tab) — accurate
+  const totalClosing = performance?.totalClosing ?? 0;
+  const manualClosings = stats.manual_closings ?? 0;
+  const aiClosings = Math.max(totalClosing - manualClosings, 0);
+  const crPerf = performance?.overallCr ?? 0;
   // Stats cards show today-scoped counts; queue tabs still show all unresolved conversations
   const activeTodayCount = active.filter((c) => new Date(c.updatedAt).getTime() >= selectedDateRange.startAt).length;
   const handoverTodayCount = stats.handovers; // from dailyStats — unique handover events for the selected day
@@ -522,31 +526,31 @@ export default function PanelPage() {
       },
       {
         label: 'Total Closing',
-        value: stats.closings,
-        detail: `AI: ${stats.ai_closings ?? 0} · Manual: ${stats.manual_closings ?? 0}`,
+        value: totalClosing,
+        detail: `AI: ${aiClosings} · Manual: ${manualClosings}`,
         icon: CheckCircle2,
         tone: 'text-emerald-400',
       },
       {
         label: 'Manual closing',
-        value: stats.manual_closings ?? 0,
+        value: manualClosings,
         detail: 'Marked by CS',
         icon: CheckCircle2,
         tone: 'text-sky-400',
       },
       {
         label: 'Cancelled',
-        value: stats.cancelled ?? 0,
+        value: performance?.cancelled ?? stats.cancelled ?? 0,
         detail: 'Customer cancelled',
         icon: CircleAlert,
         tone: 'text-destructive',
       },
       {
         label: 'Closing rate',
-        value: `${crAI}%`,
+        value: `${crPerf}%`,
         detail: 'Closing / orders',
         icon: BarChart3,
-        tone: crAI > 100 ? 'text-destructive' : 'text-emerald-400',
+        tone: crPerf > 100 ? 'text-destructive' : 'text-emerald-400',
       },
       {
         label: 'Handovers',
@@ -577,7 +581,7 @@ export default function PanelPage() {
         tone: 'text-muted-foreground',
       },
     ],
-    [active.length, activeTodayCount, crAI, handover.length, handoverTodayCount, handoverRate, stats],
+    [active.length, activeTodayCount, aiClosings, crPerf, handover.length, handoverTodayCount, handoverRate, manualClosings, performance, stats, totalClosing],
   );
 
   return (
@@ -800,11 +804,12 @@ export default function PanelPage() {
                       </CardHeader>
                       <CardContent className="space-y-2 text-sm text-muted-foreground">
                         <Formula label="Orders" value="unique phone + product" />
-                        <Formula label="AI Closing" value="AI detected" />
-                        <Formula label="Manual Closing" value="CS marked" />
-                        <Formula label="Cancelled" value="CS marked" />
-                        <Formula label="Closing rate" value="closing / orders" />
-                        <Formula label="Handover rate" value="current handovers / orders" />
+                        <Formula label="Total Closing" value="dari shippingRecaps" />
+                        <Formula label="AI Closing" value="total − manual closing" />
+                        <Formula label="Manual Closing" value="CS marked di panel" />
+                        <Formula label="Cancelled" value="dari shippingRecaps" />
+                        <Formula label="Closing rate" value="closing / leads" />
+                        <Formula label="Handover rate" value="handovers / orders" />
                       </CardContent>
                     </Card>
                   </aside>
