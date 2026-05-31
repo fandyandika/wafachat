@@ -255,7 +255,6 @@ export default function PanelPage() {
     paymentMethod: paymentFilter === 'all' ? undefined : paymentFilter,
     search: recapSearch || undefined,
     csName: csFilter,
-    limit: 75,
   });
   const performanceData = useQuery(api.shippingRecaps.getPerformance, {
     startAt: selectedDateRange.startAt,

@@ -575,10 +575,8 @@ export const list = query({
     paymentMethod: v.optional(paymentMethodValidator),
     search: v.optional(v.string()),
     csName: v.optional(v.string()),
-    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const limit = Math.min(args.limit ?? 50, 100);
     const rows = args.status
       ? await ctx.db
           .query("shippingRecaps")
@@ -586,12 +584,12 @@ export const list = query({
             q.eq("status", args.status as RecapStatus).gte("closedAt", args.startAt).lte("closedAt", args.endAt),
           )
           .order("desc")
-          .take(limit * 4)
+          .collect()
       : await ctx.db
           .query("shippingRecaps")
           .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
           .order("desc")
-          .take(limit * 4);
+          .collect();
     const search = String(args.search ?? "").trim().toLowerCase();
     return rows
       .filter((row) => !isInternalTestPhone(row.customerPhone))
@@ -611,8 +609,46 @@ export const list = query({
         ]
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(search));
-      })
-      .slice(0, limit);
+      });
+  },
+});
+
+export const getCounts = query({
+  args: {
+    startAt: v.number(),
+    endAt: v.number(),
+    csName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("shippingRecaps")
+      .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
+      .collect();
+
+    const filtered = rows.filter(
+      (row) =>
+        !isInternalTestPhone(row.customerPhone) &&
+        (!args.csName || row.csName === args.csName),
+    );
+
+    const nonCancelled = filtered.filter(
+      (row) => row.status !== "cancelled" && row.status !== "cancelled_after_export",
+    );
+
+    return {
+      all: filtered.length,
+      needs_review: filtered.filter((r) => r.status === "needs_review").length,
+      ready: filtered.filter((r) => r.status === "ready").length,
+      exported: filtered.filter((r) => r.status === "exported").length,
+      delivered: filtered.filter((r) => r.status === "delivered").length,
+      cancelled: filtered.filter(
+        (r) => r.status === "cancelled" || r.status === "cancelled_after_export",
+      ).length,
+      totalCodValue: nonCancelled.reduce(
+        (sum, r) => sum + (r.codValue ?? r.total ?? 0),
+        0,
+      ),
+    };
   },
 });
 
