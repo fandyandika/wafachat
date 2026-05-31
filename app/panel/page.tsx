@@ -262,6 +262,11 @@ export default function PanelPage() {
     includeInferredDiscount: false,
     csName: csFilter,
   });
+  const countsData = useQuery(api.shippingRecaps.getCounts, {
+    startAt: selectedDateRange.startAt,
+    endAt: selectedDateRange.endAt,
+    csName: csFilter,
+  });
   const setConversationStatus = useMutation(api.state.setConversationStatusFromN8n);
   const markNotClosing = useMutation(api.state.markConversationNotClosing);
   const markClosing = useMutation(api.state.markConversationClosing);
@@ -820,6 +825,8 @@ export default function PanelPage() {
               <>
                 <ShippingRecapPanel
                   actionLoading={actionLoading}
+                  csName={csFilter}
+                  totalCounts={countsData}
                   paymentFilter={paymentFilter}
                   readyCount={readyRecaps.length}
                   recapSearch={recapSearch}
