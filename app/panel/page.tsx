@@ -993,6 +993,8 @@ function MetricSkeleton() {
 
 function ShippingRecapPanel({
   actionLoading,
+  csName,
+  totalCounts,
   paymentFilter,
   readyCount,
   recapSearch,
@@ -1019,6 +1021,16 @@ function ShippingRecapPanel({
   onUndoDelivered,
 }: {
   actionLoading: string | null;
+  csName: string | undefined;
+  totalCounts: {
+    all: number;
+    needs_review: number;
+    ready: number;
+    exported: number;
+    delivered: number;
+    cancelled: number;
+    totalCodValue: number;
+  } | undefined;
   paymentFilter: PaymentFilter;
   readyCount: number;
   recapSearch: string;
@@ -1044,7 +1056,7 @@ function ShippingRecapPanel({
   onUndoCancel: (recap: ShippingRecap) => void;
   onUndoDelivered: (recap: ShippingRecap) => void;
 }) {
-  const counts = {
+  const rowCounts = {
     all: rows.length,
     needs_review: rows.filter((r) => r.status === 'needs_review').length,
     ready: rows.filter((r) => r.status === 'ready').length,
@@ -1052,6 +1064,14 @@ function ShippingRecapPanel({
     delivered: rows.filter((r) => r.status === 'delivered').length,
     cancelled: rows.filter((r) => r.status === 'cancelled' || r.status === 'cancelled_after_export').length,
   };
+  const counts = totalCounts ?? rowCounts;
+
+  const PAGE_SIZE = 25;
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [recapStatus, paymentFilter, recapSearch, csName]);
 
   const sortedRows = useMemo(() => {
     const sorted = [...rows];
@@ -1061,6 +1081,9 @@ function ShippingRecapPanel({
     if (recapSort === 'status') return sorted.sort((a, b) => a.status.localeCompare(b.status));
     return sorted.sort((a, b) => b.closedAt - a.closedAt);
   }, [rows, recapSort]);
+
+  const totalPages = Math.ceil(sortedRows.length / PAGE_SIZE);
+  const pagedRows = sortedRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   const selectableIds = sortedRows
     .filter((r) => r.status !== 'cancelled' && r.status !== 'cancelled_after_export')
@@ -1078,9 +1101,10 @@ function ShippingRecapPanel({
   ];
 
   // Stats for summary cards
-  const totalCodValue = rows
-    .filter((r) => r.status !== 'cancelled' && r.status !== 'cancelled_after_export')
-    .reduce((sum, r) => sum + (r.codValue ?? r.total ?? 0), 0);
+  const totalCodValue = totalCounts?.totalCodValue ??
+    rows
+      .filter((r) => r.status !== 'cancelled' && r.status !== 'cancelled_after_export')
+      .reduce((sum, r) => sum + (r.codValue ?? r.total ?? 0), 0);
 
   return (
     <div className="space-y-4">
@@ -1267,7 +1291,7 @@ function ShippingRecapPanel({
                 </TableCell>
               </TableRow>
             ) : (
-              sortedRows.map((row, idx) => {
+              pagedRows.map((row, idx) => {
                 const isCancelled = row.status === 'cancelled' || row.status === 'cancelled_after_export';
                 const isSelected = selectedIds.has(row._id);
                 return (
@@ -1286,7 +1310,7 @@ function ShippingRecapPanel({
                         aria-label={`Pilih ${row.recipientName}`}
                       />
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{(currentPage - 1) * PAGE_SIZE + idx + 1}</TableCell>
                     <TableCell>
                       <button
                         className={cn('text-left font-medium hover:underline', isCancelled && 'line-through text-muted-foreground')}
@@ -1394,6 +1418,61 @@ function ShippingRecapPanel({
           </TableBody>
         </Table>
       </div>
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 pt-2">
+          <button
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage((p) => p - 1)}
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            type="button"
+          >
+            ← Prev
+          </button>
+          {Array.from({ length: totalPages }, (_, i) => i + 1)
+            .filter((page) => {
+              if (totalPages <= 7) return true;
+              if (page === 1 || page === totalPages) return true;
+              if (Math.abs(page - currentPage) <= 2) return true;
+              return false;
+            })
+            .reduce<(number | '...')[]>((acc, page, i, arr) => {
+              if (i > 0 && typeof arr[i - 1] === 'number' && (page as number) - (arr[i - 1] as number) > 1) {
+                acc.push('...');
+              }
+              acc.push(page);
+              return acc;
+            }, [])
+            .map((item, i) =>
+              item === '...' ? (
+                <span key={`ellipsis-${i}`} className="px-1 text-xs text-muted-foreground">…</span>
+              ) : (
+                <button
+                  key={item}
+                  onClick={() => setCurrentPage(item as number)}
+                  className={cn(
+                    'rounded-md border px-3 py-1.5 text-xs font-medium transition-colors',
+                    currentPage === item
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-background text-muted-foreground hover:text-foreground',
+                  )}
+                  type="button"
+                >
+                  {item}
+                </button>
+              ),
+            )}
+          <button
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage((p) => p + 1)}
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            type="button"
+          >
+            Next →
+          </button>
+        </div>
+      )}
     </div>
   );
 }
