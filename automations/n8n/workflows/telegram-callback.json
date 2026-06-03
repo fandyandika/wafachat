@@ -1,0 +1,24 @@
+{
+  "id": "PvMTP5Ex3kzvjNgG",
+  "name": "WaFaChat · Telegram Callback",
+  "active": true,
+  "nodes": [
+    {"id":"node-tg-trigger","name":"Tg Callback Trigger","type":"n8n-nodes-base.telegramTrigger","typeVersion":1.1,"position":[240,300],"parameters":{"updates":["callback_query"]},"credentials":{"telegramApi":{"id":"BNv9Fk7CC6wpafvg","name":"Telegram Bot CS Notifier"}},"webhookId":"2a31dfc3-cb22-4f7a-8788-7b10759ed9a4"},
+    {"id":"node-parse-cb","name":"Parse Callback","type":"n8n-nodes-base.code","typeVersion":2,"position":[460,300],"parameters":{"jsCode":"const update = $input.first().json;\nconst cbq = update.callback_query || update;\nconst callbackId = cbq.id || '';\nconst callbackData = cbq.data || '';\nconst chatId = (cbq.message && cbq.message.chat && cbq.message.chat.id) ? cbq.message.chat.id.toString() : (cbq.from ? cbq.from.id.toString() : '');\nconst messageId = (cbq.message && cbq.message.message_id) ? cbq.message.message_id : '';\nconst colonIdx = callbackData.indexOf(':');\nif (colonIdx === -1) return [];\nconst action = callbackData.substring(0, colonIdx);\nconst phone = callbackData.substring(colonIdx + 1);\nif (!action || !phone || !['resume_ai', 'selesai'].includes(action)) return [];\nreturn [{ json: { action, phone, chatId, callbackId, messageId } }];"}},
+    {"id":"node-route-action","name":"Route Action","type":"n8n-nodes-base.if","typeVersion":2.2,"position":[680,300],"parameters":{"conditions":{"options":{"caseSensitive":false,"leftValue":"","typeValidation":"strict","version":2},"conditions":[{"id":"action-check","leftValue":"={{ $json.action }}","rightValue":"resume_ai","operator":{"type":"string","operation":"equals"}}],"combinator":"and"},"options":{}}},
+    {"id":"node-set-active","name":"Set State Active","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[900,160],"parameters":{"method":"POST","url":"https://n8n.miqra.dev/webhook/conversation-state","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify({action: 'set', phone: $json.phone, status: 'active'}) }}","options":{"response":{"response":{"neverError":true}}}}},
+    {"id":"node-reply-resume","name":"Send Resume Confirm","type":"n8n-nodes-base.telegram","typeVersion":1.2,"position":[1120,160],"parameters":{"resource":"message","operation":"sendMessage","chatId":"={{ $('Parse Callback').item.json.chatId }}","text":"={{ '✅ AI diaktifkan kembali untuk ' + $('Parse Callback').item.json.phone }}","additionalFields":{}},"credentials":{"telegramApi":{"id":"BNv9Fk7CC6wpafvg","name":"Telegram Bot CS Notifier"}}},
+    {"id":"node-set-closed","name":"Set State Closed","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[900,440],"parameters":{"method":"POST","url":"https://n8n.miqra.dev/webhook/conversation-state","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify({action: 'set', phone: $json.phone, status: 'closed'}) }}","options":{"response":{"response":{"neverError":true}}}}},
+    {"id":"node-reply-selesai","name":"Send Selesai Confirm","type":"n8n-nodes-base.telegram","typeVersion":1.2,"position":[1120,440],"parameters":{"resource":"message","operation":"sendMessage","chatId":"={{ $('Parse Callback').item.json.chatId }}","text":"={{ '✅ Percakapan ' + $('Parse Callback').item.json.phone + ' ditandai selesai' }}","additionalFields":{}},"credentials":{"telegramApi":{"id":"BNv9Fk7CC6wpafvg","name":"Telegram Bot CS Notifier"}}}
+  ],
+  "connections": {
+    "Tg Callback Trigger": {"main":[[{"node":"Parse Callback","type":"main","index":0}]]},
+    "Parse Callback": {"main":[[{"node":"Route Action","type":"main","index":0}]]},
+    "Route Action": {"main":[[{"node":"Set State Active","type":"main","index":0}],[{"node":"Set State Closed","type":"main","index":0}]]},
+    "Set State Active": {"main":[[{"node":"Send Resume Confirm","type":"main","index":0}]]},
+    "Set State Closed": {"main":[[{"node":"Send Selesai Confirm","type":"main","index":0}]]}
+  },
+  "settings": {"executionOrder":"v1","saveDataErrorExecution":"all","saveDataSuccessExecution":"none"},
+  "versionId": "e493b172-9975-415a-b213-c6599c08041f",
+  "updatedAt": "2026-05-26T04:43:07.191Z"
+}

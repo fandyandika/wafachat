@@ -1,0 +1,15 @@
+{
+  "id": "Pu5qEcSpu7e7NV09",
+  "name": "WaFaChat · Telegram Setup",
+  "active": true,
+  "nodes": [
+    {"id":"node-tg-trigger","name":"Telegram Trigger","type":"n8n-nodes-base.telegramTrigger","typeVersion":1.1,"position":[240,300],"parameters":{"updates":["message"]},"credentials":{"telegramApi":{"id":"BNv9Fk7CC6wpafvg","name":"Telegram Bot CS Notifier"}},"webhookId":"825f6750-244d-4df2-b3ab-9f8c0a8d4675"},
+    {"id":"node-tg-reply","name":"Balas Chat ID","type":"n8n-nodes-base.telegram","typeVersion":1.2,"position":[460,300],"parameters":{"resource":"message","operation":"sendMessage","chatId":"={{ $json.message.chat.id }}","text":"={{ 'Halo ' + $json.message.from.first_name + '! 👋\\n\\nChat ID kamu adalah:\\n\\n`' + $json.message.chat.id + '`\\n\\nKirimkan angka ini ke admin untuk setup notifikasi handover.' }}"},"credentials":{"telegramApi":{"id":"BNv9Fk7CC6wpafvg","name":"Telegram Bot CS Notifier"}}}
+  ],
+  "connections": {
+    "Telegram Trigger": {"main":[[{"node":"Balas Chat ID","type":"main","index":0}]]}
+  },
+  "settings": {"executionOrder":"v1"},
+  "versionId": "fa382a1b-d9ed-47a2-9461-cea8ac20a6cd",
+  "updatedAt": "2026-05-26T04:43:01.378Z"
+}

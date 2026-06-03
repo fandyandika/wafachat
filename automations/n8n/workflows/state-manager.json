@@ -1,0 +1,24 @@
+{
+  "id": "oTNay1fDleMibZ3J",
+  "name": "WaFaChat - State Manager",
+  "active": true,
+  "nodes": [
+    {"id":"node-state-wh","name":"State Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[240,300],"parameters":{"path":"conversation-state","httpMethod":"POST","responseMode":"responseNode","responseCode":200},"webhookId":"conv-state-wh-001"},
+    {"id":"node-state-logic","name":"State Logic","type":"n8n-nodes-base.code","typeVersion":2,"position":[460,300],"parameters":{"jsCode":"const body = $input.first().json.body || $input.first().json;\ntry {\n  const response = await this.helpers.httpRequest({ method: 'POST', url: 'https://helpful-spoonbill-863.convex.site/n8n/state', headers: { 'Content-Type': 'application/json', 'x-wafachat-adapter-secret': 'f_ILXhpK1otsmumBuAHZcalOQkX8jXSwSQVYqvjaiew' }, body, json: true });\n  return [{ json: response }];\n} catch (error) {\n  return [{ json: { success: false, error: error.message || 'convex adapter request failed', _action: body.action || null } }];\n}"}},
+    {"id":"node-state-respond","name":"Respond","type":"n8n-nodes-base.respondToWebhook","typeVersion":1.1,"position":[680,300],"parameters":{"respondWith":"json","responseBody":"={{ $json }}","options":{"responseCode":200}}},
+    {"id":"node-list-wh","name":"List State Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[240,520],"parameters":{"path":"cs-status","httpMethod":"GET","responseMode":"responseNode","responseCode":200},"webhookId":"9cd508fd-6fd8-459a-9c3b-8d63ca0c2ad8"},
+    {"id":"node-list-logic","name":"List State Logic","type":"n8n-nodes-base.code","typeVersion":2,"position":[460,520],"parameters":{"jsCode":"const state = $getWorkflowStaticData('global');\nconst globalEnabled = state.global_ai_enabled !== false;\nconst phones = state.phone_index || Object.keys(state).filter(k => k !== '__global__' && k !== 'phone_index' && k !== 'daily_stats' && k !== 'global_ai_enabled');\nconst customers = phones.map(phone => { const data = state[phone]; if (!data || typeof data !== 'object') return null; return { phone, status: data.status || 'active', customerName: data.customerName || '', productName: data.productName || '', csName: data.csName || '', note: data.note || '', updatedAt: data.updatedAt || data.updated_at || null }; }).filter(c => c && c.status !== 'closed');\ncustomers.sort((a, b) => { if (a.status === 'handover' && b.status !== 'handover') return -1; if (a.status !== 'handover' && b.status === 'handover') return 1; return a.phone.localeCompare(b.phone); });\nconst today = new Date().toISOString().split('T')[0];\nconst todayStats = (state.daily_stats || {})[today] || { orders: 0, closings: 0, handovers: 0, closed_today: 0 };\nreturn [{ json: { generated_at: new Date().toISOString(), global_ai_enabled: globalEnabled, active_count: customers.filter(c => c.status === 'active').length, handover_count: customers.filter(c => c.status === 'handover').length, total_active: customers.length, stats: todayStats, customers } }];"}},
+    {"id":"node-list-respond","name":"List Respond","type":"n8n-nodes-base.respondToWebhook","typeVersion":1.1,"position":[680,520],"parameters":{"respondWith":"json","responseBody":"={{ $json }}","options":{"responseCode":200}}},
+    {"id":"node-is-set","name":"Is Set?","type":"n8n-nodes-base.if","typeVersion":2.2,"position":[900,300],"parameters":{"conditions":{"options":{"version":2,"leftValue":"","caseSensitive":false,"typeValidation":"strict"},"conditions":[{"id":"action-is-set","leftValue":"={{ $json._action }}","rightValue":"set","operator":{"type":"string","operation":"equals"}},{"id":"not-global","leftValue":"={{ $json.phone }}","rightValue":"__global__","operator":{"type":"string","operation":"notEquals"}}],"combinator":"and"},"options":{}}}
+  ],
+  "connections": {
+    "State Webhook": {"main":[[{"node":"State Logic","type":"main","index":0}]]},
+    "State Logic": {"main":[[{"node":"Respond","type":"main","index":0}]]},
+    "List State Webhook": {"main":[[{"node":"List State Logic","type":"main","index":0}]]},
+    "List State Logic": {"main":[[{"node":"List Respond","type":"main","index":0}]]},
+    "Respond": {"main":[[{"node":"Is Set?","type":"main","index":0}]]}
+  },
+  "settings": {"executionOrder":"v1","saveDataErrorExecution":"all","saveDataSuccessExecution":"none"},
+  "versionId": "0e48a428-8264-4df0-9c66-7148bdf98f6a",
+  "updatedAt": "2026-06-03T05:55:04.606Z"
+}

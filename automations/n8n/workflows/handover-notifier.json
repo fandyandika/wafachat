@@ -1,0 +1,21 @@
+{
+  "id": "GUQJrCIn1xGKJjH0",
+  "name": "WaFaChat · Handover Notifier",
+  "active": true,
+  "nodes": [
+    {"id":"node-hn-wh","name":"Handover Webhook","type":"n8n-nodes-base.webhook","typeVersion":2,"position":[240,300],"parameters":{"path":"cs-handover","httpMethod":"POST","responseMode":"onReceived","responseCode":200},"webhookId":"cs-handover-wh-001"},
+    {"id":"node-hn-format","name":"Format Notif","type":"n8n-nodes-base.code","typeVersion":2,"position":[460,300],"parameters":{"jsCode":"const body = $input.first().json.body || $input.first().json;\nconst phone = body.phone || '-';\nconst customerName = body.customerName || 'Customer';\nconst reason = body.handoverReason || 'perlu perhatian';\nconst senderNumber = body.senderNumber || '6281385708799';\nconst productName = body.productName || '-';\nconst now = new Date();\nconst wibMs = now.getTime() + (7 * 60 * 60 * 1000);\nconst wib = new Date(wibMs);\nconst dd = String(wib.getUTCDate()).padStart(2,'0');\nconst mm = String(wib.getUTCMonth()+1).padStart(2,'0');\nconst hh = String(wib.getUTCHours()).padStart(2,'0');\nconst mi = String(wib.getUTCMinutes()).padStart(2,'0');\nconst waktu = `${dd}/${mm} ${hh}:${mi} WIB`;\nconst chatIdMap = { '6281385708799': '8652698740' };\nconst chatId = chatIdMap[senderNumber] || '';\nconst message = `🚨 *Handover — Butuh CS*\\n\\nNama: ${customerName}\\nNomor: \\`${phone}\\`\\nProduk: ${productName}\\nCatatan: ${reason}\\nWaktu: ${waktu}`;\nreturn [{ json: { phone, customerName, reason, senderNumber, productName, chatId, notifMessage: message } }];"}},
+    {"id":"node-hn-check","name":"Ada Chat ID?","type":"n8n-nodes-base.if","typeVersion":2.2,"position":[900,300],"parameters":{"conditions":{"options":{"version":2,"leftValue":"","caseSensitive":false,"typeValidation":"strict"},"conditions":[{"id":"chatid-check","leftValue":"={{ $json.chatId }}","operator":{"type":"string","operation":"notEmpty","singleValue":true}}],"combinator":"and"}}},
+    {"id":"node-hn-tg","name":"Kirim via Telegram","type":"n8n-nodes-base.telegram","typeVersion":1.2,"position":[1120,200],"parameters":{"resource":"message","operation":"sendMessage","chatId":"={{ $json.chatId }}","text":"={{ $json.notifMessage }}","additionalFields":{"parse_mode":"Markdown","replyMarkup":"InlineKeyboard"},"inlineKeyboard":{"rows":[{"row":{"buttons":[{"text":"📱 Buka WA","url":"={{ 'https://wa.me/' + $json.phone }}"},{"text":"🔄 Resume AI","callbackData":"={{ 'resume_ai:' + $json.phone }}"},{"text":"✅ Selesai","callbackData":"={{ 'selesai:' + $json.phone }}"}]}}]}},"credentials":{"telegramApi":{"id":"BNv9Fk7CC6wpafvg","name":"Telegram Bot CS Notifier"}}},
+    {"id":"node-hn-increment","name":"Increment Handover","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[1340,200],"parameters":{"method":"POST","url":"https://n8n.miqra.dev/webhook/conversation-state","sendBody":true,"specifyBody":"json","jsonBody":"={{ JSON.stringify({action: 'increment_stat', field: 'handovers'}) }}","options":{"response":{"response":{"neverError":true}}}}}
+  ],
+  "connections": {
+    "Handover Webhook": {"main":[[{"node":"Format Notif","type":"main","index":0}]]},
+    "Format Notif": {"main":[[{"node":"Ada Chat ID?","type":"main","index":0}]]},
+    "Ada Chat ID?": {"main":[[{"node":"Kirim via Telegram","type":"main","index":0}],[{"node":"Increment Handover","type":"main","index":0}]]},
+    "Kirim via Telegram": {"main":[[{"node":"Increment Handover","type":"main","index":0}]]}
+  },
+  "settings": {"executionOrder":"v1","saveDataErrorExecution":"all","saveDataSuccessExecution":"none"},
+  "versionId": "b47c0bbc-edf3-4214-b13e-093c9dfd7f05",
+  "updatedAt": "2026-05-26T04:42:57.631Z"
+}
