@@ -1,0 +1,464 @@
+{
+  "updatedAt": "2026-06-03T05:39:48.839Z",
+  "createdAt": "2026-05-24T14:51:55.488Z",
+  "id": "wgOVQrzkYOijDta1",
+  "name": "WaFaChat ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Order Trigger",
+  "description": null,
+  "active": false,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "berdu-order-prod",
+        "options": {}
+      },
+      "id": "node-wh-out",
+      "name": "Berdu Order Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        304
+      ],
+      "webhookId": "499b5c85-fb19-4b9e-82eb-f0078c146c81"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nconst userId = body.user_id;\nconst orderId = body.order_id;\nconst eventType = body.event_type;\nconst trigger = body.trigger || body.status || '';\n\nconst relevantEvents = ['order.new', 'order.update.paymentStatus', 'order.update.shippingStatus'];\nif (!relevantEvents.includes(eventType)) {\n  return [{ json: { _skip: true, reason: `event ${eventType} diabaikan` } }];\n}\nif (!userId || !orderId) {\n  throw new Error('Webhook payload missing user_id or order_id');\n}\n\nconst APP_ID = 'Z1Ch4oa';\nconst APP_SECRET = 'o03Vk74kQIaN6aB5LNa3IgZDa3ltBwTxyAhQ4UB6vXUw';\nconst ts = Math.floor(Date.now() / 1000);\nconst hmacMessage = `${APP_ID}:${ts}:${APP_SECRET}`;\n\nreturn [{ json: {\n  app_id: APP_ID,\n  api_secret: APP_SECRET,\n  user_id: userId,\n  order_id: orderId,\n  event_type: eventType,\n  trigger,\n  ts,\n  hmacMessage,\n  target_url: `https://api.berdu.id/v0.0/order/detail?user_id=${userId}&order_id=${orderId}`\n} }];"
+      },
+      "id": "node-prep-out",
+      "name": "Extract Webhook Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "skip-check",
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-skip-check",
+      "name": "Skip?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        688,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "action": "hmac",
+        "value": "={{ $json.hmacMessage }}",
+        "dataPropertyName": "signature",
+        "encoding": "base64"
+      },
+      "id": "node-hmac-out",
+      "name": "HMAC SHA256",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        912,
+        432
+      ],
+      "credentials": {
+        "crypto": {
+          "id": "cC2zMvNDWjYud4XA",
+          "name": "Berdu HMAC Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst authHeader = `${d.app_id}.${d.ts}.${d.signature}`;\nreturn [{ json: { ...d, authHeader } }];"
+      },
+      "id": "node-header-out",
+      "name": "Build Auth Header",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.target_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ $json.authHeader }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-order-detail-out",
+      "name": "GET /order/detail",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1344,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst order = d.body || d;\n\nfunction normalizePhone(raw) {\n  if (!raw) return null;\n  return raw.toString().replace(/\\s+/g, '').replace(/^\\+/, '').replace(/^0/, '62');\n}\n\nfunction formatRupiah(num) {\n  return 'Rp' + Number(num).toLocaleString('id-ID');\n}\n\nconst addr = order.shipping_address || {};\nconst phone = normalizePhone(addr.phone);\nconst customerName = addr.firstName || 'Pelanggan';\nconst assignedStaff = order.assigned_to_staff;\nconst shippingCost = order.shipping_cost || 0;\nconst total = order.total || 0;\nconst paymentStatus = order.payment_status;\n\nconst productsSubtotal = (order.products || []).reduce((sum, p) => sum + (p.price * p.count), 0);\nconst productsList = (order.products || []).map(p => `${p.name} (${p.count}x)`).join(', ');\n\nconst shippingAddress = addr.address || '';\nconst shippingDistrict = addr.district || '';\nconst shippingCity = addr.city || '';\n\nconst staffMap = {\n  'B-1apQSy': { senderName: 'CS Aisyah', sender: '6281385708799',  apiKey: 'kc_live_eepCPoHDjpF3AyPfX0_2MNDspKiyOcbBxEEeyWJQYNg', templateName: 'whatsapp_notif_order_aisyah' },\n  'B-1CxSmL': { senderName: 'CS Risma',  sender: '6282321381742', apiKey: 'kc_live_vvgG_3JEVsqcsBY3KNakKDqd5CMPFxGuUvyMke5QWf8',  templateName: 'whatsapp_notif_order_risma' },\n  // Lila (B-NCIXt), Azela (B-Z28TdYc): belum connect ke KirimChat, tambahkan setelah punya akun sendiri\n};\n\nconst csConfig = staffMap[assignedStaff];\nif (!csConfig) {\n  return [{ json: { _skip: true, reason: `staff ${assignedStaff} tidak ada di mapping` } }];\n}\nif (!phone) {\n  return [{ json: { _skip: true, reason: 'phone number tidak ditemukan di order' } }];\n}\n\nconst webhookData = $('Extract Webhook Data').first().json;\n\nconst aiSalesAgentEnabled = csConfig.senderName === 'CS Aisyah';\nconst stateTrackingEnabled = ['CS Aisyah', 'CS Risma'].includes(csConfig.senderName);\n\nif (phone && csConfig && stateTrackingEnabled) {\n  try {\n    await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'https://n8n.miqra.dev/webhook/conversation-state',\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        action: 'set_order',\n        phone,\n        csName: csConfig.senderName,\n        productName: (order.products || [])[0]?.name || '',\n        products: productsList,\n        productsSubtotal: formatRupiah(productsSubtotal),\n        shippingCost: formatRupiah(shippingCost),\n        total: formatRupiah(total),\n        customerName,\n        shippingAddress,\n        shippingDistrict,\n        shippingCity,\n        order_id: webhookData.order_id,\n      }),\n    });\n  } catch (_) {}\n}\n\n// ============================================================\n// TEMPLATE VARIABLE ORDER - JANGAN UBAH URUTAN INI!\n// Template Meta: 'whatsapp_notif_order_aisyah' dan 'whatsapp_notif_order_risma'\n// Format template:\n//   'Saya {{2}} dari Pustaka Islam'\n//   'Produk: {{3}}', 'Harga: {{4}}', 'Ongkir: {{5}}', 'Total: {{6}}'\n//   'Dikirim ke: {{1}} | {{7}}'\n//   '{{8}}, {{9}}, {{10}}'\n// ============================================================\nconst templateParams = [\n  customerName,                   // {{1}} nama penerima\n  csConfig.senderName,            // {{2}} nama CS\n  productsList,                   // {{3}} Produk\n  formatRupiah(productsSubtotal), // {{4}} Harga\n  formatRupiah(shippingCost),     // {{5}} Ongkir\n  formatRupiah(total),            // {{6}} Total\n  phone,                          // {{7}} HP penerima\n  shippingAddress,                // {{8}} alamat\n  shippingDistrict,               // {{9}} kecamatan\n  shippingCity,                   // {{10}} kota\n];\n\n// Build KirimChat request body in Code node (native JS - no expression engine quirks)\nconst kirimChatBody = {\n  phone_number: phone,\n  channel: 'whatsapp',\n  message_type: 'template',\n  template: {\n    name: csConfig.templateName,\n    language: { code: 'id' },\n    components: [{\n      type: 'body',\n      parameters: templateParams.map(text => ({ type: 'text', text: String(text) })),\n    }],\n  },\n};\n\nreturn [{ json: {\n  phone,\n  customerName,\n  assignedStaff,\n  csConfig,\n  aiSalesAgentEnabled,\n  total: formatRupiah(total),\n  productsSubtotal: formatRupiah(productsSubtotal),\n  shippingCost: formatRupiah(shippingCost),\n  paymentStatus,\n  products: productsList,\n  shippingAddress,\n  shippingDistrict,\n  shippingCity,\n  templateParams,\n  orderUrl: order.url || '',\n  event_type: webhookData.event_type,\n  trigger: webhookData.trigger,\n  order_id: webhookData.order_id,\n  kirimChatBody,\n} }];"
+      },
+      "id": "node-normalize",
+      "name": "Normalize Order Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "output": "={{ $json.event_type === 'order.new' ? 0 : ($json.event_type === 'order.update.paymentStatus' && $json.paymentStatus === 'paid') ? 1 : $json.event_type === 'order.update.shippingStatus' ? 2 : 3 }}"
+      },
+      "id": "node-route-event",
+      "name": "Route by Event",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.1,
+      "position": [
+        1792,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api-prod.kirim.chat/api/v1/public/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.csConfig.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.kirimChatBody) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-send-new",
+      "name": "Send Template: Order Baru",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api-prod.kirim.chat/api/v1/public/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.csConfig.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phone\": \"{{ $json.phone }}\",\n  \"sender\": \"{{ $json.csConfig.sender }}\",\n  \"template_name\": \"PLACEHOLDER_TEMPLATE_BAYAR_SUKSES\",\n  \"language\": \"id\",\n  \"components\": [\n    { \"type\": \"body\", \"parameters\": [\n      { \"type\": \"text\", \"text\": \"{{ $json.customerName }}\" },\n      { \"type\": \"text\", \"text\": \"{{ $json.order_id }}\" }\n    ]}\n  ]\n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-send-paid",
+      "name": "Send Template: Bayar Sukses",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        400
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api-prod.kirim.chat/api/v1/public/messages/send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.csConfig.apiKey }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phone\": \"{{ $json.phone }}\",\n  \"sender\": \"{{ $json.csConfig.sender }}\",\n  \"template_name\": \"PLACEHOLDER_TEMPLATE_PENGIRIMAN\",\n  \"language\": \"id\",\n  \"components\": [\n    { \"type\": \"body\", \"parameters\": [\n      { \"type\": \"text\", \"text\": \"{{ $json.customerName }}\" },\n      { \"type\": \"text\", \"text\": \"{{ $json.order_id }}\" }\n    ]}\n  ]\n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "node-send-shipped",
+      "name": "Send Template: Terkirim",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        560
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nconsole.log('Done:', JSON.stringify({ status: result.statusCode || 'skipped' }));\nreturn [{ json: { logged: true, ts: new Date().toISOString() } }];"
+      },
+      "id": "node-log-sent",
+      "name": "Log Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2224,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Berdu Order Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Webhook Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Webhook Data": {
+      "main": [
+        [
+          {
+            "node": "Skip?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip?": {
+      "main": [
+        [
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "HMAC SHA256",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HMAC SHA256": {
+      "main": [
+        [
+          {
+            "node": "Build Auth Header",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Auth Header": {
+      "main": [
+        [
+          {
+            "node": "GET /order/detail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET /order/detail": {
+      "main": [
+        [
+          {
+            "node": "Normalize Order Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Order Data": {
+      "main": [
+        [
+          {
+            "node": "Route by Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Event": {
+      "main": [
+        [
+          {
+            "node": "Send Template: Order Baru",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Template: Bayar Sukses",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Template: Terkirim",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Template: Order Baru": {
+      "main": [
+        [
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Template: Bayar Sukses": {
+      "main": [
+        [
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Template: Terkirim": {
+      "main": [
+        [
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": "40ca498d-2a01-4a14-a090-cbae86467b70",
+  "activeVersionId": null,
+  "versionCounter": 75,
+  "triggerCount": 1,
+  "shared": [
+    {
+      "updatedAt": "2026-05-24T14:51:55.491Z",
+      "createdAt": "2026-05-24T14:51:55.491Z",
+      "role": "workflow:owner",
+      "workflowId": "wgOVQrzkYOijDta1",
+      "projectId": "I2kQHzoFawpqTwF0",
+      "project": {
+        "updatedAt": "2026-01-23T13:29:36.435Z",
+        "createdAt": "2026-01-23T10:40:19.498Z",
+        "id": "I2kQHzoFawpqTwF0",
+        "name": "Fandi Harahap <fandy.andika@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "88d21b67-3335-40f7-a811-e2cdee83ceb6"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": null
+}
