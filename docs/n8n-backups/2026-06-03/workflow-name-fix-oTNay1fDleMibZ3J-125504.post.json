@@ -1,0 +1,725 @@
+{
+  "updatedAt": "2026-06-03T05:55:04.606Z",
+  "createdAt": "2026-05-24T17:51:44.059Z",
+  "id": "oTNay1fDleMibZ3J",
+  "name": "WaFaChat - State Manager",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "node-state-wh",
+      "name": "State Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "path": "conversation-state",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "responseCode": 200
+      },
+      "webhookId": "conv-state-wh-001"
+    },
+    {
+      "id": "node-state-logic",
+      "name": "State Logic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://helpful-spoonbill-863.convex.site/n8n/state',\n    headers: {\n      'Content-Type': 'application/json',\n      'x-wafachat-adapter-secret': 'f_ILXhpK1otsmumBuAHZcalOQkX8jXSwSQVYqvjaiew',\n    },\n    body,\n    json: true,\n  });\n\n  return [{ json: response }];\n} catch (error) {\n  return [{\n    json: {\n      success: false,\n      error: error.message || 'convex adapter request failed',\n      _action: body.action || null,\n    },\n  }];\n}"
+      }
+    },
+    {
+      "id": "node-state-respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "node-list-wh",
+      "name": "List State Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        520
+      ],
+      "parameters": {
+        "path": "cs-status",
+        "httpMethod": "GET",
+        "responseMode": "responseNode",
+        "responseCode": 200
+      },
+      "webhookId": "9cd508fd-6fd8-459a-9c3b-8d63ca0c2ad8"
+    },
+    {
+      "id": "node-list-logic",
+      "name": "List State Logic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const state = $getWorkflowStaticData('global');\n\nconst globalEnabled = state.global_ai_enabled !== false;\n\n// Use phone_index if available, fallback to key enumeration\nconst phones = state.phone_index ||\n  Object.keys(state).filter(k => k !== '__global__' && k !== 'phone_index' && k !== 'daily_stats' && k !== 'global_ai_enabled');\n\nconst customers = phones\n  .map(phone => {\n    const data = state[phone];\n    if (!data || typeof data !== 'object') return null;\n    return {\n      phone,\n      status: data.status || 'active',\n      customerName: data.customerName || '',\n      productName: data.productName || '',\n      csName: data.csName || '',\n      note: data.note || '',\n      updatedAt: data.updatedAt || data.updated_at || null,\n    };\n  })\n  .filter(c => c && c.status !== 'closed');\n\ncustomers.sort((a, b) => {\n  if (a.status === 'handover' && b.status !== 'handover') return -1;\n  if (a.status !== 'handover' && b.status === 'handover') return 1;\n  return a.phone.localeCompare(b.phone);\n});\n\nconst today = new Date().toISOString().split('T')[0];\nconst todayStats = (state.daily_stats || {})[today] || { orders: 0, closings: 0, handovers: 0, closed_today: 0 };\n\nreturn [{ json: {\n  generated_at: new Date().toISOString(),\n  global_ai_enabled: globalEnabled,\n  active_count: customers.filter(c => c.status === 'active').length,\n  handover_count: customers.filter(c => c.status === 'handover').length,\n  total_active: customers.length,\n  stats: todayStats,\n  customers\n} }];"
+      }
+    },
+    {
+      "id": "node-list-respond",
+      "name": "List Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        680,
+        520
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      }
+    },
+    {
+      "id": "node-is-set",
+      "name": "Is Set?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "leftValue": "",
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "action-is-set",
+              "leftValue": "={{ $json._action }}",
+              "rightValue": "set",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "not-global",
+              "leftValue": "={{ $json.phone }}",
+              "rightValue": "__global__",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-sheets-status",
+      "name": "Update Status Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1120,
+        180
+      ],
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1XHOX9G8UU8yGaOsFeeQiN58iHC3W2cLppL00iEkFEt4"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Status"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "Phone"
+          ],
+          "value": {
+            "Phone": "={{ $json.phone }}",
+            "Status": "={{ $json.status === 'handover' ? '?? Handover - CS Handle' : $json.status === 'closed' ? '? Closed' : '?? Active - AI Handle' }}",
+            "Catatan": "={{ $json.note }}",
+            "Customer": "={{ $json.customerName }}",
+            "Updated": "={{ $json.updated_at }}",
+            "CS": "={{ $json.csNumber }}"
+          },
+          "schema": [
+            {
+              "id": "Phone",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Phone",
+              "defaultMatch": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Status",
+              "defaultMatch": false,
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Catatan",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Catatan",
+              "defaultMatch": false,
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Customer",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Customer",
+              "defaultMatch": false,
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "Updated",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "Updated",
+              "defaultMatch": false,
+              "canBeUsedToMatch": false
+            },
+            {
+              "id": "CS",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "CS",
+              "defaultMatch": false,
+              "canBeUsedToMatch": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "FsWAxpmqZXMN1Csi",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "State Webhook": {
+      "main": [
+        [
+          {
+            "node": "State Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "State Logic": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List State Webhook": {
+      "main": [
+        [
+          {
+            "node": "List State Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List State Logic": {
+      "main": [
+        [
+          {
+            "node": "List Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond": {
+      "main": [
+        [
+          {
+            "node": "Is Set?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Set?": {
+      "main": [
+        [
+          {
+            "node": "Update Status Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none"
+  },
+  "staticData": {
+    "global": {
+      "__global__": {
+        "status": "handover",
+        "note": "manual by CS",
+        "customerName": "",
+        "csNumber": "",
+        "updated_at": "2026-05-24T19:04:23.121Z"
+      },
+      "global_ai_enabled": true,
+      "phone_index": [],
+      "daily_stats": {
+        "2026-05-26": {
+          "orders": 0,
+          "closings": 0,
+          "handovers": 0,
+          "closed_today": 0,
+          "order_keys": [],
+          "closing_keys": [],
+          "handover_keys": [],
+          "closed_keys": []
+        }
+      }
+    }
+  },
+  "meta": null,
+  "pinData": null,
+  "versionId": "0e48a428-8264-4df0-9c66-7148bdf98f6a",
+  "activeVersionId": "0e48a428-8264-4df0-9c66-7148bdf98f6a",
+  "versionCounter": 890,
+  "triggerCount": 2,
+  "shared": [
+    {
+      "updatedAt": "2026-05-24T17:51:44.061Z",
+      "createdAt": "2026-05-24T17:51:44.061Z",
+      "role": "workflow:owner",
+      "workflowId": "oTNay1fDleMibZ3J",
+      "projectId": "I2kQHzoFawpqTwF0",
+      "project": {
+        "updatedAt": "2026-01-23T13:29:36.435Z",
+        "createdAt": "2026-01-23T10:40:19.498Z",
+        "id": "I2kQHzoFawpqTwF0",
+        "name": "Fandi Harahap <fandy.andika@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "creatorId": "88d21b67-3335-40f7-a811-e2cdee83ceb6"
+      }
+    }
+  ],
+  "tags": [],
+  "activeVersion": {
+    "updatedAt": "2026-05-26T12:12:11.754Z",
+    "createdAt": "2026-05-26T12:12:11.754Z",
+    "versionId": "0e48a428-8264-4df0-9c66-7148bdf98f6a",
+    "workflowId": "oTNay1fDleMibZ3J",
+    "nodes": [
+      {
+        "id": "node-state-wh",
+        "name": "State Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          240,
+          300
+        ],
+        "parameters": {
+          "path": "conversation-state",
+          "httpMethod": "POST",
+          "responseMode": "responseNode",
+          "responseCode": 200
+        },
+        "webhookId": "conv-state-wh-001"
+      },
+      {
+        "id": "node-state-logic",
+        "name": "State Logic",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          460,
+          300
+        ],
+        "parameters": {
+          "jsCode": "const body = $input.first().json.body || $input.first().json;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: 'https://helpful-spoonbill-863.convex.site/n8n/state',\n    headers: {\n      'Content-Type': 'application/json',\n      'x-wafachat-adapter-secret': 'f_ILXhpK1otsmumBuAHZcalOQkX8jXSwSQVYqvjaiew',\n    },\n    body,\n    json: true,\n  });\n\n  return [{ json: response }];\n} catch (error) {\n  return [{\n    json: {\n      success: false,\n      error: error.message || 'convex adapter request failed',\n      _action: body.action || null,\n    },\n  }];\n}"
+        }
+      },
+      {
+        "id": "node-state-respond",
+        "name": "Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [
+          680,
+          300
+        ],
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ $json }}",
+          "options": {
+            "responseCode": 200
+          }
+        }
+      },
+      {
+        "id": "node-list-wh",
+        "name": "List State Webhook",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          240,
+          520
+        ],
+        "parameters": {
+          "path": "cs-status",
+          "httpMethod": "GET",
+          "responseMode": "responseNode",
+          "responseCode": 200
+        },
+        "webhookId": "9cd508fd-6fd8-459a-9c3b-8d63ca0c2ad8"
+      },
+      {
+        "id": "node-list-logic",
+        "name": "List State Logic",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          460,
+          520
+        ],
+        "parameters": {
+          "jsCode": "const state = $getWorkflowStaticData('global');\n\nconst globalEnabled = state.global_ai_enabled !== false;\n\n// Use phone_index if available, fallback to key enumeration\nconst phones = state.phone_index ||\n  Object.keys(state).filter(k => k !== '__global__' && k !== 'phone_index' && k !== 'daily_stats' && k !== 'global_ai_enabled');\n\nconst customers = phones\n  .map(phone => {\n    const data = state[phone];\n    if (!data || typeof data !== 'object') return null;\n    return {\n      phone,\n      status: data.status || 'active',\n      customerName: data.customerName || '',\n      productName: data.productName || '',\n      csName: data.csName || '',\n      note: data.note || '',\n      updatedAt: data.updatedAt || data.updated_at || null,\n    };\n  })\n  .filter(c => c && c.status !== 'closed');\n\ncustomers.sort((a, b) => {\n  if (a.status === 'handover' && b.status !== 'handover') return -1;\n  if (a.status !== 'handover' && b.status === 'handover') return 1;\n  return a.phone.localeCompare(b.phone);\n});\n\nconst today = new Date().toISOString().split('T')[0];\nconst todayStats = (state.daily_stats || {})[today] || { orders: 0, closings: 0, handovers: 0, closed_today: 0 };\n\nreturn [{ json: {\n  generated_at: new Date().toISOString(),\n  global_ai_enabled: globalEnabled,\n  active_count: customers.filter(c => c.status === 'active').length,\n  handover_count: customers.filter(c => c.status === 'handover').length,\n  total_active: customers.length,\n  stats: todayStats,\n  customers\n} }];"
+        }
+      },
+      {
+        "id": "node-list-respond",
+        "name": "List Respond",
+        "type": "n8n-nodes-base.respondToWebhook",
+        "typeVersion": 1.1,
+        "position": [
+          680,
+          520
+        ],
+        "parameters": {
+          "respondWith": "json",
+          "responseBody": "={{ $json }}",
+          "options": {
+            "responseCode": 200
+          }
+        }
+      },
+      {
+        "id": "node-is-set",
+        "name": "Is Set?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          900,
+          300
+        ],
+        "parameters": {
+          "conditions": {
+            "options": {
+              "version": 2,
+              "leftValue": "",
+              "caseSensitive": false,
+              "typeValidation": "strict"
+            },
+            "conditions": [
+              {
+                "id": "action-is-set",
+                "leftValue": "={{ $json._action }}",
+                "rightValue": "set",
+                "operator": {
+                  "type": "string",
+                  "operation": "equals"
+                }
+              },
+              {
+                "id": "not-global",
+                "leftValue": "={{ $json.phone }}",
+                "rightValue": "__global__",
+                "operator": {
+                  "type": "string",
+                  "operation": "notEquals"
+                }
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        }
+      },
+      {
+        "id": "node-sheets-status",
+        "name": "Update Status Sheet",
+        "type": "n8n-nodes-base.googleSheets",
+        "typeVersion": 4.7,
+        "position": [
+          1120,
+          180
+        ],
+        "parameters": {
+          "operation": "appendOrUpdate",
+          "documentId": {
+            "__rl": true,
+            "mode": "id",
+            "value": "1XHOX9G8UU8yGaOsFeeQiN58iHC3W2cLppL00iEkFEt4"
+          },
+          "sheetName": {
+            "__rl": true,
+            "mode": "name",
+            "value": "Status"
+          },
+          "columns": {
+            "mappingMode": "defineBelow",
+            "matchingColumns": [
+              "Phone"
+            ],
+            "value": {
+              "Phone": "={{ $json.phone }}",
+              "Status": "={{ $json.status === 'handover' ? '?? Handover - CS Handle' : $json.status === 'closed' ? '? Closed' : '?? Active - AI Handle' }}",
+              "Catatan": "={{ $json.note }}",
+              "Customer": "={{ $json.customerName }}",
+              "Updated": "={{ $json.updated_at }}",
+              "CS": "={{ $json.csNumber }}"
+            },
+            "schema": [
+              {
+                "id": "Phone",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Phone",
+                "defaultMatch": true,
+                "canBeUsedToMatch": true
+              },
+              {
+                "id": "Status",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Status",
+                "defaultMatch": false,
+                "canBeUsedToMatch": false
+              },
+              {
+                "id": "Catatan",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Catatan",
+                "defaultMatch": false,
+                "canBeUsedToMatch": false
+              },
+              {
+                "id": "Customer",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Customer",
+                "defaultMatch": false,
+                "canBeUsedToMatch": false
+              },
+              {
+                "id": "Updated",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "Updated",
+                "defaultMatch": false,
+                "canBeUsedToMatch": false
+              },
+              {
+                "id": "CS",
+                "type": "string",
+                "display": true,
+                "required": false,
+                "displayName": "CS",
+                "defaultMatch": false,
+                "canBeUsedToMatch": false
+              }
+            ],
+            "attemptToConvertTypes": false,
+            "convertFieldsToString": true
+          },
+          "options": {}
+        },
+        "credentials": {
+          "googleSheetsOAuth2Api": {
+            "id": "FsWAxpmqZXMN1Csi",
+            "name": "Google Sheets account"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "State Webhook": {
+        "main": [
+          [
+            {
+              "node": "State Logic",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "State Logic": {
+        "main": [
+          [
+            {
+              "node": "Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "List State Webhook": {
+        "main": [
+          [
+            {
+              "node": "List State Logic",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "List State Logic": {
+        "main": [
+          [
+            {
+              "node": "List Respond",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Respond": {
+        "main": [
+          [
+            {
+              "node": "Is Set?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Is Set?": {
+        "main": [
+          [
+            {
+              "node": "Update Status Sheet",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "authors": "Fandi Harahap",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-05-26T12:12:11.82Z",
+        "id": 244,
+        "workflowId": "oTNay1fDleMibZ3J",
+        "versionId": "0e48a428-8264-4df0-9c66-7148bdf98f6a",
+        "event": "activated",
+        "userId": "88d21b67-3335-40f7-a811-e2cdee83ceb6"
+      },
+      {
+        "createdAt": "2026-06-03T05:55:04.68Z",
+        "id": 406,
+        "workflowId": "oTNay1fDleMibZ3J",
+        "versionId": "0e48a428-8264-4df0-9c66-7148bdf98f6a",
+        "event": "activated",
+        "userId": "88d21b67-3335-40f7-a811-e2cdee83ceb6"
+      },
+      {
+        "createdAt": "2026-05-26T12:12:11.787Z",
+        "id": 243,
+        "workflowId": "oTNay1fDleMibZ3J",
+        "versionId": "0e48a428-8264-4df0-9c66-7148bdf98f6a",
+        "event": "deactivated",
+        "userId": "88d21b67-3335-40f7-a811-e2cdee83ceb6"
+      },
+      {
+        "createdAt": "2026-06-03T05:55:04.65Z",
+        "id": 405,
+        "workflowId": "oTNay1fDleMibZ3J",
+        "versionId": "0e48a428-8264-4df0-9c66-7148bdf98f6a",
+        "event": "deactivated",
+        "userId": "88d21b67-3335-40f7-a811-e2cdee83ceb6"
+      }
+    ]
+  }
+}
