@@ -60,3 +60,24 @@ test("getDashboardSummary: leads/closings/cr from records, handovers from events
   expect(s.cr).toBe(100);
   expect(s.handovers).toBe(1);
 });
+
+test("getTrend: buckets leads by order-date and closings by closing-date", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", { orderId: "O-1", customerPhone: "62811", customerName: "A",
+      assignedCsName: "CS Aisyah", productName: "Q", products: "Q", productsSubtotal: "", shippingCost: "",
+      total: "", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu",
+      aiEligible: true, createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A",
+      csName: "CS Aisyah", closedAt: t0 + DAY, recipientName: "A", recipientPhone: "62811",
+      recipientAddress: "", recipientDistrict: "", recipientCity: "", packageContent: "Q",
+      paymentMethod: "cod", codValue: 1, total: 1, status: "ready", flags: [], sourceMessageText: "",
+      version: 1, createdAt: t0, updatedAt: t0 });
+  });
+  const trend = await t.query(api.metrics.getTrend, { startAt: t0 - DAY, endAt: t0 + 2 * DAY, bucket: "day" });
+  const leadDay = trend.find((b) => b.leads === 1);
+  const closeDay = trend.find((b) => b.closings === 1);
+  expect(leadDay).toBeDefined();
+  expect(closeDay).toBeDefined();
+  expect(leadDay!.bucket).not.toBe(closeDay!.bucket); // lead day != closing day
+});
