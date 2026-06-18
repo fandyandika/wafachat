@@ -1,11 +1,10 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { isInternalTestPhone } from "./lib";
 
 type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
-
-const INTERNAL_TEST_PHONES = new Set(["6285715682110", "6285774076061", "628211900201"]);
 
 const statusValidator = v.union(
   v.literal("ready"),
@@ -178,10 +177,6 @@ function normalizeProductName(value: string | undefined): string {
     .replace(/\s+-\s+Pilih Paket:.*/i, "")
     .replace(/\s+/g, " ")
     .trim() || "Tanpa Data Produk";
-}
-
-function isInternalTestPhone(value: string | undefined): boolean {
-  return INTERNAL_TEST_PHONES.has(normalizePhone(value));
 }
 
 function normalizeCsName(value: string | undefined): string {

@@ -38,3 +38,25 @@ test("getPerformance: leads=distinct customer, closing=distinct order, CR, cance
   expect(perf.totalClosing).toBe(1);    // cancelled excluded
   expect(perf.overallCr).toBe(100);     // 1/1
 });
+
+test("getDashboardSummary: leads/closings/cr from records, handovers from events", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", { orderId: "O-1", customerPhone: "62811", customerName: "A",
+      assignedCsName: "CS Aisyah", productName: "Quran", products: "Quran", productsSubtotal: "",
+      shippingCost: "", total: "", shippingAddress: "", shippingDistrict: "", shippingCity: "",
+      source: "berdu", aiEligible: true, createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A",
+      csName: "CS Aisyah", closedAt: t0, recipientName: "A", recipientPhone: "62811", recipientAddress: "",
+      recipientDistrict: "", recipientCity: "", packageContent: "Quran", paymentMethod: "cod",
+      codValue: 100000, total: 100000, status: "ready", flags: [], sourceMessageText: "", version: 1,
+      createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("events", { type: "handover", actor: "n8n", orderId: "O-1",
+      customerPhone: "62811", metadata: {}, createdAt: t0 });
+  });
+  const s = await t.query(api.metrics.getDashboardSummary, { startAt: t0 - DAY, endAt: t0 + DAY });
+  expect(s.leads).toBe(1);
+  expect(s.closings).toBe(1);
+  expect(s.cr).toBe(100);
+  expect(s.handovers).toBe(1);
+});

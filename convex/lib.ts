@@ -17,6 +17,12 @@ export function normalizePhone(value: string | undefined): string {
   return digits;
 }
 
+const INTERNAL_TEST_PHONES = new Set(["6285715682110", "6285774076061", "628211900201"]);
+
+export function isInternalTestPhone(value: string | undefined): boolean {
+  return INTERNAL_TEST_PHONES.has(normalizePhone(value));
+}
+
 export function getJakartaDate(timestamp = Date.now()): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Jakarta",
