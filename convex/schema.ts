@@ -193,4 +193,10 @@ export default defineSchema({
     value: v.boolean(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
+
+  closingRules: defineTable({
+    phrase: v.string(),
+    active: v.boolean(),
+    createdAt: v.number(),
+  }).index("by_active", ["active"]),
 });
