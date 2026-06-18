@@ -1,7 +1,10 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { normalizePhone } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
+import { messageMatchesPhrase, upsertRecapFromMessage } from "./shippingRecaps";
+import { getActiveClosingPhrases } from "./closingRules";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
   if (args.orderId) {
@@ -197,12 +200,40 @@ export const appendMessageFromN8n = mutation({
       createdAt,
     });
 
+    let closingRecapId: Id<"shippingRecaps"> | undefined;
+    if (args.direction === "outbound") {
+      const phrases = await getActiveClosingPhrases(ctx);
+      if (messageMatchesPhrase(args.content, phrases)) {
+        const result = await upsertRecapFromMessage(ctx, {
+          orderId: conversation.orderId,
+          customerPhone: conversation.customerPhone,
+          content: args.content,
+          externalMessageId: args.externalMessageId,
+          _id: messageId,
+          createdAt,
+        });
+        if (result.action !== "skipped") {
+          closingRecapId = result.recapId;
+          await ctx.db.insert("events", {
+            conversationId: conversation._id,
+            orderId: conversation.orderId,
+            customerPhone: conversation.customerPhone,
+            type: "closing_detected",
+            actor: "n8n",
+            metadata: { recapId: result.recapId, source: "auto_message", externalMessageId: args.externalMessageId },
+            createdAt,
+          });
+        }
+      }
+    }
+
     return {
       success: true,
       messageId,
       conversationId: conversation._id,
       order_id: conversation.orderId,
       phone: conversation.customerPhone,
+      closingRecapId,
       _action: "append_message",
     };
   },
