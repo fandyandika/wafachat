@@ -115,6 +115,18 @@ export const appendMessageFromN8n = mutation({
   },
   handler: async (ctx, args) => {
     const phone = normalizePhone(args.phone);
+    if (args.externalMessageId) {
+      const dup = await ctx.db
+        .query("messages")
+        .withIndex("by_externalMessageId", (q) => q.eq("externalMessageId", args.externalMessageId))
+        .first();
+      if (dup) {
+        return {
+          success: true, messageId: dup._id, conversationId: dup.conversationId,
+          order_id: dup.orderId, phone: dup.customerPhone, _action: "append_message", deduped: true,
+        };
+      }
+    }
     let conversation = await getConversationForMessage(ctx, {
       customerPhone: phone,
       orderId: args.order_id,

@@ -81,7 +81,8 @@ export default defineSchema({
   })
     .index("by_conversation_createdAt", ["conversationId", "createdAt"])
     .index("by_customerPhone_createdAt", ["customerPhone", "createdAt"])
-    .index("by_orderId_createdAt", ["orderId", "createdAt"]),
+    .index("by_orderId_createdAt", ["orderId", "createdAt"])
+    .index("by_externalMessageId", ["externalMessageId"]),
 
   events: defineTable({
     conversationId: v.optional(v.id("conversations")),
