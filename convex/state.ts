@@ -7,7 +7,6 @@ import {
   makeOrderKey,
   makeTransitionKey,
   normalizePhone,
-  unique,
 } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 
@@ -24,6 +23,9 @@ async function getGlobalEnabled(ctx: { db: any }): Promise<boolean> {
   return setting?.value !== false;
 }
 
+// DEPRECATED (Fase 1A): dailyStats counters retired — metrics now derive-on-read (convex/metrics.ts).
+// emptyStats / getOrCreateStats / patchStatsWithKey / patchClosingStatsWithKey are kept temporarily
+// (the two writers are no-ops); remove together with getDailyStats once the panel deploy has cut over.
 function emptyStats(date: string) {
   return {
     date,
@@ -67,15 +69,9 @@ async function patchStatsWithKey(
     remove?: boolean;
   },
 ) {
-  const stats = await getOrCreateStats(ctx, args.date);
-  const keys = unique(stats[args.keyField] ?? []);
-  const nextKeys = args.remove ? keys.filter((key) => key !== args.key) : unique([...keys, args.key]);
-
-  await ctx.db.patch(stats._id, {
-    [args.keyField]: nextKeys,
-    [args.field]: nextKeys.length,
-    updatedAt: Date.now(),
-  });
+  // DEPRECATED (Fase 1A): dailyStats counters retired; metrics derive-on-read via convex/metrics.ts. No-op.
+  void ctx;
+  void args;
 }
 
 async function patchClosingStatsWithKey(
@@ -87,34 +83,9 @@ async function patchClosingStatsWithKey(
     remove?: boolean;
   },
 ) {
-  const stats = await getOrCreateStats(ctx, args.date);
-  const closingKeys = unique(stats.closingKeys ?? []);
-  const aiClosingKeys = unique(stats.aiClosingKeys ?? []);
-  const manualClosingKeys = unique(stats.manualClosingKeys ?? []);
-
-  const nextClosingKeys = args.remove ? closingKeys.filter((key) => key !== args.key) : unique([...closingKeys, args.key]);
-  const nextAiClosingKeys =
-    args.remove
-      ? aiClosingKeys.filter((key) => key !== args.key)
-      : args.source === "manual"
-        ? aiClosingKeys
-        : unique([...aiClosingKeys, args.key]);
-  const nextManualClosingKeys =
-    args.remove
-      ? manualClosingKeys.filter((key) => key !== args.key)
-      : args.source === "manual"
-        ? unique([...manualClosingKeys, args.key])
-        : manualClosingKeys;
-
-  await ctx.db.patch(stats._id, {
-    closingKeys: nextClosingKeys,
-    closings: nextClosingKeys.length,
-    aiClosingKeys: nextAiClosingKeys,
-    aiClosings: nextAiClosingKeys.length,
-    manualClosingKeys: nextManualClosingKeys,
-    manualClosings: nextManualClosingKeys.length,
-    updatedAt: Date.now(),
-  });
+  // DEPRECATED (Fase 1A): dailyStats counters retired; metrics derive-on-read via convex/metrics.ts. No-op.
+  void ctx;
+  void args;
 }
 
 async function getLatestConversationByPhone(ctx: { db: any }, phone: string) {
@@ -187,6 +158,7 @@ export const createTestConversation = mutation({
   },
 });
 
+// DEPRECATED (Fase 1A): dailyStats retired (metrics derive-on-read). Manual repair no longer needed; kept temporarily.
 export const repairDailyStats = mutation({
   args: {
     date: v.string(),
@@ -914,6 +886,7 @@ export const listConversations = query({
   },
 });
 
+// DEPRECATED (Fase 1A): superseded by api.metrics.getDashboardSummary (derive-on-read). Kept until panel deploy cuts over.
 export const getDailyStats = query({
   args: { date: v.optional(v.string()) },
   handler: async (ctx, args) => {
