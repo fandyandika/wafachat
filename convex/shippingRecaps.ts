@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isInternalTestPhone } from "./lib";
+import { getActiveClosingPhrases } from "./closingRules";
 
 type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
@@ -469,6 +470,70 @@ export const createFromPanelClosing = mutation({
   },
 });
 
+export function messageMatchesPhrase(content: string, phrases: string[]): boolean {
+  const haystack = String(content || "").toUpperCase();
+  return phrases.some((p) => haystack.includes(p));
+}
+
+export async function upsertRecapFromMessage(
+  ctx: any,
+  message: { orderId?: string; customerPhone: string; content: string; externalMessageId?: string; _id: any; createdAt: number },
+  opts?: { force?: boolean },
+): Promise<{ recapId: Id<"shippingRecaps">; action: "created" | "updated" | "skipped" }> {
+  const order = await findOrder(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
+  const conversation = await findConversation(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
+  const parsed = applyOrderFallbacks(parseClosingMessage(message.content), order);
+  const comparison = compareWithOrder(parsed, order);
+  const existing = await findExistingRecap(ctx, {
+    orderIdBerdu: message.orderId || order?.orderId,
+    customerPhone: message.customerPhone,
+    conversationId: conversation?._id,
+  });
+  if (existing && (existing.status === "exported" || existing.status === "delivered")) {
+    return { recapId: existing._id, action: "skipped" };
+  }
+  const flags = comparison.flags;
+  const status: RecapStatus = flags.length > 0 ? "needs_review" : parsed.status;
+  const sourceMessageId = message.externalMessageId ?? message._id;
+  const payload = {
+    orderIdBerdu: message.orderId || order?.orderId,
+    conversationId: conversation?._id,
+    customerPhone: message.customerPhone,
+    customerName: order?.customerName ?? conversation?.customerName ?? "",
+    csName: order?.assignedCsName ?? conversation?.assignedCsName ?? "",
+    csPhone: order?.assignedCsNumber,
+    orderedAt: order?.createdAt,
+    closedAt: message.createdAt,
+    recipientName: parsed.recipientName,
+    recipientPhone: parsed.recipientPhone,
+    recipientAddress: parsed.recipientAddress,
+    recipientDistrict: parsed.recipientDistrict,
+    recipientCity: parsed.recipientCity,
+    packageContent: parsed.packageContent,
+    paymentMethod: parsed.paymentMethod,
+    nonCodItemPrice: parsed.nonCodItemPrice,
+    codValue: parsed.codValue,
+    shippingCost: parsed.shippingCost,
+    total: parsed.total,
+    discount: parsed.discount,
+    inferredDiscount: comparison.inferredDiscount,
+    status,
+    flags,
+    sourceMessageId,
+    sourceMessageText: message.content,
+    updatedAt: Date.now(),
+  };
+  if (existing && existing.sourceMessageId === sourceMessageId && !opts?.force) {
+    return { recapId: existing._id, action: "skipped" };
+  }
+  if (existing) {
+    await ctx.db.patch(existing._id, { ...payload, version: existing.version + 1 });
+    return { recapId: existing._id, action: "updated" };
+  }
+  const recapId = await ctx.db.insert("shippingRecaps", { ...payload, version: 1, createdAt: Date.now() });
+  return { recapId, action: "created" };
+}
+
 export const backfillFromMessages = mutation({
   args: {
     limit: v.optional(v.number()),
@@ -488,74 +553,20 @@ export const backfillFromMessages = mutation({
     let skipped = 0;
     const recapIds: Id<"shippingRecaps">[] = [];
 
+    const phrases = await getActiveClosingPhrases(ctx);
     for (const message of messages) {
       if (args.startAt && message.createdAt < args.startAt) continue;
       if (args.endAt && message.createdAt > args.endAt) continue;
       if (message.direction !== "outbound") continue;
-      if (!String(message.content || "").includes("PEMESANAN BERHASIL")) continue;
+      if (!messageMatchesPhrase(message.content, phrases)) continue;
       scanned += 1;
-
-      const order = await findOrder(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
-      const conversation = await findConversation(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
-      const parsed = applyOrderFallbacks(parseClosingMessage(message.content), order);
-      const comparison = compareWithOrder(parsed, order);
-      const existing = await findExistingRecap(ctx, {
-        orderIdBerdu: message.orderId || order?.orderId,
-        customerPhone: message.customerPhone,
-        conversationId: conversation?._id,
-      });
-      const flags = comparison.flags;
-      const status: RecapStatus = flags.length > 0 ? "needs_review" : parsed.status;
-      const payload = {
-        orderIdBerdu: message.orderId || order?.orderId,
-        conversationId: conversation?._id,
-        customerPhone: message.customerPhone,
-        customerName: order?.customerName ?? conversation?.customerName ?? "",
-        csName: order?.assignedCsName ?? conversation?.assignedCsName ?? "",
-        csPhone: order?.assignedCsNumber,
-        orderedAt: order?.createdAt,
-        closedAt: message.createdAt,
-        recipientName: parsed.recipientName,
-        recipientPhone: parsed.recipientPhone,
-        recipientAddress: parsed.recipientAddress,
-        recipientDistrict: parsed.recipientDistrict,
-        recipientCity: parsed.recipientCity,
-        packageContent: parsed.packageContent,
-        paymentMethod: parsed.paymentMethod,
-        nonCodItemPrice: parsed.nonCodItemPrice,
-        codValue: parsed.codValue,
-        shippingCost: parsed.shippingCost,
-        total: parsed.total,
-        discount: parsed.discount,
-        inferredDiscount: comparison.inferredDiscount,
-        status,
-        flags,
-        sourceMessageId: message.externalMessageId ?? message._id,
-        sourceMessageText: message.content,
-        updatedAt: Date.now(),
-      };
-
-      if (existing && existing.sourceMessageId === payload.sourceMessageId && !args.force) {
+      const result = await upsertRecapFromMessage(ctx, message, { force: args.force });
+      if (result.action === "skipped") {
         skipped += 1;
         continue;
       }
-
-      let recapId: Id<"shippingRecaps">;
-      if (existing) {
-        recapId = existing._id;
-        await ctx.db.patch(existing._id, {
-          ...payload,
-          version: existing.version + 1,
-        });
-      } else {
-        recapId = await ctx.db.insert("shippingRecaps", {
-          ...payload,
-          version: 1,
-          createdAt: Date.now(),
-        });
-      }
-      recapIds.push(recapId);
       upserted += 1;
+      recapIds.push(result.recapId);
     }
 
     return { success: true, scanned, upserted, skipped, recapIds };
