@@ -245,7 +245,11 @@ export default function PanelPage() {
 
   const csFilter = selectedCsName === 'all' ? undefined : selectedCsName;
   const conversationsData = useQuery(api.state.listConversations, { includeClosed: true, csName: csFilter });
-  const statsData = useQuery(api.state.getDailyStats, { date: selectedJakartaDate });
+  const summaryData = useQuery(api.metrics.getDashboardSummary, {
+    startAt: selectedDateRange.startAt,
+    endAt: selectedDateRange.endAt,
+    csName: csFilter,
+  });
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
   const csConfigsData = useQuery(api.csConfigs.list, {});
   const shippingRecapsData = useQuery(api.shippingRecaps.list, {
@@ -285,27 +289,27 @@ export default function PanelPage() {
   const createPanelClosingRecap = useMutation(api.shippingRecaps.createFromPanelClosing);
 
   useEffect(() => {
-    if (conversationsData !== undefined && statsData !== undefined && globalEnabledData !== undefined) {
+    if (conversationsData !== undefined && summaryData !== undefined && globalEnabledData !== undefined) {
       setLastUpdated(new Date().toLocaleTimeString('id-ID'));
     }
-  }, [conversationsData, globalEnabledData, statsData]);
+  }, [conversationsData, globalEnabledData, summaryData]);
 
   const conversations = (conversationsData ?? []) as Conversation[];
   const csConfigs = (csConfigsData ?? []) as CsConfig[];
   const shippingRecaps = (shippingRecapsData ?? []) as ShippingRecap[];
   const performance = performanceData as PerformanceData | undefined;
   const stats: Stats = {
-    orders: statsData?.orders ?? 0,
-    closings: statsData?.closings ?? 0,
-    ai_closings: statsData?.ai_closings ?? 0,
-    manual_closings: statsData?.manual_closings ?? 0,
-    cancelled: statsData?.cancelled ?? 0,
-    handovers: statsData?.handovers ?? 0,
-    closed_today: statsData?.closed_today ?? 0,
-    date: statsData?.date ?? '',
+    orders: summaryData?.leads ?? 0,
+    closings: summaryData?.closings ?? 0,
+    ai_closings: Math.max((summaryData?.closings ?? 0) - (summaryData?.manualClosings ?? 0), 0),
+    manual_closings: summaryData?.manualClosings ?? 0,
+    cancelled: summaryData?.cancelled ?? 0,
+    handovers: summaryData?.handovers ?? 0,
+    closed_today: 0,
+    date: selectedJakartaDate,
   };
   const globalEnabled = globalEnabledData !== false;
-  const loading = conversationsData === undefined || statsData === undefined || globalEnabledData === undefined;
+  const loading = conversationsData === undefined || summaryData === undefined || globalEnabledData === undefined;
 
   useEffect(() => {
     setSelectedRecapIds(new Set());
@@ -524,7 +528,7 @@ export default function PanelPage() {
       {
         label: 'Orders',
         value: stats.orders,
-        detail: 'Unique order count',
+        detail: 'Leads · HP unik',
         icon: Activity,
         tone: 'text-sky-400',
       },
@@ -579,13 +583,13 @@ export default function PanelPage() {
       },
       {
         label: 'Archived',
-        value: stats.closed_today,
+        value: closed.length,
         detail: 'Chat archived',
         icon: Clock3,
         tone: 'text-muted-foreground',
       },
     ],
-    [active.length, activeTodayCount, aiClosings, crPerf, handover.length, handoverTodayCount, handoverRate, manualClosings, performance, stats, totalClosing],
+    [active.length, activeTodayCount, aiClosings, closed.length, crPerf, handover.length, handoverTodayCount, handoverRate, manualClosings, performance, stats, totalClosing],
   );
 
   return (
@@ -807,13 +811,13 @@ export default function PanelPage() {
                         <CardDescription>How the main metrics are calculated.</CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-2 text-sm text-muted-foreground">
-                        <Formula label="Orders" value="unique phone + product" />
-                        <Formula label="Total Closing" value="dari shippingRecaps" />
+                        <Formula label="Orders" value="leads (HP unik)" />
+                        <Formula label="Total Closing" value="recap non-cancelled (order unik)" />
                         <Formula label="AI Closing" value="total − manual closing" />
                         <Formula label="Manual Closing" value="CS marked di panel" />
-                        <Formula label="Cancelled" value="dari shippingRecaps" />
+                        <Formula label="Cancelled" value="recap cancelled (excluded)" />
                         <Formula label="Closing rate" value="closing / leads" />
-                        <Formula label="Handover rate" value="handovers / orders" />
+                        <Formula label="Handover rate" value="handovers / leads" />
                       </CardContent>
                     </Card>
                   </aside>

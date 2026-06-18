@@ -79,7 +79,7 @@ export const getTrend = query({
     };
     for (const o of orders) add(leadSets, bucketKey(o.createdAt, args.bucket), normalizePhone(o.customerPhone));
     for (const r of recaps) add(closeSets, bucketKey(r.closedAt, args.bucket), r.orderIdBerdu || normalizePhone(r.customerPhone));
-    const buckets = Array.from(new Set([...leadSets.keys(), ...closeSets.keys()])).sort();
+    const buckets = Array.from(new Set(Array.from(leadSets.keys()).concat(Array.from(closeSets.keys())))).sort();
     return buckets.map((b) => {
       const leads = leadSets.get(b)?.size ?? 0;
       const closings = closeSets.get(b)?.size ?? 0;
