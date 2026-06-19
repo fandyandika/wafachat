@@ -81,3 +81,37 @@ test("getTrend: buckets leads by order-date and closings by closing-date", async
   expect(closeDay).toBeDefined();
   expect(leadDay!.bucket).not.toBe(closeDay!.bucket); // lead day != closing day
 });
+
+test("getDuplicateOrders: groups repeat phones, flags accidental, excludes test+single+other-cs", async () => {
+  const t = convexTest(schema);
+  const base = {
+    customerName: "A", products: "", productsSubtotal: "", shippingCost: "", total: "Rp1",
+    shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu" as const,
+    aiEligible: true, updatedAt: t0,
+  };
+  await t.run(async (ctx) => {
+    // same phone + same product + consecutive ids -> accidental
+    await ctx.db.insert("orders", { ...base, orderId: "O-260619000146", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
+    await ctx.db.insert("orders", { ...base, orderId: "O-260619000147", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran", createdAt: t0 + 1 });
+    // same phone, different product, far-apart ids -> NOT accidental
+    await ctx.db.insert("orders", { ...base, orderId: "O-260619000200", customerPhone: "62822", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
+    await ctx.db.insert("orders", { ...base, orderId: "O-260619000900", customerPhone: "62822", assignedCsName: "CS A", productName: "Medis", createdAt: t0 + 1 });
+    // single order -> not returned
+    await ctx.db.insert("orders", { ...base, orderId: "O-260619000999", customerPhone: "62833", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
+    // test phone -> excluded
+    await ctx.db.insert("orders", { ...base, orderId: "O-T1", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
+    await ctx.db.insert("orders", { ...base, orderId: "O-T2", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran", createdAt: t0 + 1 });
+  });
+
+  const dups = await t.query(api.metrics.getDuplicateOrders, { startAt: t0 - 1, endAt: t0 + DAY });
+  expect(dups.length).toBe(2);
+  const acc = dups.find((d) => d.phone === "62811")!;
+  const non = dups.find((d) => d.phone === "62822")!;
+  expect(acc.likelyAccidental).toBe(true);   // same product + consecutive
+  expect(acc.count).toBe(2);
+  expect(non.likelyAccidental).toBe(false);  // diff product + far apart
+
+  // csName filter: no orders for "CS B"
+  const none = await t.query(api.metrics.getDuplicateOrders, { startAt: t0 - 1, endAt: t0 + DAY, csName: "CS B" });
+  expect(none.length).toBe(0);
+});

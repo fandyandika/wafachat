@@ -88,32 +88,50 @@ export const getTrend = query({
   },
 });
 
-// Diagnostic: reconcile WaFaChat leads vs Berdu order count for a day (default: today Asia/Jakarta).
-export const reconcileLeadsToday = query({
-  args: { startAt: v.optional(v.number()), endAt: v.optional(v.number()) },
+export const getDuplicateOrders = query({
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const now = Date.now();
-    const JAK = 7 * 60 * 60 * 1000;
-    const startAt = args.startAt ?? Math.floor((now + JAK) / 86_400_000) * 86_400_000 - JAK;
-    const endAt = args.endAt ?? now;
-    const orders = await ctx.db
-      .query("orders")
-      .withIndex("by_createdAt", (q) => q.gte("createdAt", startAt).lte("createdAt", endAt))
-      .collect();
-    const byPhone = new Map<string, { count: number; orderIds: string[]; test: boolean }>();
+    const orders = (
+      await ctx.db
+        .query("orders")
+        .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+        .collect()
+    ).filter((o) => !isInternalTestPhone(o.customerPhone) && (!args.csName || o.assignedCsName === args.csName));
+
+    const groups = new Map<string, typeof orders>();
     for (const o of orders) {
       const p = normalizePhone(o.customerPhone);
-      const e = byPhone.get(p) ?? { count: 0, orderIds: [], test: isInternalTestPhone(o.customerPhone) };
-      e.count += 1;
-      e.orderIds.push(o.orderId);
-      byPhone.set(p, e);
+      const arr = groups.get(p) ?? [];
+      arr.push(o);
+      groups.set(p, arr);
     }
-    const testOrders = orders.filter((o) => isInternalTestPhone(o.customerPhone)).length;
-    const distinctLeads = Array.from(byPhone.values()).filter((e) => !e.test).length;
-    const duplicatePhones = Array.from(byPhone.entries())
-      .filter(([, e]) => !e.test && e.count > 1)
-      .map(([phone, e]) => ({ phone, count: e.count, orderIds: e.orderIds }));
-    const extraDupOrders = duplicatePhones.reduce((s, d) => s + (d.count - 1), 0);
-    return { startAt, endAt, totalOrders: orders.length, testOrders, distinctLeads, extraDupOrders, duplicatePhones };
+
+    const seq = (orderId: string) => parseInt(orderId.replace(/\D/g, ""), 10);
+    const result = [];
+    for (const [phone, list] of groups) {
+      if (list.length < 2) continue;
+      const sorted = [...list].sort((a, b) => b.createdAt - a.createdAt);
+      const sameProduct = new Set(sorted.map((o) => o.productName)).size === 1;
+      const seqs = sorted.map((o) => seq(o.orderId)).filter((n) => !Number.isNaN(n)).sort((a, b) => a - b);
+      let nearConsecutive = false;
+      for (let i = 1; i < seqs.length; i++) if (seqs[i] - seqs[i - 1] <= 3) nearConsecutive = true;
+      result.push({
+        phone,
+        customerName: sorted[0].customerName,
+        csName: sorted[0].assignedCsName,
+        count: sorted.length,
+        sameProduct,
+        nearConsecutive,
+        likelyAccidental: sameProduct || nearConsecutive,
+        orders: sorted.map((o) => ({ orderId: o.orderId, productName: o.productName, total: o.total, createdAt: o.createdAt })),
+      });
+    }
+    result.sort(
+      (a, b) =>
+        Number(b.likelyAccidental) - Number(a.likelyAccidental) ||
+        b.count - a.count ||
+        (b.orders[0]?.createdAt ?? 0) - (a.orders[0]?.createdAt ?? 0),
+    );
+    return result;
   },
 });
