@@ -108,7 +108,7 @@ export const getDuplicateOrders = query({
 
     const seq = (orderId: string) => parseInt(orderId.replace(/\D/g, ""), 10);
     const result = [];
-    for (const [phone, list] of groups) {
+    for (const [phone, list] of Array.from(groups.entries())) {
       if (list.length < 2) continue;
       const sorted = [...list].sort((a, b) => b.createdAt - a.createdAt);
       const sameProduct = new Set(sorted.map((o) => o.productName)).size === 1;

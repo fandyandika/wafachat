@@ -250,6 +250,11 @@ export default function PanelPage() {
     endAt: selectedDateRange.endAt,
     csName: csFilter,
   });
+  const duplicateOrders = useQuery(api.metrics.getDuplicateOrders, {
+    startAt: selectedDateRange.startAt,
+    endAt: selectedDateRange.endAt,
+    csName: csFilter,
+  });
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
   const csConfigsData = useQuery(api.csConfigs.list, {});
   const shippingRecapsData = useQuery(api.shippingRecaps.list, {
@@ -310,6 +315,8 @@ export default function PanelPage() {
   };
   const globalEnabled = globalEnabledData !== false;
   const loading = conversationsData === undefined || summaryData === undefined || globalEnabledData === undefined;
+  const fmtTime = (ms: number) =>
+    new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' }).format(new Date(ms));
 
   useEffect(() => {
     setSelectedRecapIds(new Set());
@@ -762,6 +769,46 @@ export default function PanelPage() {
                     ? Array.from({ length: 9 }).map((_, index) => <MetricSkeleton key={index} />)
                     : cards.map((card) => <MetricCard key={card.label} {...card} />)}
                 </section>
+
+                <Card className="mt-3">
+                  <CardHeader>
+                    <CardTitle className="text-base">⚠️ Order Dobel</CardTitle>
+                    <CardDescription>Customer dengan ≥2 order di periode ini — kroscek di Berdu, cancel jika dobel tak sengaja.</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {duplicateOrders === undefined ? (
+                      <p className="text-sm text-muted-foreground">Memuat…</p>
+                    ) : duplicateOrders.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">Tidak ada order dobel di periode ini ✅</p>
+                    ) : (
+                      duplicateOrders.map((d) => (
+                        <div key={d.phone} className="rounded-md border border-border p-3 text-sm">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium">{d.customerName || 'Tanpa Nama'}</span>
+                            <span className="text-muted-foreground">{d.phone}</span>
+                            <span className="text-muted-foreground">· {d.csName || '—'}</span>
+                            <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{d.count}× order</span>
+                            {d.likelyAccidental ? (
+                              <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-500">⚠ kemungkinan accidental</span>
+                            ) : (
+                              <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">repeat customer</span>
+                            )}
+                          </div>
+                          <ul className="mt-2 space-y-1">
+                            {d.orders.map((o) => (
+                              <li key={o.orderId} className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+                                <code className="text-foreground">{o.orderId}</code>
+                                <span>{o.productName || '—'}</span>
+                                <span>{o.total || '—'}</span>
+                                <span>{fmtTime(o.createdAt)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
 
                 <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
                   <div className="space-y-6">
