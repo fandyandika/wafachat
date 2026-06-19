@@ -1572,6 +1572,8 @@ function PerformancePanel({
     return <span className="text-muted-foreground">–</span>;
   };
   const [perfTab, setPerfTab] = useState<'summary' | 'cs' | 'product'>('summary');
+  const [reportPeriod, setReportPeriod] = useState<'week' | 'month'>('week');
+  const report = useQuery(api.analytics.getPeriodReport, { period: reportPeriod });
 
   const tabs = [
     { key: 'summary' as const, label: 'Ringkasan' },
@@ -1735,6 +1737,64 @@ function PerformancePanel({
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">🧾 Laporan {reportPeriod === 'week' ? 'Mingguan' : 'Bulanan'}</CardTitle>
+              <CardDescription>{report ? report.label : '…'} — total + Δ vs periode sebelumnya.</CardDescription>
+            </div>
+            <div className="flex gap-1 rounded-lg border bg-muted/30 p-1">
+              {(['week', 'month'] as const).map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setReportPeriod(p)}
+                  className={cn('rounded-md px-3 py-1 text-xs font-medium transition-colors', reportPeriod === p ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+                >
+                  {p === 'week' ? 'Mingguan' : 'Bulanan'}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {report === undefined ? (
+            <p className="text-sm text-muted-foreground">Memuat…</p>
+          ) : (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+                <div><div className="text-xs text-muted-foreground">Leads</div><div className="font-semibold">{report.leads} {deltaTag(report.leads - report.prevLeads)}</div></div>
+                <div><div className="text-xs text-muted-foreground">Closing</div><div className="font-semibold">{report.closings} {deltaTag(report.closings - report.prevClosings)}</div></div>
+                <div><div className="text-xs text-muted-foreground">CR</div><div className="font-semibold">{report.cr}% {deltaTag(Math.round((report.cr - report.prevCr) * 10) / 10, '%')}</div></div>
+                <div><div className="text-xs text-muted-foreground">Omzet</div><div className="font-semibold">{formatRupiah(report.revenue)}</div></div>
+                <div><div className="text-xs text-muted-foreground">Dibatalkan</div><div className="font-semibold text-destructive">{report.cancelled}</div></div>
+              </div>
+              {report.perCs.length > 0 && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="text-left text-xs text-muted-foreground">
+                      <tr><th className="py-1 pr-3">CS</th><th className="py-1 pr-3">Leads</th><th className="py-1 pr-3">Closing</th><th className="py-1 pr-3">CR</th><th className="py-1 pr-3">Omzet</th></tr>
+                    </thead>
+                    <tbody>
+                      {report.perCs.map((c) => (
+                        <tr key={c.csName} className="border-t border-border">
+                          <td className="py-1.5 pr-3 font-medium">{c.csName || '—'}</td>
+                          <td className="py-1.5 pr-3">{c.leads}</td>
+                          <td className="py-1.5 pr-3">{c.closings}</td>
+                          <td className="py-1.5 pr-3">{c.cr}%</td>
+                          <td className="py-1.5 pr-3">{formatRupiah(c.revenue)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </CardContent>
