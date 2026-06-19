@@ -99,3 +99,61 @@ export const getProductDifficulty = query({
     return rows;
   },
 });
+
+const JAK_MS = 7 * 60 * 60 * 1000;
+const DAY_MS = 86_400_000;
+function startOfJakartaDay(ts: number) {
+  return Math.floor((ts + JAK_MS) / DAY_MS) * DAY_MS - JAK_MS;
+}
+function periodRange(period: "week" | "month", anchor: number): { start: number; end: number; prevStart: number; prevEnd: number; label: string } {
+  const dayStart = startOfJakartaDay(anchor);
+  const jak = new Date(dayStart + JAK_MS); // Jakarta wall-clock midnight of anchor's day
+  if (period === "week") {
+    const dow = jak.getUTCDay(); // 0=Sun..6=Sat
+    const mondayOffset = (dow + 6) % 7;
+    const start = dayStart - mondayOffset * DAY_MS;
+    const end = start + 7 * DAY_MS - 1;
+    const mon = new Date(start + JAK_MS);
+    const label = `Minggu ${mon.getUTCFullYear()}-${String(mon.getUTCMonth() + 1).padStart(2, "0")}-${String(mon.getUTCDate()).padStart(2, "0")}`;
+    return { start, end, prevStart: start - 7 * DAY_MS, prevEnd: start - 1, label };
+  }
+  const y = jak.getUTCFullYear(), m = jak.getUTCMonth();
+  const start = Date.UTC(y, m, 1) - JAK_MS;
+  const end = Date.UTC(y, m + 1, 1) - JAK_MS - 1;
+  const prevStart = Date.UTC(y, m - 1, 1) - JAK_MS;
+  const label = `${y}-${String(m + 1).padStart(2, "0")}`;
+  return { start, end, prevStart, prevEnd: start - 1, label };
+}
+
+export const getPeriodReport = query({
+  args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
+    const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
+    const cur = await computeCsAgg(ctx, start, end);
+    const prev = await computeCsAgg(ctx, prevStart, prevEnd);
+    const totals = (m: Map<string, CsAgg>) => {
+      const leads = new Set<string>(), closings = new Set<string>();
+      let revenue = 0;
+      m.forEach((a) => {
+        a.leads.forEach((p) => leads.add(p));
+        a.closings.forEach((c) => closings.add(c));
+        revenue += a.revenue;
+      });
+      return { leads: leads.size, closings: closings.size, revenue };
+    };
+    const curT = totals(cur), prevT = totals(prev);
+    const cancelled = (
+      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", start).lte("closedAt", end)).collect()
+    ).filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && !isInternalTestPhone(r.customerPhone)).length;
+    const perCs = Array.from(cur.entries())
+      .map(([csName, a]) => ({ csName, leads: a.leads.size, closings: a.closings.size, cr: cr(a.closings.size, a.leads.size), revenue: a.revenue }))
+      .sort((a, b) => b.closings - a.closings);
+    return {
+      label, rangeStart: start, rangeEnd: end,
+      leads: curT.leads, closings: curT.closings, cr: cr(curT.closings, curT.leads), revenue: curT.revenue, cancelled,
+      prevLeads: prevT.leads, prevClosings: prevT.closings, prevCr: cr(prevT.closings, prevT.leads), prevRevenue: prevT.revenue,
+      perCs,
+    };
+  },
+});

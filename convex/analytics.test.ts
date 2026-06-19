@@ -57,3 +57,23 @@ test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
   expect(rows[1].productName).toBe("Easy");
   expect(rows[1].cr).toBe(100);
 });
+
+test("getPeriodReport: week period, current vs prior week + per-CS", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    // current week (anchor day): CS A = 2 leads, 1 closing, revenue 50000
+    await ctx.db.insert("orders", { ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "C2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
+    // prior week (anchor - 7 days): 1 lead
+    await ctx.db.insert("orders", { ...ordBase, orderId: "P1", customerPhone: "62820", assignedCsName: "CS A", productName: "Q", createdAt: t0 - 7 * DAY, updatedAt: t0 });
+  });
+  const r = await t.query(api.analytics.getPeriodReport, { period: "week", anchor: t0 });
+  expect(r.leads).toBe(2);
+  expect(r.closings).toBe(1);
+  expect(r.revenue).toBe(50000);
+  expect(r.prevLeads).toBe(1);
+  expect(r.perCs[0].csName).toBe("CS A");
+  expect(r.perCs[0].closings).toBe(1);
+  expect(r.label).toMatch(/^Minggu /);
+});
