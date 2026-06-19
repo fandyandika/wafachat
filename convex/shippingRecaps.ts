@@ -172,7 +172,7 @@ function normalizeComparable(value: string | undefined): string {
   return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function normalizeProductName(value: string | undefined): string {
+export function normalizeProductName(value: string | undefined): string {
   return cleanMarkdown(value ?? "")
     .replace(/\(\s*\d+\s*x\s*\)/gi, "")
     .replace(/\s+-\s+Pilih Paket:.*/i, "")

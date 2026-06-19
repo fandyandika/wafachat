@@ -36,3 +36,24 @@ test("getCsLeaderboard: per-CS metrics + delta vs prior window, ranked", async (
   expect(a.deltaLeads).toBe(1);    // 2 - 1
   expect(a.deltaClosings).toBe(1); // 1 - 0
 });
+
+test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    // "Hard": 4 leads, 0 closing -> CR 0 (hardest)
+    for (let i = 0; i < 4; i++) await ctx.db.insert("orders", { ...ordBase, orderId: `H${i}`, customerPhone: `6280${i}`, assignedCsName: "CS A", productName: "Hard", createdAt: t0, updatedAt: t0 });
+    // "Easy": 4 leads, 4 closings -> CR 100
+    for (let i = 0; i < 4; i++) {
+      await ctx.db.insert("orders", { ...ordBase, orderId: `E${i}`, customerPhone: `6281${i}`, assignedCsName: "CS A", productName: "Easy", createdAt: t0, updatedAt: t0 });
+      await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: `E${i}`, customerPhone: `6281${i}`, customerName: "A", csName: "CS A", closedAt: t0, packageContent: "Easy", total: 1, status: "ready", createdAt: t0, updatedAt: t0 });
+    }
+    // "Rare": 2 leads -> filtered out (minLeads default 3)
+    for (let i = 0; i < 2; i++) await ctx.db.insert("orders", { ...ordBase, orderId: `R${i}`, customerPhone: `6282${i}`, assignedCsName: "CS A", productName: "Rare", createdAt: t0, updatedAt: t0 });
+  });
+  const rows = await t.query(api.analytics.getProductDifficulty, { startAt: t0 - 1, endAt: t0 + DAY });
+  expect(rows.length).toBe(2);               // Hard + Easy (Rare filtered)
+  expect(rows[0].productName).toBe("Hard");  // CR asc -> hardest first
+  expect(rows[0].cr).toBe(0);
+  expect(rows[1].productName).toBe("Easy");
+  expect(rows[1].cr).toBe(100);
+});
