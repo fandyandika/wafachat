@@ -255,6 +255,10 @@ export default function PanelPage() {
     endAt: selectedDateRange.endAt,
     csName: csFilter,
   });
+  const csLeaderboard = useQuery(api.analytics.getCsLeaderboard, {
+    startAt: selectedDateRange.startAt,
+    endAt: selectedDateRange.endAt,
+  });
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
   const csConfigsData = useQuery(api.csConfigs.list, {});
   const shippingRecapsData = useQuery(api.shippingRecaps.list, {
@@ -936,7 +940,7 @@ export default function PanelPage() {
             )}
 
             {panelView === 'performance' && (
-              <PerformancePanel data={performance} />
+              <PerformancePanel data={performance} csLeaderboard={csLeaderboard} />
             )}
           </div>
         </main>
@@ -1530,9 +1534,19 @@ function ShippingRecapPanel({
 
 function PerformancePanel({
   data,
+  csLeaderboard,
 }: {
   data?: PerformanceData;
+  csLeaderboard?: Array<{
+    csName: string; leads: number; closings: number; cr: number; revenue: number;
+    deltaLeads: number; deltaClosings: number; deltaCr: number;
+  }>;
 }) {
+  const deltaTag = (d: number, suffix = '') => {
+    if (d > 0) return <span className="text-emerald-500">▲{d}{suffix}</span>;
+    if (d < 0) return <span className="text-destructive">▼{Math.abs(d)}{suffix}</span>;
+    return <span className="text-muted-foreground">–</span>;
+  };
   const [perfTab, setPerfTab] = useState<'summary' | 'cs' | 'product'>('summary');
 
   const tabs = [
@@ -1590,6 +1604,47 @@ function PerformancePanel({
           </Card>
         ))}
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">🏆 Leaderboard CS</CardTitle>
+          <CardDescription>Ranking juara→lesu periode terpilih, dengan perubahan ▲▼ vs periode sebelumnya yang sama panjang.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {csLeaderboard === undefined ? (
+            <p className="text-sm text-muted-foreground">Memuat…</p>
+          ) : csLeaderboard.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Belum ada data di periode ini.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-muted-foreground">
+                  <tr>
+                    <th className="py-1 pr-3">#</th>
+                    <th className="py-1 pr-3">CS</th>
+                    <th className="py-1 pr-3">Leads (Δ)</th>
+                    <th className="py-1 pr-3">Closing (Δ)</th>
+                    <th className="py-1 pr-3">CR (Δ)</th>
+                    <th className="py-1 pr-3">Omzet</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {csLeaderboard.map((r, i) => (
+                    <tr key={r.csName} className="border-t border-border">
+                      <td className="py-1.5 pr-3 text-muted-foreground">{i + 1}</td>
+                      <td className="py-1.5 pr-3 font-medium">{r.csName || '—'}</td>
+                      <td className="py-1.5 pr-3">{r.leads} {deltaTag(r.deltaLeads)}</td>
+                      <td className="py-1.5 pr-3">{r.closings} {deltaTag(r.deltaClosings)}</td>
+                      <td className="py-1.5 pr-3">{r.cr}% {deltaTag(r.deltaCr, '%')}</td>
+                      <td className="py-1.5 pr-3">{formatRupiah(r.revenue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Tab content */}
       {perfTab === 'summary' && (

@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as analytics from "../analytics.js";
 import type * as closingRules from "../closingRules.js";
 import type * as csConfigs from "../csConfigs.js";
 import type * as events from "../events.js";
@@ -26,6 +27,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  analytics: typeof analytics;
   closingRules: typeof closingRules;
   csConfigs: typeof csConfigs;
   events: typeof events;
