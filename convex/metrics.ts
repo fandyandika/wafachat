@@ -87,3 +87,33 @@ export const getTrend = query({
     });
   },
 });
+
+// Diagnostic: reconcile WaFaChat leads vs Berdu order count for a day (default: today Asia/Jakarta).
+export const reconcileLeadsToday = query({
+  args: { startAt: v.optional(v.number()), endAt: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const JAK = 7 * 60 * 60 * 1000;
+    const startAt = args.startAt ?? Math.floor((now + JAK) / 86_400_000) * 86_400_000 - JAK;
+    const endAt = args.endAt ?? now;
+    const orders = await ctx.db
+      .query("orders")
+      .withIndex("by_createdAt", (q) => q.gte("createdAt", startAt).lte("createdAt", endAt))
+      .collect();
+    const byPhone = new Map<string, { count: number; orderIds: string[]; test: boolean }>();
+    for (const o of orders) {
+      const p = normalizePhone(o.customerPhone);
+      const e = byPhone.get(p) ?? { count: 0, orderIds: [], test: isInternalTestPhone(o.customerPhone) };
+      e.count += 1;
+      e.orderIds.push(o.orderId);
+      byPhone.set(p, e);
+    }
+    const testOrders = orders.filter((o) => isInternalTestPhone(o.customerPhone)).length;
+    const distinctLeads = Array.from(byPhone.values()).filter((e) => !e.test).length;
+    const duplicatePhones = Array.from(byPhone.entries())
+      .filter(([, e]) => !e.test && e.count > 1)
+      .map(([phone, e]) => ({ phone, count: e.count, orderIds: e.orderIds }));
+    const extraDupOrders = duplicatePhones.reduce((s, d) => s + (d.count - 1), 0);
+    return { startAt, endAt, totalOrders: orders.length, testOrders, distinctLeads, extraDupOrders, duplicatePhones };
+  },
+});
