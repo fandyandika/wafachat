@@ -259,6 +259,15 @@ export default function PanelPage() {
     startAt: selectedDateRange.startAt,
     endAt: selectedDateRange.endAt,
   });
+  const productDifficulty = useQuery(api.analytics.getProductDifficulty, {
+    startAt: selectedDateRange.startAt,
+    endAt: selectedDateRange.endAt,
+  });
+  const trendData = useQuery(api.metrics.getTrend, {
+    startAt: selectedDateRange.startAt,
+    endAt: selectedDateRange.endAt,
+    bucket: 'day',
+  });
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
   const csConfigsData = useQuery(api.csConfigs.list, {});
   const shippingRecapsData = useQuery(api.shippingRecaps.list, {
@@ -940,7 +949,7 @@ export default function PanelPage() {
             )}
 
             {panelView === 'performance' && (
-              <PerformancePanel data={performance} csLeaderboard={csLeaderboard} />
+              <PerformancePanel data={performance} csLeaderboard={csLeaderboard} productDifficulty={productDifficulty} trendData={trendData} />
             )}
           </div>
         </main>
@@ -1532,15 +1541,30 @@ function ShippingRecapPanel({
   );
 }
 
+function Sparkline({ values, tone }: { values: number[]; tone: string }) {
+  const max = Math.max(1, ...values);
+  return (
+    <div className="flex h-8 items-end gap-0.5">
+      {values.map((v, i) => (
+        <div key={i} className={cn('w-1.5 rounded-sm', tone)} style={{ height: `${Math.max(4, (v / max) * 100)}%` }} title={String(v)} />
+      ))}
+    </div>
+  );
+}
+
 function PerformancePanel({
   data,
   csLeaderboard,
+  productDifficulty,
+  trendData,
 }: {
   data?: PerformanceData;
   csLeaderboard?: Array<{
     csName: string; leads: number; closings: number; cr: number; revenue: number;
     deltaLeads: number; deltaClosings: number; deltaCr: number;
   }>;
+  productDifficulty?: Array<{ productName: string; leads: number; closings: number; cr: number; prevCr: number; deltaCr: number }>;
+  trendData?: Array<{ bucket: string; leads: number; closings: number; cr: number }>;
 }) {
   const deltaTag = (d: number, suffix = '') => {
     if (d > 0) return <span className="text-emerald-500">▲{d}{suffix}</span>;
@@ -1641,6 +1665,76 @@ function PerformancePanel({
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">📉 Produk Tersusah Closing</CardTitle>
+          <CardDescription>CR terendah dulu (min 3 leads). ΔCR = perubahan vs periode sebelumnya.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {productDifficulty === undefined ? (
+            <p className="text-sm text-muted-foreground">Memuat…</p>
+          ) : productDifficulty.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Belum cukup data produk di periode ini.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-left text-xs text-muted-foreground">
+                  <tr><th className="py-1 pr-3">Produk</th><th className="py-1 pr-3">Leads</th><th className="py-1 pr-3">Closing</th><th className="py-1 pr-3">CR (Δ)</th></tr>
+                </thead>
+                <tbody>
+                  {productDifficulty.map((p) => (
+                    <tr key={p.productName} className="border-t border-border">
+                      <td className="py-1.5 pr-3 font-medium">{p.productName}</td>
+                      <td className="py-1.5 pr-3">{p.leads}</td>
+                      <td className="py-1.5 pr-3">{p.closings}</td>
+                      <td className="py-1.5 pr-3">{p.cr}% {deltaTag(p.deltaCr, '%')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">📈 Trend Harian</CardTitle>
+          <CardDescription>Leads & closing per hari di periode terpilih.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {trendData === undefined ? (
+            <p className="text-sm text-muted-foreground">Memuat…</p>
+          ) : trendData.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Belum ada data.</p>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center gap-4">
+                <div><div className="text-xs text-muted-foreground">Leads</div><Sparkline values={trendData.map((b) => b.leads)} tone="bg-sky-500/70" /></div>
+                <div><div className="text-xs text-muted-foreground">Closing</div><Sparkline values={trendData.map((b) => b.closings)} tone="bg-emerald-500/70" /></div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-xs text-muted-foreground">
+                    <tr><th className="py-1 pr-3">Hari</th><th className="py-1 pr-3">Leads</th><th className="py-1 pr-3">Closing</th><th className="py-1 pr-3">CR</th></tr>
+                  </thead>
+                  <tbody>
+                    {trendData.map((b) => (
+                      <tr key={b.bucket} className="border-t border-border">
+                        <td className="py-1.5 pr-3">{b.bucket}</td>
+                        <td className="py-1.5 pr-3">{b.leads}</td>
+                        <td className="py-1.5 pr-3">{b.closings}</td>
+                        <td className="py-1.5 pr-3">{b.cr}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </CardContent>
