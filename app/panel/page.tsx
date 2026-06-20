@@ -83,105 +83,11 @@ import { useHighlightOnChange } from '@/components/ui/use-highlight-on-change';
 import { cn } from '@/lib/utils';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
+import type { Conversation, Stats, ShippingRecap, PerformanceData, CsConfig, QueueKey, RecapStatus, PaymentFilter, RecapSort } from '@/components/panel/types';
+import { formatRupiah, formatTime, formatDateTime, pct, fmtTime } from '@/lib/format';
 
-interface Conversation {
-  conversationId: Id<'conversations'>;
-  phone: string;
-  status: 'active' | 'handover' | 'closed';
-  customerName: string;
-  productName: string;
-  products?: string;
-  productsSubtotal?: string;
-  shippingCost?: string;
-  total?: string;
-  shippingAddress?: string;
-  shippingDistrict?: string;
-  shippingCity?: string;
-  csName: string;
-  csNumber?: string;
-  order_id?: string;
-  updatedAt: string;
-  note: string;
-  aiEnabled?: boolean;
-  closingSource?: 'ai' | 'manual' | null;
-  salesOutcome?: 'pending' | 'ai_won' | 'manual_won' | 'cancelled';
-}
-
-interface Stats {
-  orders: number;
-  closings: number;
-  ai_closings?: number;
-  manual_closings?: number;
-  cancelled?: number;
-  handovers: number;
-  closed_today: number;
-  date: string;
-}
-
-type QueueKey = 'active' | 'handover' | 'closed' | 'all';
 type PanelView = 'dashboard' | 'shipping' | 'performance';
-type RecapStatus = 'ready' | 'needs_review' | 'exported' | 'delivered' | 'cancelled' | 'cancelled_after_export';
-type PaymentFilter = 'all' | 'cod' | 'transfer';
 type DateRangeKey = 'today' | 'yesterday' | '7d' | '30d' | 'month' | 'custom';
-type RecapSort = 'newest' | 'oldest' | 'value_asc' | 'value_desc' | 'status';
-
-interface ShippingRecap {
-  _id: Id<'shippingRecaps'>;
-  orderIdBerdu?: string;
-  customerPhone: string;
-  customerName: string;
-  csName: string;
-  csPhone?: string;
-  orderedAt?: number;
-  closedAt: number;
-  recipientName: string;
-  recipientPhone: string;
-  recipientAddress: string;
-  recipientDistrict: string;
-  recipientCity: string;
-  packageContent: string;
-  paymentMethod: 'cod' | 'transfer' | 'unknown';
-  nonCodItemPrice?: number;
-  codValue?: number;
-  shippingCost?: number;
-  total?: number;
-  discount?: number;
-  inferredDiscount?: number;
-  bumpOrder?: string;
-  upsell?: string;
-  specialBonus?: string;
-  shippingInstruction?: string;
-  status: RecapStatus;
-  flags: string[];
-  sourceMessageText: string;
-  version: number;
-  exportedAt?: number;
-  exportBatchId?: string;
-  cancelReason?: string;
-  deliveredAt?: number;
-}
-
-interface PerformanceData {
-  totalLeads: number;
-  totalClosing: number;
-  overallCr: number;
-  totalCod: number;
-  totalTransfer: number;
-  totalRevenue: number;
-  totalDiscount: number;
-  delivered: number;
-  cancelled: number;
-  products: Array<{ product: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
-  cs: Array<{ csName: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
-}
-
-interface CsConfig {
-  csName: string;
-  orderAutomationEnabled: boolean;
-  aiAssistantEnabled: boolean;
-  reportingEnabled: boolean;
-  isActive: boolean;
-}
 
 const navItems = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -348,8 +254,6 @@ export default function PanelPage() {
   };
   const globalEnabled = globalEnabledData !== false;
   const loading = conversationsData === undefined || summaryData === undefined || globalEnabledData === undefined;
-  const fmtTime = (ms: number) =>
-    new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta' }).format(new Date(ms));
 
   useEffect(() => {
     setSelectedRecapIds(new Set());
@@ -2624,32 +2528,4 @@ function Formula({ label, value }: { label: string; value: string }) {
       <span className="font-mono text-xs">{value}</span>
     </div>
   );
-}
-
-function formatTime(iso: string): string {
-  if (!iso) return '-';
-  try {
-    return new Date(iso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return iso;
-  }
-}
-
-function formatDateTime(timestamp: number): string {
-  if (!timestamp) return '-';
-  return new Date(timestamp).toLocaleString('id-ID', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function pct(n: number): string {
-  return `${n}%`;
-}
-
-function formatRupiah(value?: number): string {
-  if (value === undefined || Number.isNaN(value)) return '-';
-  return 'Rp' + new Intl.NumberFormat('id-ID').format(value);
 }
