@@ -1,5 +1,6 @@
 'use client';
 
+import { Suspense } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Bot, LayoutDashboard, MessagesSquare, CheckCircle2, BarChart3 } from 'lucide-react';
@@ -25,7 +26,7 @@ const RANGES: Array<{ label: string; value: DateRangeKey }> = [
   { label: 'Bulan ini', value: 'month' },
 ];
 
-export default function PanelLayout({ children }: { children: React.ReactNode }) {
+function PanelShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const sp = useSearchParams();
@@ -122,5 +123,15 @@ export default function PanelLayout({ children }: { children: React.ReactNode })
         </main>
       </div>
     </div>
+  );
+}
+
+// useSearchParams (in PanelShell + child pages) must sit under a Suspense
+// boundary for Next.js prerender; this single boundary covers the whole subtree.
+export default function PanelLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <Suspense>
+      <PanelShell>{children}</PanelShell>
+    </Suspense>
   );
 }
