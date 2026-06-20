@@ -29,7 +29,6 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ThemeToggle } from '@/components/theme-toggle';
 import {
   Select,
   SelectContent,
@@ -615,27 +614,27 @@ export default function PanelPage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
-        <aside className="hidden w-64 shrink-0 border-r bg-card/40 md:flex md:flex-col">
-          <div className="px-5 py-5">
+        <aside className="hidden w-64 shrink-0 border-r border-border bg-card/60 md:flex md:flex-col">
+          <div className="px-6 py-6">
             <div className="flex items-center gap-3">
-              <div className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Bot className="size-4" />
+              <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+                <Bot className="size-5" />
               </div>
               <div>
-                <div className="text-sm font-semibold leading-none">WaFaChat</div>
+                <div className="text-sm font-semibold leading-none text-foreground">WaFaChat</div>
                 <div className="mt-1 text-xs text-muted-foreground">CS Automation</div>
               </div>
             </div>
           </div>
-          <nav className="flex-1 space-y-1 px-3">
+          <nav className="flex-1 space-y-1 px-4">
             {navItems.map((item) => (
               <button
                 key={item.key}
                 className={cn(
-                  'flex h-9 w-full items-center gap-2 rounded-lg px-3 text-left text-sm transition-colors',
+                  'flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition-colors',
                   panelView === item.key
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
                 )}
                 onClick={() => setPanelView(item.key)}
                 type="button"
@@ -646,26 +645,24 @@ export default function PanelPage() {
             ))}
           </nav>
           <div className="p-4">
-            <Card size="sm" className="bg-background/60">
+            <Card size="sm" className="border-transparent bg-accent/60 shadow-none">
               <CardHeader>
                 <CardTitle className="text-sm">Production</CardTitle>
                 <CardDescription className="text-xs">n8n.miqra.dev</CardDescription>
               </CardHeader>
               <CardContent>
-                <Badge variant="outline" className="border-emerald-500/30 text-emerald-400">
-                  Live workflows
-                </Badge>
+                <Badge variant="success">Live workflows</Badge>
               </CardContent>
             </Card>
           </div>
         </aside>
 
         <main className="min-w-0 flex-1">
-          <header className="border-b bg-background/95 px-4 py-4 md:px-6">
+          <header className="sticky top-0 z-10 border-b border-border bg-background/80 px-4 py-4 backdrop-blur md:px-8">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-xl font-semibold tracking-tight">
+                  <h1 className="text-2xl font-semibold tracking-tight text-foreground">
                     {panelView === 'dashboard' ? 'Dashboard' : panelView === 'shipping' ? 'Rekap Pengiriman' : 'Performance'}
                   </h1>
                   <Badge variant="secondary">pustakaislam.net</Badge>
@@ -688,8 +685,7 @@ export default function PanelPage() {
                     ))}
                   </SelectContent>
                 </Select>
-                <ThemeToggle />
-                <div className="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs text-muted-foreground">
+                <div className="flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-3 text-xs text-muted-foreground">
                   <RefreshCw className="size-3.5" />
                   <span>Updated {lastUpdated || '-'}</span>
                 </div>
@@ -700,8 +696,8 @@ export default function PanelPage() {
                     'flex h-9 items-center gap-2 rounded-lg border px-3 text-sm font-medium transition-all duration-200',
                     'disabled:cursor-not-allowed disabled:opacity-60',
                     displayGlobalEnabled
-                      ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20'
-                      : 'border-border bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground',
+                      ? 'border-positive bg-positive-soft text-positive hover:brightness-95'
+                      : 'border-border bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground',
                   )}
                 >
                   {actionLoading === 'global' ? (
@@ -715,8 +711,8 @@ export default function PanelPage() {
                   <span className={cn(
                     'rounded px-1.5 py-0.5 text-xs font-bold',
                     displayGlobalEnabled
-                      ? 'bg-emerald-500/20 text-emerald-400'
-                      : 'bg-muted text-muted-foreground',
+                      ? 'bg-positive text-primary-foreground'
+                      : 'bg-muted-foreground/15 text-muted-foreground',
                   )}>
                     {displayGlobalEnabled ? 'ON' : 'OFF'}
                   </span>
