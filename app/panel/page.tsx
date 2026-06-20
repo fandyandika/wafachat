@@ -77,6 +77,9 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
+import { StatCard, type StatTone } from '@/components/ui/stat-card';
+import { AnimatedNumber } from '@/components/ui/animated-number';
+import { useHighlightOnChange } from '@/components/ui/use-highlight-on-change';
 import { cn } from '@/lib/utils';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -543,69 +546,81 @@ export default function PanelPage() {
   ];
 
   const cards = useMemo(
-    () => [
+    (): Array<{
+      label: string;
+      value: number;
+      detail: string;
+      icon: React.ComponentType<{ className?: string }>;
+      tone: StatTone;
+      format?: (n: number) => string;
+      highlightable?: boolean;
+    }> => [
       {
         label: 'Orders',
         value: stats.orders,
         detail: 'Leads · HP unik',
         icon: Activity,
-        tone: 'text-sky-400',
+        tone: 'lead',
+        highlightable: true,
       },
       {
         label: 'Total Closing',
         value: totalClosing,
         detail: `AI: ${aiClosings} · Manual: ${manualClosings}`,
         icon: CheckCircle2,
-        tone: 'text-emerald-400',
+        tone: 'positive',
+        highlightable: true,
       },
       {
         label: 'Manual closing',
         value: manualClosings,
         detail: 'Marked by CS',
         icon: CheckCircle2,
-        tone: 'text-sky-400',
+        tone: 'lead',
       },
       {
         label: 'Cancelled',
         value: performance?.cancelled ?? stats.cancelled ?? 0,
         detail: 'Customer cancelled',
         icon: CircleAlert,
-        tone: 'text-destructive',
+        tone: 'negative',
       },
       {
         label: 'Closing rate',
-        value: `${crPerf}%`,
+        value: crPerf,
         detail: 'Closing / orders',
         icon: BarChart3,
-        tone: crPerf > 100 ? 'text-destructive' : 'text-emerald-400',
+        tone: crPerf > 100 ? 'negative' : 'positive',
+        format: pct,
       },
       {
         label: 'Handovers',
         value: handoverTodayCount,
         detail: `Today · Queue: ${handover.length}`,
         icon: CircleAlert,
-        tone: 'text-amber-400',
+        tone: 'default',
       },
       {
         label: 'Handover rate',
-        value: `${handoverRate}%`,
+        value: handoverRate,
         detail: 'Today handover / orders',
         icon: ShieldCheck,
-        tone: 'text-amber-400',
+        tone: 'default',
+        format: pct,
       },
       {
         label: 'Active chats',
         value: active.length,
         detail: `Today · Updated: ${activeTodayCount}`,
         icon: MessageCircle,
-        tone: 'text-sky-400',
+        tone: 'lead',
       },
       {
         label: 'Archived',
         value: closed.length,
         detail: 'Chat archived',
         icon: Clock3,
-        tone: 'text-muted-foreground',
+        tone: 'default',
       },
     ],
     [active.length, activeTodayCount, aiClosings, closed.length, crPerf, handover.length, handoverTodayCount, handoverRate, manualClosings, performance, stats, totalClosing],
@@ -773,10 +788,10 @@ export default function PanelPage() {
 
             {panelView === 'dashboard' && (
               <>
-                <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7">
+                <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                   {loading
                     ? Array.from({ length: 9 }).map((_, index) => <MetricSkeleton key={index} />)
-                    : cards.map((card) => <MetricCard key={card.label} {...card} />)}
+                    : cards.map((card) => <DashboardStatCard key={card.label} {...card} />)}
                 </section>
 
                 <Card className="mt-3">
@@ -1008,46 +1023,43 @@ export default function PanelPage() {
   );
 }
 
-function MetricCard({
+function DashboardStatCard({
   label,
   value,
   detail,
-  icon: Icon,
+  icon,
   tone,
+  format,
+  highlightable,
 }: {
   label: string;
-  value: string | number;
+  value: number;
   detail: string;
-  icon: React.ElementType;
-  tone: string;
+  icon: React.ComponentType<{ className?: string }>;
+  tone: StatTone;
+  format?: (n: number) => string;
+  highlightable?: boolean;
 }) {
+  const highlight = useHighlightOnChange(highlightable ? value : undefined);
   return (
-    <Card size="sm" className="min-h-[112px]">
-      <CardHeader>
-        <CardTitle className="text-xs font-medium uppercase text-muted-foreground">{label}</CardTitle>
-        <CardAction>
-          <Icon className={cn('size-4', tone)} />
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        <div className={cn('text-2xl font-semibold tabular-nums', tone)}>{value}</div>
-        <p className="mt-1 text-xs text-muted-foreground">{detail}</p>
-      </CardContent>
-    </Card>
+    <StatCard
+      label={label}
+      value={<AnimatedNumber value={value} format={format} />}
+      detail={detail}
+      icon={icon}
+      tone={tone}
+      highlight={highlight}
+    />
   );
 }
 
 function MetricSkeleton() {
   return (
-    <Card size="sm" className="min-h-[112px]">
-      <CardHeader>
-        <Skeleton className="h-3 w-24" />
-      </CardHeader>
-      <CardContent>
-        <Skeleton className="h-8 w-14" />
-        <Skeleton className="mt-2 h-3 w-28" />
-      </CardContent>
-    </Card>
+    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-5 shadow-sm">
+      <Skeleton className="h-3 w-24" />
+      <Skeleton className="h-8 w-16" />
+      <Skeleton className="h-3 w-28" />
+    </div>
   );
 }
 
@@ -2615,6 +2627,10 @@ function formatDateTime(timestamp: number): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function pct(n: number): string {
+  return `${n}%`;
 }
 
 function formatRupiah(value?: number): string {
