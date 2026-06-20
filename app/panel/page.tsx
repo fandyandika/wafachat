@@ -806,16 +806,16 @@ export default function PanelPage() {
                       <p className="text-sm text-muted-foreground">Tidak ada order dobel di periode ini ✅</p>
                     ) : (
                       duplicateOrders.map((d) => (
-                        <div key={d.phone} className="rounded-md border border-border p-3 text-sm">
+                        <div key={d.phone} className="rounded-xl border border-border bg-card p-4 text-sm shadow-sm">
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium">{d.customerName || 'Tanpa Nama'}</span>
+                            <span className="font-medium text-foreground">{d.customerName || 'Tanpa Nama'}</span>
                             <span className="text-muted-foreground">{d.phone}</span>
                             <span className="text-muted-foreground">· {d.csName || '—'}</span>
-                            <span className="rounded bg-muted px-1.5 py-0.5 text-xs">{d.count}× order</span>
+                            <Badge variant="secondary">{d.count}× order</Badge>
                             {d.likelyAccidental ? (
-                              <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-500">⚠ kemungkinan accidental</span>
+                              <Badge variant="warning">⚠ kemungkinan accidental</Badge>
                             ) : (
-                              <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">repeat customer</span>
+                              <Badge variant="secondary">repeat customer</Badge>
                             )}
                           </div>
                           <ul className="mt-2 space-y-1">
@@ -870,7 +870,7 @@ export default function PanelPage() {
                         <ReadinessRow label="Outcome dedup" value="order_id" ok />
                         <ReadinessRow label="Global AI switch" value={displayGlobalEnabled ? 'Enabled' : 'Disabled'} ok={displayGlobalEnabled} />
                         <Separator />
-                        <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+                        <div className="rounded-lg border border-border bg-accent/40 p-3 text-xs text-muted-foreground">
                           Rekap Pengiriman and Performance are sourced from Convex realtime data.
                         </div>
                       </CardContent>
