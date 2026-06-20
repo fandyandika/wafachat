@@ -1,6 +1,7 @@
 'use client';
 import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+import { Bot } from 'lucide-react';
 
 export default function LoginPage() {
   const [password, setPassword] = useState('');
@@ -26,27 +27,30 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <h1 className="text-xl font-bold text-foreground">
-            Pustaka<span className="text-emerald-500">Islam</span>
+          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
+            <Bot className="size-6" />
+          </div>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">
+            Pustaka<span className="text-primary">Islam</span>
           </h1>
           <p className="text-sm text-muted-foreground mt-1">CS AI Panel</p>
         </div>
         <form
           onSubmit={handleSubmit}
-          className="bg-card border border-border rounded-xl p-6 space-y-4 shadow-sm"
+          className="bg-card border border-border rounded-2xl p-7 space-y-5 shadow-sm"
         >
           <div>
-            <label className="block text-xs text-muted-foreground uppercase tracking-wide mb-2">
+            <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
               Password
             </label>
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-background border border-input rounded-lg px-3 py-2 text-sm text-foreground focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition"
+              className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
               placeholder="Masukkan password"
               required
             />
@@ -55,7 +59,7 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-semibold text-sm py-2 rounded-lg transition disabled:opacity-50"
+            className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-sm py-2.5 rounded-xl transition disabled:opacity-50"
           >
             {loading ? 'Masuk...' : 'Masuk'}
           </button>
