@@ -1,7 +1,6 @@
 import type { Config } from 'tailwindcss';
 
 const config: Config = {
-  darkMode: ['class'],
   content: [
     './app/**/*.{ts,tsx}',
     './components/**/*.{ts,tsx}',
@@ -43,11 +42,17 @@ const config: Config = {
         },
         destructive: {
           DEFAULT: 'var(--destructive)',
-          foreground: 'var(--destructive-foreground)',
+          foreground: 'var(--primary-foreground)',
         },
         border: 'var(--border)',
         input: 'var(--input)',
         ring: 'var(--ring)',
+        lead: 'var(--lead)',
+        'lead-soft': 'var(--lead-soft)',
+        positive: 'var(--positive)',
+        'positive-soft': 'var(--positive-soft)',
+        negative: 'var(--negative)',
+        'negative-soft': 'var(--negative-soft)',
       },
     },
   },
