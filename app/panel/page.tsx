@@ -1183,11 +1183,11 @@ function ShippingRecapPanel({
       {/* Stats cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {[
-          { label: 'Total Periode', value: counts.all, tone: 'text-sky-400' },
-          { label: 'Perlu Review', value: counts.needs_review, tone: 'text-amber-400' },
-          { label: 'Siap Export', value: counts.ready, tone: 'text-blue-400' },
-          { label: 'Sudah Terkirim', value: counts.delivered, tone: 'text-emerald-400' },
-          { label: 'Nilai COD', value: formatRupiah(totalCodValue), tone: 'text-violet-400' },
+          { label: 'Total Periode', value: counts.all, tone: 'text-lead' },
+          { label: 'Perlu Review', value: counts.needs_review, tone: 'text-amber-600' },
+          { label: 'Siap Export', value: counts.ready, tone: 'text-lead' },
+          { label: 'Sudah Terkirim', value: counts.delivered, tone: 'text-positive' },
+          { label: 'Nilai COD', value: formatRupiah(totalCodValue), tone: 'text-primary' },
         ].map((c) => (
           <Card key={c.label} size="sm">
             <CardHeader>
