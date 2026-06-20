@@ -1575,7 +1575,7 @@ function PerformancePanel({
   trendData?: Array<{ bucket: string; leads: number; closings: number; cr: number }>;
 }) {
   const deltaTag = (d: number, suffix = '') => {
-    if (d > 0) return <span className="text-emerald-500">▲{d}{suffix}</span>;
+    if (d > 0) return <span className="text-positive">▲{d}{suffix}</span>;
     if (d < 0) return <span className="text-destructive">▼{Math.abs(d)}{suffix}</span>;
     return <span className="text-muted-foreground">–</span>;
   };
@@ -1591,14 +1591,14 @@ function PerformancePanel({
 
   const unknownPayment = (data?.totalClosing ?? 0) - (data?.totalCod ?? 0) - (data?.totalTransfer ?? 0);
   const kpiCards = [
-    { label: 'Total Percakapan', value: data?.totalLeads ?? 0, tone: 'text-sky-500' },
-    { label: 'Total Closing', value: data?.totalClosing ?? 0, tone: 'text-emerald-500' },
-    { label: 'Conversion Rate', value: `${data?.overallCr ?? 0}%`, tone: 'text-violet-500' },
-    { label: 'COD', value: data?.totalCod ?? 0, tone: 'text-amber-500' },
-    { label: 'Transfer', value: data?.totalTransfer ?? 0, tone: 'text-blue-500' },
-    { label: 'Metode?', value: unknownPayment, tone: unknownPayment > 0 ? 'text-orange-400' : 'text-muted-foreground' },
-    { label: 'Omzet', value: formatRupiah(data?.totalRevenue), tone: 'text-emerald-600' },
-    { label: 'Terkirim', value: data?.delivered ?? 0, tone: 'text-teal-500' },
+    { label: 'Total Percakapan', value: data?.totalLeads ?? 0, tone: 'text-lead' },
+    { label: 'Total Closing', value: data?.totalClosing ?? 0, tone: 'text-positive' },
+    { label: 'Conversion Rate', value: `${data?.overallCr ?? 0}%`, tone: 'text-primary' },
+    { label: 'COD', value: data?.totalCod ?? 0, tone: 'text-amber-600' },
+    { label: 'Transfer', value: data?.totalTransfer ?? 0, tone: 'text-lead' },
+    { label: 'Metode?', value: unknownPayment, tone: unknownPayment > 0 ? 'text-amber-600' : 'text-muted-foreground' },
+    { label: 'Omzet', value: formatRupiah(data?.totalRevenue), tone: 'text-positive' },
+    { label: 'Terkirim', value: data?.delivered ?? 0, tone: 'text-positive' },
     { label: 'Dibatalkan', value: data?.cancelled ?? 0, tone: 'text-destructive' },
   ];
 
@@ -1725,8 +1725,8 @@ function PerformancePanel({
           ) : (
             <div className="space-y-3">
               <div className="flex items-center gap-4">
-                <div><div className="text-xs text-muted-foreground">Leads</div><Sparkline values={trendData.map((b) => b.leads)} tone="bg-sky-500/70" /></div>
-                <div><div className="text-xs text-muted-foreground">Closing</div><Sparkline values={trendData.map((b) => b.closings)} tone="bg-emerald-500/70" /></div>
+                <div><div className="text-xs text-muted-foreground">Leads</div><Sparkline values={trendData.map((b) => b.leads)} tone="bg-lead" /></div>
+                <div><div className="text-xs text-muted-foreground">Closing</div><Sparkline values={trendData.map((b) => b.closings)} tone="bg-positive" /></div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -1868,16 +1868,16 @@ function PerformancePanel({
                       </TableCell>
                       <TableCell className="font-medium">{row.csName}</TableCell>
                       <TableCell>{row.leads}</TableCell>
-                      <TableCell className="font-bold text-emerald-600">{row.closing}</TableCell>
+                      <TableCell className="font-bold text-positive">{row.closing}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
                             <div
-                              className="h-full rounded-full bg-emerald-500"
+                              className="h-full rounded-full bg-positive"
                               style={{ width: `${row.cr}%` }}
                             />
                           </div>
-                          <span className="text-xs font-semibold text-emerald-600">{row.cr}%</span>
+                          <span className="text-xs font-semibold text-positive">{row.cr}%</span>
                         </div>
                       </TableCell>
                       <TableCell className="font-medium">{formatRupiah(row.revenue)}</TableCell>
