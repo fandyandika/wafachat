@@ -7,7 +7,7 @@ import {
   BarChart3,
   CheckCircle2,
   CircleAlert,
-  ShieldCheck,
+  Wallet,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -18,14 +18,13 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatCard, type StatTone } from '@/components/ui/stat-card';
 import { AnimatedNumber } from '@/components/ui/animated-number';
 import { useHighlightOnChange } from '@/components/ui/use-highlight-on-change';
 import { api } from '@/convex/_generated/api';
 import type { Stats, PerformanceData } from '@/components/panel/types';
-import { pct, fmtTime } from '@/lib/format';
+import { pct, fmtTime, formatRupiah } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 
 export default function DashboardPage() {
@@ -71,6 +70,7 @@ export default function DashboardPage() {
   const crPerf = performance?.overallCr ?? 0;
   const handoverTodayCount = stats.handovers;
   const handoverRate = stats.orders > 0 ? Math.round((handoverTodayCount / stats.orders) * 100) : 0;
+  const revenue = summaryData?.revenue ?? 0;
 
   const cards = useMemo(
     (): Array<{
@@ -113,15 +113,23 @@ export default function DashboardPage() {
         icon: CircleAlert,
         tone: 'negative',
       },
+      {
+        label: 'Omzet',
+        value: revenue,
+        detail: 'Revenue periode',
+        icon: Wallet,
+        tone: 'positive',
+        format: formatRupiah,
+      },
     ],
-    [aiClosings, crPerf, manualClosings, performance, stats, totalClosing],
+    [aiClosings, crPerf, manualClosings, performance, revenue, stats, totalClosing],
   );
 
   return (
     <>
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {loading
-          ? Array.from({ length: 4 }).map((_, index) => <MetricSkeleton key={index} />)
+          ? Array.from({ length: 5 }).map((_, index) => <MetricSkeleton key={index} />)
           : cards.map((card) => <DashboardStatCard key={card.label} {...card} />)}
       </section>
 
@@ -167,43 +175,6 @@ export default function DashboardPage() {
         </CardContent>
       </Card>
 
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div />
-
-        <aside className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">System readiness</CardTitle>
-              <CardDescription>Operational checks for this panel.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <ReadinessRow label="n8n State Manager" value="Connected" ok />
-              <ReadinessRow label="Outcome dedup" value="order_id" ok />
-              <ReadinessRow label="Convex API" value="Connected" ok />
-              <Separator />
-              <div className="rounded-lg border border-border bg-accent/40 p-3 text-xs text-muted-foreground">
-                Rekap Pengiriman and Performance are sourced from Convex realtime data.
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Today formula</CardTitle>
-              <CardDescription>How the main metrics are calculated.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm text-muted-foreground">
-              <Formula label="Orders" value="leads (HP unik)" />
-              <Formula label="Total Closing" value="recap non-cancelled (order unik)" />
-              <Formula label="AI Closing" value="total − manual closing" />
-              <Formula label="Manual Closing" value="CS marked di panel" />
-              <Formula label="Cancelled" value="recap cancelled (excluded)" />
-              <Formula label="Closing rate" value="closing / leads" />
-              <Formula label="Handover rate" value="handovers / leads" />
-            </CardContent>
-          </Card>
-        </aside>
-      </section>
     </>
   );
 }
@@ -248,20 +219,3 @@ function MetricSkeleton() {
   );
 }
 
-function ReadinessRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
-  return (
-    <div className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-muted-foreground">{label}</span>
-      <Badge variant={ok ? 'success' : 'outline'}>{value}</Badge>
-    </div>
-  );
-}
-
-function Formula({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span>{label}</span>
-      <span className="font-mono text-xs">{value}</span>
-    </div>
-  );
-}
