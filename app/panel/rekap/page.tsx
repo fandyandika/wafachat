@@ -13,6 +13,7 @@ import {
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
+  AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
@@ -189,20 +190,20 @@ export default function RekapPage() {
       <AlertDialog open={bulkCancelOpen} onOpenChange={setBulkCancelOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Cancel {selectedIds.length} orders?</AlertDialogTitle>
+            <AlertDialogTitle>Batalkan {selectedRecapIds.size} pesanan?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. Orders will be marked as cancelled.
+              Pesanan yang dibatalkan tidak akan masuk ke export. Tindakan ini bisa di-undo satu per satu.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="flex gap-3">
+          <AlertDialogFooter>
             <AlertDialogCancel>Batal</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => void bulkCancel(selectedIds)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => bulkCancel(Array.from(selectedRecapIds))}
             >
-              Batalkan Order
+              Ya, Batalkan
             </AlertDialogAction>
-          </div>
+          </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </>
