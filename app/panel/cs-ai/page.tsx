@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery } from 'convex/react';
-import { BotOff, Loader2, Bot } from 'lucide-react';
+import { BotOff, Loader2, Bot, CheckCircle2, CircleAlert, MessageCircle, Clock3 } from 'lucide-react';
+import { StatCard } from '@/components/ui/stat-card';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -216,6 +217,44 @@ export default function CsAiPage() {
           </span>
         </button>
       </div>
+
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <StatCard
+          label="AI Closing"
+          value={Math.max((summaryData?.closings ?? 0) - (summaryData?.manualClosings ?? 0), 0)}
+          detail="Total − manual"
+          icon={Bot}
+          tone="positive"
+        />
+        <StatCard
+          label="Manual Closing"
+          value={summaryData?.manualClosings ?? 0}
+          detail="Marked by CS"
+          icon={CheckCircle2}
+          tone="lead"
+        />
+        <StatCard
+          label="Handovers"
+          value={summaryData?.handovers ?? 0}
+          detail={`Rate: ${summaryData && summaryData.leads > 0 ? Math.round((summaryData.handovers / summaryData.leads) * 100) : 0}%`}
+          icon={CircleAlert}
+          tone="default"
+        />
+        <StatCard
+          label="Active chats"
+          value={active.length}
+          detail="In queue"
+          icon={MessageCircle}
+          tone="lead"
+        />
+        <StatCard
+          label="Archived"
+          value={closed.length}
+          detail="Closed today"
+          icon={Clock3}
+          tone="default"
+        />
+      </section>
 
       <ConversationPanel
         title="Conversation queue"
