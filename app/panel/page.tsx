@@ -252,45 +252,63 @@ export default function PanelPage() {
     endAt: selectedDateRange.endAt,
     csName: csFilter,
   });
-  const duplicateOrders = useQuery(api.metrics.getDuplicateOrders, {
-    startAt: selectedDateRange.startAt,
-    endAt: selectedDateRange.endAt,
-    csName: csFilter,
-  });
-  const csLeaderboard = useQuery(api.analytics.getCsLeaderboard, {
-    startAt: selectedDateRange.startAt,
-    endAt: selectedDateRange.endAt,
-  });
-  const productDifficulty = useQuery(api.analytics.getProductDifficulty, {
-    startAt: selectedDateRange.startAt,
-    endAt: selectedDateRange.endAt,
-  });
-  const trendData = useQuery(api.metrics.getTrend, {
-    startAt: selectedDateRange.startAt,
-    endAt: selectedDateRange.endAt,
-    bucket: 'day',
-  });
+  // Perf: tab-specific heavy derive-on-read queries run ONLY when their tab is
+  // active (Convex 'skip'), so opening the Dashboard doesn't fire the
+  // Performance/Rekap full-table scans. Cross-tab queries (conversations,
+  // summary, global AI, csConfigs) stay always-on.
+  const duplicateOrders = useQuery(
+    api.metrics.getDuplicateOrders,
+    panelView === 'dashboard'
+      ? { startAt: selectedDateRange.startAt, endAt: selectedDateRange.endAt, csName: csFilter }
+      : 'skip',
+  );
+  const csLeaderboard = useQuery(
+    api.analytics.getCsLeaderboard,
+    panelView === 'performance'
+      ? { startAt: selectedDateRange.startAt, endAt: selectedDateRange.endAt }
+      : 'skip',
+  );
+  const productDifficulty = useQuery(
+    api.analytics.getProductDifficulty,
+    panelView === 'performance'
+      ? { startAt: selectedDateRange.startAt, endAt: selectedDateRange.endAt }
+      : 'skip',
+  );
+  const trendData = useQuery(
+    api.metrics.getTrend,
+    panelView === 'performance'
+      ? { startAt: selectedDateRange.startAt, endAt: selectedDateRange.endAt, bucket: 'day' }
+      : 'skip',
+  );
   const globalEnabledData = useQuery(api.settings.getGlobalAiEnabled, {});
   const csConfigsData = useQuery(api.csConfigs.list, {});
-  const shippingRecapsData = useQuery(api.shippingRecaps.list, {
-    startAt: selectedDateRange.startAt,
-    endAt: selectedDateRange.endAt,
-    status: recapStatus === 'all' ? undefined : recapStatus,
-    paymentMethod: paymentFilter === 'all' ? undefined : paymentFilter,
-    search: recapSearch || undefined,
-    csName: csFilter,
-  });
-  const performanceData = useQuery(api.shippingRecaps.getPerformance, {
-    startAt: selectedDateRange.startAt,
-    endAt: selectedDateRange.endAt,
-    includeInferredDiscount: false,
-    csName: csFilter,
-  });
-  const countsData = useQuery(api.shippingRecaps.getCounts, {
-    startAt: selectedDateRange.startAt,
-    endAt: selectedDateRange.endAt,
-    csName: csFilter,
-  });
+  const shippingRecapsData = useQuery(
+    api.shippingRecaps.list,
+    panelView === 'shipping'
+      ? {
+          startAt: selectedDateRange.startAt,
+          endAt: selectedDateRange.endAt,
+          status: recapStatus === 'all' ? undefined : recapStatus,
+          paymentMethod: paymentFilter === 'all' ? undefined : paymentFilter,
+          search: recapSearch || undefined,
+          csName: csFilter,
+        }
+      : 'skip',
+  );
+  // getPerformance feeds the Dashboard's Total Closing/CR/Cancelled cards AND the
+  // Performance tab, so it runs everywhere except Rekap.
+  const performanceData = useQuery(
+    api.shippingRecaps.getPerformance,
+    panelView !== 'shipping'
+      ? { startAt: selectedDateRange.startAt, endAt: selectedDateRange.endAt, includeInferredDiscount: false, csName: csFilter }
+      : 'skip',
+  );
+  const countsData = useQuery(
+    api.shippingRecaps.getCounts,
+    panelView === 'shipping'
+      ? { startAt: selectedDateRange.startAt, endAt: selectedDateRange.endAt, csName: csFilter }
+      : 'skip',
+  );
   const setConversationStatus = useMutation(api.state.setConversationStatusFromN8n);
   const markNotClosing = useMutation(api.state.markConversationNotClosing);
   const markClosing = useMutation(api.state.markConversationClosing);
