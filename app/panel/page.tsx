@@ -2544,23 +2544,23 @@ function DetailRow({ label, value, strong = false }: { label: string; value: str
 
 function StatusBadge({ status }: { status: Conversation['status'] }) {
   if (status === 'handover') {
-    return <Badge className="border-amber-500/30 text-amber-400" variant="outline">handover</Badge>;
+    return <Badge variant="warning">handover</Badge>;
   }
 
   if (status === 'closed') {
     return <Badge variant="secondary">closed</Badge>;
   }
 
-  return <Badge className="border-emerald-500/30 text-emerald-400" variant="outline">active</Badge>;
+  return <Badge variant="success">active</Badge>;
 }
 
 function OutcomeBadge({ outcome }: { outcome: 'ai_won' | 'manual_won' | 'cancelled' }) {
   if (outcome === 'cancelled') {
-    return <Badge className="border-destructive/30 text-destructive" variant="outline">cancelled</Badge>;
+    return <Badge variant="destructive">cancelled</Badge>;
   }
 
   return (
-    <Badge className={outcome === 'manual_won' ? 'border-sky-500/30 text-sky-400' : 'border-emerald-500/30 text-emerald-400'} variant="outline">
+    <Badge variant={outcome === 'manual_won' ? 'info' : 'success'}>
       {outcome === 'manual_won' ? 'manual closing' : 'AI closing'}
     </Badge>
   );
@@ -2594,9 +2594,7 @@ function ReadinessRow({ label, value, ok }: { label: string; value: string; ok: 
   return (
     <div className="flex items-center justify-between gap-3 text-sm">
       <span className="text-muted-foreground">{label}</span>
-      <Badge className={ok ? 'border-emerald-500/30 text-emerald-400' : ''} variant="outline">
-        {value}
-      </Badge>
+      <Badge variant={ok ? 'success' : 'outline'}>{value}</Badge>
     </div>
   );
 }
