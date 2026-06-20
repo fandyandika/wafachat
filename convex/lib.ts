@@ -51,3 +51,11 @@ export function makeTransitionKey(args: {
 export function unique(values: string[]): string[] {
   return Array.from(new Set(values.filter(Boolean)));
 }
+
+const JAKARTA_OFFSET_MS = 7 * 60 * 60 * 1000; // Asia/Jakarta = UTC+7 (no DST)
+const DAY_MS = 86_400_000;
+
+/** Epoch ms of the most recent Asia/Jakarta midnight at or before `timestamp`. */
+export function startOfJakartaDayMs(timestamp = Date.now()): number {
+  return Math.floor((timestamp + JAKARTA_OFFSET_MS) / DAY_MS) * DAY_MS - JAKARTA_OFFSET_MS;
+}

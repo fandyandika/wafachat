@@ -7,6 +7,8 @@ import {
   makeOrderKey,
   makeTransitionKey,
   normalizePhone,
+  startOfJakartaDayMs,
+  unique,
 } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 
@@ -821,35 +823,52 @@ export const recordStatEventFromN8n = mutation({
 export const listConversations = query({
   args: { includeClosed: v.optional(v.boolean()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const statuses: ConversationStatus[] = args.includeClosed
-      ? ["handover", "active", "closed"]
-      : ["handover", "active"];
-    const today = getJakartaDate();
+    const startToday = startOfJakartaDayMs();
     const rows: Doc<"conversations">[] = [];
 
-    for (const status of statuses) {
-      const statusRows = await ctx.db
-        .query("conversations")
-        .withIndex("by_status_updatedAt", (q) => q.eq("status", status))
-        .order("desc")
-        .collect();
-      rows.push(...statusRows);
+    // active + handover: small, unbounded.
+    for (const status of ["handover", "active"] as const) {
+      rows.push(
+        ...(await ctx.db
+          .query("conversations")
+          .withIndex("by_status_updatedAt", (q) => q.eq("status", status))
+          .order("desc")
+          .collect()),
+      );
+    }
+    // closed: bound to TODAY (Asia/Jakarta) at the DB index level — no full-history scan.
+    if (args.includeClosed) {
+      rows.push(
+        ...(await ctx.db
+          .query("conversations")
+          .withIndex("by_status_updatedAt", (q) => q.eq("status", "closed").gte("updatedAt", startToday))
+          .order("desc")
+          .collect()),
+      );
     }
 
     const conversations = rows
       .filter((conversation) => !EXCLUDED_PHONES.has(normalizePhone(conversation.customerPhone)))
-      .filter((conversation) => !args.csName || conversation.assignedCsName === args.csName)
-      .filter((conversation) => conversation.status !== "closed" || getJakartaDate(conversation.updatedAt) === today);
+      .filter((conversation) => !args.csName || conversation.assignedCsName === args.csName);
+
     const stats = await ctx.db
       .query("dailyStats")
-      .withIndex("by_date", (q) => q.eq("date", today))
+      .withIndex("by_date", (q) => q.eq("date", getJakartaDate()))
       .unique();
 
-    return await Promise.all(conversations.map(async (conversation) => {
-      const order = await ctx.db
-        .query("orders")
-        .withIndex("by_orderId", (q) => q.eq("orderId", conversation.orderId))
-        .unique();
+    // de-N+1: prefetch each referenced order once (deduped) into a Map.
+    const orderIds = unique(conversations.map((c) => c.orderId));
+    const orderDocs = await Promise.all(
+      orderIds.map((id) =>
+        ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", id)).unique(),
+      ),
+    );
+    const orderById = new Map(
+      orderDocs.filter((o): o is NonNullable<typeof o> => o !== null).map((o) => [o.orderId, o]),
+    );
+
+    return conversations.map((conversation) => {
+      const order = orderById.get(conversation.orderId) ?? null;
       const transitionKey = makeTransitionKey({
         orderId: conversation.orderId,
         phone: conversation.customerPhone,
@@ -882,7 +901,7 @@ export const listConversations = query({
         salesOutcome: cancelled ? "cancelled" : manualClosing ? "manual_won" : aiClosing || totalClosing ? "ai_won" : "pending",
         closingSource: manualClosing ? "manual" : aiClosing || totalClosing ? "ai" : null,
       };
-    }));
+    });
   },
 });
 
