@@ -3,7 +3,7 @@
 import { Suspense } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, LayoutDashboard, MessagesSquare, CheckCircle2, BarChart3 } from 'lucide-react';
+import { Bot, LayoutDashboard, CheckCircle2, BarChart3 } from 'lucide-react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
@@ -13,7 +13,6 @@ import { usePanelFilters, type DateRangeKey } from '@/components/panel/use-panel
 
 const NAV = [
   { href: '/panel', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/panel/cs-ai', label: 'CS AI', icon: MessagesSquare },
   { href: '/panel/rekap', label: 'Rekap Pengiriman', icon: CheckCircle2 },
   { href: '/panel/performance', label: 'Performance', icon: BarChart3 },
 ] as const;
