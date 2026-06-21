@@ -69,8 +69,6 @@ export default function DashboardPage() {
 
   // Dashboard-only derivations
   const totalClosing = performance?.totalClosing ?? 0;
-  const manualClosings = stats.manual_closings ?? 0;
-  const aiClosings = Math.max(totalClosing - manualClosings, 0);
   const crPerf = performance?.overallCr ?? 0;
   const handoverTodayCount = stats.handovers;
   const handoverRate = stats.orders > 0 ? Math.round((handoverTodayCount / stats.orders) * 100) : 0;
@@ -97,7 +95,7 @@ export default function DashboardPage() {
       {
         label: 'Total Closing',
         value: totalClosing,
-        detail: `AI: ${aiClosings} · Manual: ${manualClosings}`,
+        detail: 'Closing CS · periode ini',
         icon: CheckCircle2,
         tone: 'positive',
         highlightable: true,
@@ -126,7 +124,7 @@ export default function DashboardPage() {
         format: formatRupiah,
       },
     ],
-    [aiClosings, crPerf, manualClosings, performance, revenue, stats, totalClosing],
+    [crPerf, performance, revenue, stats, totalClosing],
   );
 
   return (
