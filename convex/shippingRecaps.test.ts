@@ -58,7 +58,7 @@ test("parseClosingMessage: CS template (header product / Harga / PEMBAYARAN)", (
     "Alamat : JL. Pahlawan, Jombang, Kab. Jombang",
     "",
     "*QURAN MAPPING 1 PCS*",
-    "Harga Rp.205.000",
+    "Harga Rp. *205.000*",
     "",
     "PEMBAYARAN TRANSFER",
   ].join("\n");

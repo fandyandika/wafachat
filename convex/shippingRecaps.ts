@@ -100,8 +100,11 @@ function extractLineValue(text: string, label: string): string {
 
 function extractAmount(text: string, label: string): number | undefined {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  // Tolerant of "Total: Rp198.000", "*Total: Rp198.000*", and "Harga Rp.205.000" (no colon).
-  const match = text.match(new RegExp(`[*_\`]*${escaped}[*_\`]*\\s*:?\\s*(?:Rp[.\\s]*)?([\\d][\\d.,]*)`, "im"));
+  // Tolerant of "Total: Rp198.000", "*Total: Rp198.000*", "Harga Rp.205.000",
+  // and "Harga Rp. *205.000*" (bold/spaced amount, with or without colon).
+  const match = text.match(
+    new RegExp(`[*_\`]*${escaped}[*_\`]*\\s*:?\\s*(?:Rp|[.\\s*_\`])*([\\d][\\d.,]*)`, "im"),
+  );
   return match ? parseRupiah(match[1]) : undefined;
 }
 
