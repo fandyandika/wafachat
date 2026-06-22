@@ -33,13 +33,19 @@ export function resolveRange(range: DateRangeKey, customDate?: string): { startA
 
 const VALID_RANGES: DateRangeKey[] = ['today', 'yesterday', '7d', '30d', 'month', 'custom'];
 
+// Closing/leads pipeline only fully wired from 2026-06-22 (Asia/Jakarta). Earlier data
+// is incomplete (closing not connected → CR/leads misleading), so hide it: every range's
+// start is clamped to this cutoff.
+const DATA_CUTOFF_MS = Date.parse('2026-06-22T00:00:00+07:00');
+
 export function usePanelFilters() {
   const sp = useSearchParams();
   const rawRange = sp.get('range');
   const range: DateRangeKey = VALID_RANGES.includes(rawRange as DateRangeKey) ? (rawRange as DateRangeKey) : 'today';
   const cs = sp.get('cs') || 'all';
   const customDate = sp.get('date') || '';
-  const { startAt, endAt } = useMemo(() => resolveRange(range, customDate), [range, customDate]);
+  const { startAt: rawStartAt, endAt } = useMemo(() => resolveRange(range, customDate), [range, customDate]);
+  const startAt = Math.max(rawStartAt, DATA_CUTOFF_MS);
   const jakartaDate = useMemo(
     () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(endAt)),
     [endAt],
