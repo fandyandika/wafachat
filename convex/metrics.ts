@@ -136,6 +136,31 @@ export const getDuplicateOrders = query({
   },
 });
 
+// Diagnostic: look up specific Berdu order ids in Convex to see if they synced.
+export const debugFindOrders = query({
+  args: { orderIds: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const results = [];
+    for (const raw of args.orderIds) {
+      const stripped = raw.replace(/^#/, "").trim();
+      const orderId = stripped.startsWith("O-") ? stripped : `O-${stripped}`;
+      const order = await ctx.db
+        .query("orders")
+        .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
+        .unique();
+      results.push({
+        orderId,
+        found: order !== null,
+        phone: order?.customerPhone ?? null,
+        name: order?.customerName ?? null,
+        cs: order?.assignedCsName ?? null,
+        createdAt: order ? new Date(order.createdAt).toISOString() : null,
+      });
+    }
+    return results;
+  },
+});
+
 // Diagnostic: reconcile Convex order count against the source (Berdu) for a range.
 // rawOrders should match Berdu's count if every order synced; leads = distinctValidPhones.
 export const debugOrderReconcile = query({
