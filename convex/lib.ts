@@ -17,10 +17,27 @@ export function normalizePhone(value: string | undefined): string {
   return digits;
 }
 
-const INTERNAL_TEST_PHONES = new Set(["6285715682110", "6285774076061", "628211900201"]);
+// Phones excluded from all closing/leads/revenue metrics: owner + admin input
+// numbers, every CS WhatsApp line (CS may forward closing cases to each other),
+// plus group / non-MSISDN ids.
+const INTERNAL_TEST_PHONES = new Set([
+  "6285715682110", // owner Pustaka Islam
+  "6285774076061", // admin input
+  "628211900201", // admin input
+  "6282280000661", // owner Pustaka Islam
+  "6281385708799", // CS Aisyah line
+  "6282321381742", // CS Risma line
+  "6285210047441", // CS Lila line
+  "6282113515152", // CS Azelia line
+]);
 
 export function isInternalTestPhone(value: string | undefined): boolean {
-  return INTERNAL_TEST_PHONES.has(normalizePhone(value));
+  const normalized = normalizePhone(value);
+  if (INTERNAL_TEST_PHONES.has(normalized)) return true;
+  // WhatsApp group JIDs / non-MSISDN ids are far longer than any Indonesian
+  // number (62 + <=12 digits = <=14 chars). Treat them as internal (don't count).
+  if (normalized.length > 15) return true;
+  return false;
 }
 
 export function getJakartaDate(timestamp = Date.now()): string {
