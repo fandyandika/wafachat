@@ -3,7 +3,7 @@
 import { Suspense } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, LayoutDashboard, BarChart3 } from 'lucide-react';
+import { Bot, LayoutDashboard, BarChart3, ClipboardList } from 'lucide-react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
@@ -14,6 +14,7 @@ import { usePanelFilters, type DateRangeKey } from '@/components/panel/use-panel
 const NAV = [
   { href: '/panel', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/panel/performance', label: 'Performance', icon: BarChart3 },
+  { href: '/panel/laporan', label: 'Laporan', icon: ClipboardList },
 ] as const;
 
 const RANGES: Array<{ label: string; value: DateRangeKey }> = [
@@ -83,6 +84,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                 <Badge variant="secondary">pustakaislam.net</Badge>
               </div>
               <div className="flex flex-wrap items-center gap-3">
+                {pathname !== '/panel/laporan' && (
                 <div className="flex flex-wrap items-center gap-1">
                   {RANGES.map((r) => (
                     <button
@@ -98,6 +100,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                     </button>
                   ))}
                 </div>
+                )}
                 <Select value={cs} onValueChange={(v) => setParam('cs', v ?? 'all')}>
                   <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Semua CS" /></SelectTrigger>
                   <SelectContent>
