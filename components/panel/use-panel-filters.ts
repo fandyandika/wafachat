@@ -2,6 +2,7 @@
 
 import { useMemo } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { DATA_CUTOFF_MS } from './report-window';
 
 export type DateRangeKey = 'today' | 'yesterday' | '7d' | '30d' | 'month' | 'custom';
 
@@ -32,11 +33,6 @@ export function resolveRange(range: DateRangeKey, customDate?: string): { startA
 }
 
 const VALID_RANGES: DateRangeKey[] = ['today', 'yesterday', '7d', '30d', 'month', 'custom'];
-
-// Closing/leads pipeline only fully wired from 2026-06-22 (Asia/Jakarta). Earlier data
-// is incomplete (closing not connected → CR/leads misleading), so hide it: every range's
-// start is clamped to this cutoff.
-const DATA_CUTOFF_MS = Date.parse('2026-06-22T00:00:00+07:00');
 
 export function usePanelFilters() {
   const sp = useSearchParams();
