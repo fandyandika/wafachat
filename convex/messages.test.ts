@@ -47,3 +47,31 @@ test("appendMessageFromN8n: inbound with phrase -> NO recap", async () => {
   const recaps = await t.run(async (ctx) => ctx.db.query("shippingRecaps").collect());
   expect(recaps.length).toBe(0);
 });
+
+test("appendMessageFromN8n: heals 'Unknown' conversation csName when a known CS arrives", async () => {
+  const t = convexTest(schema);
+  // 1. Inbound with no csName -> fallback conversation assignedCsName "Unknown"
+  await t.mutation(api.messages.appendMessageFromN8n, {
+    phone: "62833", role: "customer", direction: "inbound",
+    content: "halo kak", messageType: "text", externalMessageId: "h1", createdAt: 1000,
+  });
+  const before = await t.run(async (ctx) =>
+    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62833")).first());
+  expect(before?.assignedCsName).toBe("Unknown");
+  // 2. Outbound with a known csName -> conversation healed to that CS
+  await t.mutation(api.messages.appendMessageFromN8n, {
+    phone: "62833", csName: "Risma", role: "cs", direction: "outbound",
+    content: "siap kak", messageType: "text", externalMessageId: "h2", createdAt: 2000,
+  });
+  const after = await t.run(async (ctx) =>
+    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62833")).first());
+  expect(after?.assignedCsName).toBe("Risma");
+  // 3. A later message with "Unknown" csName must NOT clobber the real CS
+  await t.mutation(api.messages.appendMessageFromN8n, {
+    phone: "62833", csName: "Unknown", role: "cs", direction: "outbound",
+    content: "oke", messageType: "text", externalMessageId: "h3", createdAt: 3000,
+  });
+  const after2 = await t.run(async (ctx) =>
+    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62833")).first());
+  expect(after2?.assignedCsName).toBe("Risma");
+});

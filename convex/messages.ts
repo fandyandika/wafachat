@@ -183,7 +183,21 @@ export const appendMessageFromN8n = mutation({
       createdAt,
     });
 
-    await ctx.db.patch(conversation._id, { lastMessageAt: createdAt, updatedAt: createdAt });
+    const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string } = {
+      lastMessageAt: createdAt,
+      updatedAt: createdAt,
+    };
+    // Heal CS attribution: adopt a known CS when the existing conversation is still
+    // unattributed ("Unknown"/empty). Never clobber a real CS. The closing detection
+    // below re-reads this conversation, so a closing message also lands the right CS.
+    if (
+      args.csName &&
+      args.csName !== "Unknown" &&
+      (!conversation.assignedCsName || conversation.assignedCsName === "Unknown")
+    ) {
+      convPatch.assignedCsName = args.csName;
+    }
+    await ctx.db.patch(conversation._id, convPatch);
     await ctx.db.insert("events", {
       conversationId: conversation._id,
       orderId: conversation.orderId,
