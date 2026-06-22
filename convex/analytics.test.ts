@@ -129,3 +129,21 @@ test("getDailyReport: per-CS totals match getCsLeaderboard (no drift)", async ()
     expect(card!.cr).toBe(row.cr);
   }
 });
+
+test("getDailyReport: cross-window closing canonicalizes product via order (no SKU fragment)", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    // lead created BEFORE the window; canonical product "Quran Mapping"
+    await ctx.db.insert("orders", { ...ordBase, orderId: "OW1", customerPhone: "62830", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0 - DAY, updatedAt: t0 });
+    // closing INSIDE the window; packageContent uses the SKU name; linked via orderIdBerdu
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "OW1", customerPhone: "62830", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0 + 1000, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
+  });
+  const r = await t.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
+  const a = r.cs.find((c) => c.csName === "CS A")!;
+  expect(a.products).toHaveLength(1);
+  expect(a.products[0].product).toBe("Quran Mapping"); // canonical, NOT "QURAN MAPPING 1 PCS"
+  expect(a.products[0].closings).toBe(1);
+  expect(a.products[0].leads).toBe(0); // lead is out-of-window
+  expect(a.leads).toBe(0);
+  expect(a.closings).toBe(1);
+});

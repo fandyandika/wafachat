@@ -187,6 +187,26 @@ export const getDailyReport = query({
       if (!ex || o.createdAt > ex.createdAt) latestOrderByPhone.set(p, o);
     }
 
+    // Cross-window order lookup: a closing whose lead isn't in THIS window (lead created on an
+    // earlier day) has no in-window order to name its product, so it would fall back to the
+    // recap's SKU packageContent ("QURAN MAPPING 1 PCS") and fragment from the canonical lead
+    // name ("Quran Mapping"). Fetch the real order (by Berdu order id, else latest by phone) to
+    // canonicalize. Counts (leads/closings) are unaffected — this only resolves the product name.
+    const fallbackOrderByPhone = new Map<string, any>();
+    for (const r of recaps) {
+      const phone = normalizePhone(r.customerPhone);
+      if (latestOrderByPhone.has(phone) || fallbackOrderByPhone.has(phone)) continue;
+      let order: any = null;
+      if (r.orderIdBerdu) {
+        order = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", r.orderIdBerdu)).unique();
+      }
+      if (!order) {
+        const all = await ctx.db.query("orders").withIndex("by_customerPhone", (q: any) => q.eq("customerPhone", phone)).collect();
+        order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
+      }
+      if (order) fallbackOrderByPhone.set(phone, order);
+    }
+
     const map = new Map<string, CsReportAcc>();
     const getCs = (cs: string): CsReportAcc => {
       let a = map.get(cs);
@@ -212,7 +232,8 @@ export const getDailyReport = query({
       a.closings.add(key);
       a.revenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
       a.discount += r.discount ?? 0;
-      const matched = latestOrderByPhone.get(normalizePhone(r.customerPhone));
+      const cphone = normalizePhone(r.customerPhone);
+      const matched = latestOrderByPhone.get(cphone) ?? fallbackOrderByPhone.get(cphone);
       getProd(a, normalizeProductName(matched?.productName || matched?.products || r.packageContent)).closings.add(key);
     }
 

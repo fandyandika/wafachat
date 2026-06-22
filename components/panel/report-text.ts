@@ -10,6 +10,12 @@ export function groupThousands(n: number): string {
   return neg + s.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
 
+// CR is undefined when there are no leads in the window (e.g. a closing for a lead from an
+// earlier day) — show "–" instead of a misleading "0%".
+export function crLabel(cr: number, leads: number): string {
+  return leads > 0 ? `${Math.round(cr)}%` : '–';
+}
+
 export type ReportCsCard = {
   csName: string;
   leads: number; closings: number; cr: number;
@@ -27,13 +33,13 @@ export function reportText(card: ReportCsCard, label: { y: number; m: number; d:
     '',
   ];
   for (const p of card.products) {
-    lines.push(`🔰 ${p.product.toUpperCase()} : ${Math.round(p.cr)}% (${p.closings}/${p.leads})`);
+    lines.push(`🔰 ${p.product.toUpperCase()} : ${crLabel(p.cr, p.leads)} (${p.closings}/${p.leads})`);
   }
   lines.push(
     '',
     `  . TOTAL LEADS      : ${card.leads}`,
     `  . TOTAL CLOSING : ${card.closings}`,
-    `  . CR : ${Math.round(card.cr)}%`,
+    `  . CR : ${crLabel(card.cr, card.leads)}`,
     '',
     `  . Diskon : Rp${groupThousands(card.discount)}`,
     `  . CP Diskon : ${groupThousands(card.cpDiscount)}`,

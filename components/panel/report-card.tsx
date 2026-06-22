@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { formatRupiah } from '@/lib/format';
-import { reportText, type ReportCsCard } from '@/components/panel/report-text';
+import { reportText, crLabel, type ReportCsCard } from '@/components/panel/report-text';
 
 export type ReportCardData = ReportCsCard & { duplicates: number; revenue: number };
 
@@ -53,7 +53,7 @@ export function ReportCard({
               <div key={p.product} className="flex items-center justify-between gap-2 text-sm">
                 <span className="truncate text-foreground">{p.product}</span>
                 <span className="shrink-0 tabular-nums text-muted-foreground">
-                  {Math.round(p.cr)}% ({p.closings}/{p.leads})
+                  {crLabel(p.cr, p.leads)} ({p.closings}/{p.leads})
                 </span>
               </div>
             ))
@@ -64,7 +64,7 @@ export function ReportCard({
           <Row label="Diskon" value={formatRupiah(card.discount)} />
           <Row label="Total Closing" value={card.closings} />
           <Row label="CP Diskon" value={formatRupiah(card.cpDiscount)} />
-          <Row label="CR" value={`${Math.round(card.cr)}%`} />
+          <Row label="CR" value={crLabel(card.cr, card.leads)} />
           <Row label="Duplikat" value={card.duplicates} />
         </div>
       </CardContent>

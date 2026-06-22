@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { formatRupiah } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { ReportCard, type ReportCardData } from '@/components/panel/report-card';
+import { crLabel } from '@/components/panel/report-text';
 import {
   JAK_MS, clampStartToCutoff, currentReportLabelDate, reportWindowForLabelDate, wibDateParts,
 } from '@/components/panel/report-window';
@@ -128,7 +129,7 @@ function GrandStrip({
   const items = [
     { label: 'Total Leads', value: totals.leads },
     { label: 'Total Closing', value: totals.closings },
-    { label: 'CR', value: `${Math.round(totals.cr)}%` },
+    { label: 'CR', value: crLabel(totals.cr, totals.leads) },
     { label: 'Omzet', value: formatRupiah(totals.revenue) },
     { label: 'Diskon', value: formatRupiah(totals.discount) },
     { label: 'CP Diskon', value: formatRupiah(totals.cpDiscount) },

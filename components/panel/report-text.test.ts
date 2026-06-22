@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { groupThousands, reportText } from './report-text';
+import { groupThousands, reportText, crLabel } from './report-text';
 
 test('groupThousands: dot separators', () => {
   expect(groupThousands(40000)).toBe('40.000');
@@ -37,4 +37,20 @@ HARI SENIN
   . Diskon : Rp40.000
   . CP Diskon : 1.000`
   );
+});
+
+test('crLabel: dash when leads 0, percent otherwise', () => {
+  expect(crLabel(0, 0)).toBe('–');
+  expect(crLabel(72.1, 43)).toBe('72%');
+  expect(crLabel(122.2, 9)).toBe('122%');
+});
+
+test('reportText: leads=0 product shows "–" CR (not misleading 0%)', () => {
+  const card = {
+    csName: 'CS A', leads: 0, closings: 1, cr: 0, discount: 0, cpDiscount: 0,
+    products: [{ product: 'Buku Tulis', leads: 0, closings: 1, cr: 0 }],
+  };
+  const out = reportText(card, { y: 2026, m: 5, d: 22, dow: 1 });
+  expect(out).toContain('🔰 BUKU TULIS : – (1/0)');
+  expect(out).toContain('  . CR : –');
 });
