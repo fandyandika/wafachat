@@ -90,3 +90,29 @@ test("parseClosingMessage: CS template COD uses Harga as total", () => {
   expect(p.total).toBe(197000);
   expect(p.codValue).toBe(197000);
 });
+
+test("getPerformance: closing groups under the order product name, not the message SKU", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", {
+      orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Risma",
+      productName: "Quran Mapping", products: "Quran Mapping", productsSubtotal: "", shippingCost: "",
+      total: "", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu",
+      aiEligible: true, createdAt: t0, updatedAt: t0,
+    });
+    await ctx.db.insert("shippingRecaps", {
+      orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "Risma",
+      closedAt: t0, recipientName: "A", recipientPhone: "62811", recipientAddress: "", recipientDistrict: "",
+      recipientCity: "", packageContent: "QURAN MAPPING 1 PCS", paymentMethod: "transfer",
+      nonCodItemPrice: 200000, total: 200000, status: "ready", flags: [], sourceMessageText: "",
+      version: 1, createdAt: t0, updatedAt: t0,
+    });
+  });
+  const perf = await t.query(api.shippingRecaps.getPerformance, { startAt: t0 - 1000, endAt: t0 + 1000 });
+  const names = perf.products.map((row) => row.product);
+  expect(names).toContain("Quran Mapping");
+  expect(names).not.toContain("QURAN MAPPING 1 PCS");
+  const row = perf.products.find((p) => p.product === "Quran Mapping")!;
+  expect(row.leads).toBe(1);
+  expect(row.closing).toBe(1);
+});

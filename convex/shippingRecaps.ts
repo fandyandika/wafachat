@@ -1216,7 +1216,9 @@ export const getPerformance = query({
     for (const recap of validClosings) {
       const phone = normalizePhone(recap.customerPhone);
       const matchedOrder = latestOrderByPhone.get(phone) ?? fallbackOrderByPhone.get(phone);
-      const product = normalizeProductName(recap.packageContent || matchedOrder?.productName || matchedOrder?.products);
+      // Group closings under the canonical ORDER product name (same as leads) so the
+      // message's SKU-style name (e.g. "QURAN MAPPING 1 PCS") doesn't fragment the breakdown.
+      const product = normalizeProductName(matchedOrder?.productName || matchedOrder?.products || recap.packageContent);
       const revenue = recap.total ?? recap.codValue ?? recap.nonCodItemPrice ?? 0;
       const discount = recap.discount ?? (args.includeInferredDiscount ? recap.inferredDiscount ?? 0 : 0);
       const productRow = productMap.get(product) ?? { product, leads: 0, closing: 0, revenue: 0, discount: 0 };
