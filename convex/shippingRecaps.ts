@@ -84,9 +84,11 @@ function includesClosingMarker(text: string): boolean {
 }
 
 function detectPaymentMethod(text: string): PaymentMethod {
-  if (/\b(PEMBAYARAN|ORDER)\s+COD\b/i.test(text)) return "cod";
-  if (/\b(PEMBAYARAN|ORDER)\s+TRANSFER\b/i.test(text)) return "transfer";
+  // Tolerant of both templates: "PEMBAYARAN TRANSFER" and "Pembayaran: `COD / ...`".
+  const m = text.match(/(?:PEMBAYARAN|ORDER)\b[\s:`*_]*(COD|TRANSFER)/i);
+  if (m) return /cod/i.test(m[1]) ? "cod" : "transfer";
   if (/\bTRANSFER\b/i.test(text) && !/\bCOD\b/i.test(text)) return "transfer";
+  if (/\bCOD\b/i.test(text) && !/\bTRANSFER\b/i.test(text)) return "cod";
   return "unknown";
 }
 
@@ -94,6 +96,30 @@ function extractLineValue(text: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = text.match(new RegExp(`^\\s*[*_\`]*${escaped}[*_\`]*\\s*:\\s*(.+)$`, "im"));
   return cleanMarkdown(match?.[1]?.trim() ?? "");
+}
+
+function extractAmount(text: string, label: string): number | undefined {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Tolerant of "Total: Rp198.000", "*Total: Rp198.000*", and "Harga Rp.205.000" (no colon).
+  const match = text.match(new RegExp(`[*_\`]*${escaped}[*_\`]*\\s*:?\\s*(?:Rp[.\\s]*)?([\\d][\\d.,]*)`, "im"));
+  return match ? parseRupiah(match[1]) : undefined;
+}
+
+function extractProduct(text: string): string {
+  const labeled = extractLineValue(text, "Produk");
+  if (labeled) return labeled;
+  // Some templates put the product as a bold header line (no "Produk:" label),
+  // typically just above the price line.
+  const lines = text.split("\n").map((line) => line.trim()).filter(Boolean);
+  const priceIdx = lines.findIndex((line) => /^[*_\`]*\s*(Harga|Total)\b/i.test(line));
+  const scope = priceIdx > 0 ? lines.slice(0, priceIdx) : lines;
+  for (let i = scope.length - 1; i >= 0; i--) {
+    if (!/^\*[^*\n].*\*$/.test(scope[i])) continue; // a fully *bold* line
+    const value = cleanMarkdown(scope[i]);
+    if (!value || /PEMESANAN\s+BERHASIL/i.test(value) || /^(NOTE|BONUS|CATATAN|Dikirim)/i.test(value)) continue;
+    return value;
+  }
+  return "";
 }
 
 function extractShippingBlock(text: string): string {
@@ -129,15 +155,15 @@ function parseRecipient(block: string) {
   };
 }
 
-function parseClosingMessage(sourceMessageText: string) {
+export function parseClosingMessage(sourceMessageText: string) {
   const text = normalizeText(sourceMessageText);
   const shippingBlock = extractShippingBlock(text);
   const recipient = parseRecipient(shippingBlock);
-  const packageContent = extractLineValue(text, "Produk");
-  const total = parseRupiah(extractLineValue(text, "Total"));
-  const shippingCost = parseRupiah(extractLineValue(text, "Ongkir"));
-  const itemPrice = parseRupiah(extractLineValue(text, "Harga"));
-  const discount = parseRupiah(extractLineValue(text, "Diskon"));
+  const packageContent = extractProduct(text);
+  const total = extractAmount(text, "Total") ?? extractAmount(text, "Harga");
+  const shippingCost = extractAmount(text, "Ongkir");
+  const itemPrice = extractAmount(text, "Harga");
+  const discount = extractAmount(text, "Diskon");
   const paymentMethod = detectPaymentMethod(text);
   const flags: string[] = [];
 
@@ -570,6 +596,61 @@ export const backfillFromMessages = mutation({
     }
 
     return { success: true, scanned, upserted, skipped, recapIds };
+  },
+});
+
+// One-off cleanup: re-parse `needs_review` recaps from their stored closing message
+// with the current parser, filling only MISSING fields. Never overwrites data a CS
+// already entered, and never touches exported/delivered/cancelled recaps.
+export const reparseNeedsReview = mutation({
+  args: {
+    startAt: v.optional(v.number()),
+    endAt: v.optional(v.number()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.min(args.limit ?? 1000, 2000);
+    const rows =
+      args.startAt !== undefined && args.endAt !== undefined
+        ? await ctx.db
+            .query("shippingRecaps")
+            .withIndex("by_status_closedAt", (q) =>
+              q.eq("status", "needs_review").gte("closedAt", args.startAt!).lte("closedAt", args.endAt!),
+            )
+            .order("desc")
+            .take(limit)
+        : await ctx.db
+            .query("shippingRecaps")
+            .withIndex("by_status_closedAt", (q) => q.eq("status", "needs_review"))
+            .order("desc")
+            .take(limit);
+
+    let updated = 0;
+    for (const row of rows) {
+      if (!row.sourceMessageText || row.sourceMessageText === "manual_closing_by_cs") continue;
+      const parsed = parseClosingMessage(row.sourceMessageText);
+      const patch: Record<string, unknown> = {};
+      if (!row.packageContent && parsed.packageContent) patch.packageContent = parsed.packageContent;
+      if ((!row.paymentMethod || row.paymentMethod === "unknown") && parsed.paymentMethod !== "unknown") {
+        patch.paymentMethod = parsed.paymentMethod;
+      }
+      if (row.total === undefined && parsed.total !== undefined) patch.total = parsed.total;
+      if (row.codValue === undefined && parsed.paymentMethod === "cod" && parsed.total !== undefined) {
+        patch.codValue = parsed.total;
+      }
+      if (
+        row.nonCodItemPrice === undefined &&
+        parsed.paymentMethod === "transfer" &&
+        parsed.nonCodItemPrice !== undefined
+      ) {
+        patch.nonCodItemPrice = parsed.nonCodItemPrice;
+      }
+      if (Object.keys(patch).length === 0) continue;
+      patch.updatedAt = Date.now();
+      await ctx.db.patch(row._id, patch);
+      updated += 1;
+    }
+    return { success: true, updated, scanned: rows.length };
   },
 });
 
