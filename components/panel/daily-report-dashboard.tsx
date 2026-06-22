@@ -49,7 +49,8 @@ export function DailyReportDashboard() {
 
   const report = useQuery(api.analytics.getDailyReport, { startAt, endAt });
 
-  const label = wibDateParts(endAt);
+  // Open-date label = the day the window OPENS (= rawWindow.startAt's WIB date), not endAt (next day).
+  const label = wibDateParts(rawWindow.startAt);
   const windowLabel = `Periode ${fmtBoundary(startAt)} → ${fmtBoundary(endAt)} WIB`;
   const titleDate = `${DAYS_SHORT[label.dow]} ${label.d} ${MONTHS_SHORT[label.m]} ${label.y}`;
   const dateInputValue = `${label.y}-${pad(label.m + 1)}-${pad(label.d)}`;
