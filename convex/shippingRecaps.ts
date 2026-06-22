@@ -209,7 +209,7 @@ export function normalizeProductName(value: string | undefined): string {
     .trim() || "Tanpa Data Produk";
 }
 
-function normalizeCsName(value: string | undefined): string {
+export function normalizeCsName(value: string | undefined): string {
   const name = cleanMarkdown(value ?? "") || "Tanpa Data CS";
   if (/^aisyah$/i.test(name)) return "CS Aisyah";
   return name;

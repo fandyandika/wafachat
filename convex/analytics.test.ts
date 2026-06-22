@@ -77,3 +77,55 @@ test("getPeriodReport: week period, current vs prior week + per-CS", async () =>
   expect(r.perCs[0].closings).toBe(1);
   expect(r.label).toMatch(/^Minggu /);
 });
+
+test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    // CS A: 3 leads on product Q (one is a duplicate phone), 2 closings, discount 40000 total
+    await ctx.db.insert("orders", { ...ordBase, orderId: "A1", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "A2", customerPhone: "62812", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "A3", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0 + 1, updatedAt: t0 }); // dup phone of A1
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "A1", customerPhone: "62811", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0, total: 100000, discount: 25000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "A2", customerPhone: "62812", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0, total: 100000, discount: 15000, status: "ready", createdAt: t0, updatedAt: t0 });
+    // an internal/test phone lead must be excluded
+    await ctx.db.insert("orders", { ...ordBase, orderId: "X1", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
+    // a cancelled closing must be excluded
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "A9", customerPhone: "62899", customerName: "A", csName: "CS A", packageContent: "Quran Mapping", closedAt: t0, total: 100000, status: "cancelled", createdAt: t0, updatedAt: t0 });
+  });
+
+  const r = await t.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
+  const a = r.cs.find((c) => c.csName === "CS A")!;
+  expect(a.leads).toBe(2);          // 62811 (deduped) + 62812; internal phone excluded
+  expect(a.duplicates).toBe(1);     // A3 shares 62811 with A1
+  expect(a.closings).toBe(2);       // A1 + A2; cancelled excluded
+  expect(a.cr).toBe(100);           // 2/2
+  expect(a.discount).toBe(40000);   // 25000 + 15000
+  expect(a.cpDiscount).toBe(20000); // 40000 / 2
+  // product grouped under the canonical order name, not the SKU packageContent
+  expect(a.products).toEqual([{ product: "Quran Mapping", leads: 2, closings: 2, cr: 100 }]);
+  // grand totals
+  expect(r.totals.leads).toBe(2);
+  expect(r.totals.closings).toBe(2);
+  expect(r.totals.discount).toBe(40000);
+  expect(r.totals.cpDiscount).toBe(20000);
+});
+
+test("getDailyReport: per-CS totals match getCsLeaderboard (no drift)", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", { ...ordBase, orderId: "O-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "O-2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "O-3", customerPhone: "62813", assignedCsName: "CS B", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
+  });
+  const report = await t.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
+  const board = await t.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
+  for (const row of board) {
+    if (row.leads === 0 && row.closings === 0) continue; // omitted in the report
+    const card = report.cs.find((c) => c.csName === row.csName);
+    expect(card, `card for ${row.csName}`).toBeDefined();
+    expect(card!.leads).toBe(row.leads);
+    expect(card!.closings).toBe(row.closings);
+    expect(card!.cr).toBe(row.cr);
+  }
+});

@@ -1,7 +1,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone } from "./lib";
-import { normalizeProductName } from "./shippingRecaps";
+import { normalizeProductName, normalizeCsName } from "./shippingRecaps";
 
 type CsAgg = { leads: Set<string>; closings: Set<string>; revenue: number };
 
@@ -154,6 +154,107 @@ export const getPeriodReport = query({
       leads: curT.leads, closings: curT.closings, cr: cr(curT.closings, curT.leads), revenue: curT.revenue, cancelled,
       prevLeads: prevT.leads, prevClosings: prevT.closings, prevCr: cr(prevT.closings, prevT.leads), prevRevenue: prevT.revenue,
       perCs,
+    };
+  },
+});
+
+type ProductAcc = { leads: Set<string>; closings: Set<string> };
+type CsReportAcc = {
+  leads: Set<string>; closings: Set<string>;
+  revenue: number; discount: number; rawLeads: number;
+  products: Map<string, ProductAcc>;
+};
+
+// Daily CS report on a 16:00→16:00 WIB window. Mirrors computeCsAgg's dedup/exclusion
+// rules exactly (so totals match the Performance page), adding discount + per-CS×product
+// nesting + a duplicate-phone count (a judging aid for the CS-reported "Mis Rep").
+export const getDailyReport = query({
+  args: { startAt: v.number(), endAt: v.number() },
+  handler: async (ctx, args) => {
+    const orders = (
+      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
+    ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
+    const recaps = (
+      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt)).collect()
+    ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone));
+
+    // Resolve a closing's product to the matched in-window order's name (anti-fragmentation),
+    // falling back to the recap's own packageContent.
+    const latestOrderByPhone = new Map<string, any>();
+    for (const o of orders) {
+      const p = normalizePhone(o.customerPhone);
+      const ex = latestOrderByPhone.get(p);
+      if (!ex || o.createdAt > ex.createdAt) latestOrderByPhone.set(p, o);
+    }
+
+    const map = new Map<string, CsReportAcc>();
+    const getCs = (cs: string): CsReportAcc => {
+      let a = map.get(cs);
+      if (!a) { a = { leads: new Set(), closings: new Set(), revenue: 0, discount: 0, rawLeads: 0, products: new Map() }; map.set(cs, a); }
+      return a;
+    };
+    const getProd = (a: CsReportAcc, prod: string): ProductAcc => {
+      let p = a.products.get(prod);
+      if (!p) { p = { leads: new Set(), closings: new Set() }; a.products.set(prod, p); }
+      return p;
+    };
+
+    for (const o of orders) {
+      const a = getCs(o.assignedCsName);
+      a.rawLeads += 1;
+      const phone = normalizePhone(o.customerPhone);
+      a.leads.add(phone);
+      getProd(a, normalizeProductName(o.productName || o.products)).leads.add(phone);
+    }
+    for (const r of recaps) {
+      const a = getCs(r.csName);
+      const key = r.orderIdBerdu || normalizePhone(r.customerPhone);
+      a.closings.add(key);
+      a.revenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
+      a.discount += r.discount ?? 0;
+      const matched = latestOrderByPhone.get(normalizePhone(r.customerPhone));
+      getProd(a, normalizeProductName(matched?.productName || matched?.products || r.packageContent)).closings.add(key);
+    }
+
+    const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
+    const cpd = (disc: number, c: number) => (c > 0 ? Math.round(disc / c) : 0);
+
+    const cs = Array.from(map.entries())
+      .map(([rawName, a]) => {
+        const leads = a.leads.size, closings = a.closings.size;
+        const products = Array.from(a.products.entries())
+          .map(([product, p]) => ({ product, leads: p.leads.size, closings: p.closings.size, cr: cr(p.closings.size, p.leads.size) }))
+          .filter((p) => p.leads > 0 || p.closings > 0)
+          .sort((x, y) => y.leads - x.leads || x.product.localeCompare(y.product));
+        return {
+          csName: normalizeCsName(rawName),
+          leads, closings, cr: cr(closings, leads),
+          revenue: a.revenue, discount: a.discount, cpDiscount: cpd(a.discount, closings),
+          duplicates: a.rawLeads - leads,
+          products,
+        };
+      })
+      .filter((c) => c.leads > 0 || c.closings > 0)
+      .sort((x, y) => y.closings - x.closings || y.leads - x.leads);
+
+    // Grand totals: global union dedup (matches getPeriodReport totals semantics).
+    const gLeads = new Set<string>(), gClos = new Set<string>();
+    let gRevenue = 0, gDiscount = 0, gRawLeads = 0;
+    for (const o of orders) { gRawLeads += 1; gLeads.add(normalizePhone(o.customerPhone)); }
+    for (const r of recaps) {
+      gClos.add(r.orderIdBerdu || normalizePhone(r.customerPhone));
+      gRevenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
+      gDiscount += r.discount ?? 0;
+    }
+
+    return {
+      windowStart: args.startAt, windowEnd: args.endAt,
+      totals: {
+        leads: gLeads.size, closings: gClos.size, cr: cr(gClos.size, gLeads.size),
+        revenue: gRevenue, discount: gDiscount, cpDiscount: cpd(gDiscount, gClos.size),
+        duplicates: gRawLeads - gLeads.size,
+      },
+      cs,
     };
   },
 });
