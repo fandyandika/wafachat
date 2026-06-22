@@ -135,3 +135,31 @@ export const getDuplicateOrders = query({
     return result;
   },
 });
+
+// Diagnostic: reconcile Convex order count against the source (Berdu) for a range.
+// rawOrders should match Berdu's count if every order synced; leads = distinctValidPhones.
+export const debugOrderReconcile = query({
+  args: { startAt: v.number(), endAt: v.number() },
+  handler: async (ctx, args) => {
+    const orders = await ctx.db
+      .query("orders")
+      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+      .collect();
+    const excluded = orders.filter((o) => isInternalTestPhone(o.customerPhone));
+    const valid = orders.filter((o) => !isInternalTestPhone(o.customerPhone));
+    const distinctValid = new Set(valid.map((o) => normalizePhone(o.customerPhone))).size;
+    return {
+      rawOrders: orders.length,
+      validOrders: valid.length,
+      distinctValidPhones: distinctValid,
+      duplicateExtra: valid.length - distinctValid,
+      excludedOrders: excluded.length,
+      excludedSample: excluded.slice(0, 12).map((o) => ({
+        phone: o.customerPhone,
+        name: o.customerName,
+        cs: o.assignedCsName,
+        orderId: o.orderId,
+      })),
+    };
+  },
+});
