@@ -50,7 +50,11 @@ export function DailyReportDashboard() {
 
   const report = useQuery(api.analytics.getDailyReport, { startAt, endAt });
   const respData = useQuery(api.responseTime.getResponseTimes, { startAt, endAt });
-  const respByCs = new Map((respData?.cs ?? []).map((r) => [r.csName, r]));
+  // cs is sorted by firstReplyCount desc; keep the FIRST (dominant) row per display name —
+  // conversation.assignedCsName has mixed forms ("Aisyah"/"CS Aisyah") that normalize equal,
+  // so a tiny straggler row must not overwrite the real one.
+  const respByCs = new Map<string, { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number }>();
+  for (const r of respData?.cs ?? []) if (!respByCs.has(r.csName)) respByCs.set(r.csName, r);
 
   // Open-date label = the day the window OPENS (= rawWindow.startAt's WIB date), not endAt (next day).
   const label = wibDateParts(rawWindow.startAt);
