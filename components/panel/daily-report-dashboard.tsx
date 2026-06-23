@@ -10,7 +10,7 @@ import { MetricCard, DeltaPill } from '@/components/ui/metric-card';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { AnimatedNumber } from '@/components/ui/animated-number';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { formatRupiah, formatDuration } from '@/lib/format';
+import { formatRupiahShort, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/panel/report-card';
 import { crLabel } from '@/components/panel/report-text';
@@ -19,7 +19,7 @@ import {
 } from '@/components/panel/report-window';
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-const DAYS_SHORT = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+const DAYS_SHORT = ['Ahad', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
 
 function fmtBoundary(ms: number): string {
   const p = wibDateParts(ms);
@@ -269,9 +269,9 @@ function GrandStrip({
       emphasis: true,
       delta: pill(dCr, '%'),
     },
-    { label: 'Omzet', node: <AnimatedNumber value={totals.revenue} format={formatRupiah} /> },
-    { label: 'Diskon', node: <AnimatedNumber value={totals.discount} format={formatRupiah} /> },
-    { label: 'CP Diskon', node: <AnimatedNumber value={totals.cpDiscount} format={formatRupiah} /> },
+    { label: 'Omzet', node: <AnimatedNumber value={totals.revenue} format={formatRupiahShort} /> },
+    { label: 'Diskon', node: <AnimatedNumber value={totals.discount} format={formatRupiahShort} /> },
+    { label: 'CP Diskon', node: <AnimatedNumber value={totals.cpDiscount} format={formatRupiahShort} /> },
   ];
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">

@@ -19,6 +19,20 @@ import { TrendChart } from '@/components/ui/trend-chart';
 import { DeltaPill } from '@/components/ui/metric-card';
 import { crBarClass } from '@/lib/cr';
 
+const MONTHS_ID = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+/** Readable WIB date range, e.g. "16–22 Jun 2026" — replaces the cryptic "Pekan 2026-06-22". */
+function fmtPeriodRange(startMs?: number, endMs?: number): string {
+  if (!startMs || !endMs) return '…';
+  const JAK = 7 * 60 * 60 * 1000;
+  const s = new Date(startMs + JAK);
+  const e = new Date(endMs + JAK);
+  const sd = s.getUTCDate(), sm = s.getUTCMonth();
+  const ed = e.getUTCDate(), em = e.getUTCMonth(), ey = e.getUTCFullYear();
+  return sm === em
+    ? `${sd}–${ed} ${MONTHS_ID[em]} ${ey}`
+    : `${sd} ${MONTHS_ID[sm]} – ${ed} ${MONTHS_ID[em]} ${ey}`;
+}
+
 export function PerformancePanel({
   data,
   csLeaderboard,
@@ -228,7 +242,7 @@ export function PerformancePanel({
           <div className="flex items-center justify-between gap-2">
             <div>
               <CardTitle className="text-base">Laporan {reportPeriod === 'week' ? 'Pekanan' : 'Bulanan'}</CardTitle>
-              <CardDescription>{report ? report.label : '…'} — total + perubahan vs periode sebelumnya.</CardDescription>
+              <CardDescription>{report ? fmtPeriodRange(report.rangeStart, report.rangeEnd) : '…'} · total + perubahan vs periode sebelumnya.</CardDescription>
             </div>
             <div className="flex gap-1 rounded-lg border bg-muted/30 p-1">
               {(['week', 'month'] as const).map((p) => (

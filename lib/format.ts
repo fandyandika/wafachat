@@ -3,6 +3,15 @@ export function formatRupiah(value?: number): string {
   return 'Rp' + new Intl.NumberFormat('id-ID').format(value);
 }
 
+/** Compact rupiah for tight KPI tiles — "Rp33,4 jt". */
+export function formatRupiahShort(value?: number): string {
+  if (value === undefined || Number.isNaN(value)) return '-';
+  if (value >= 1_000_000_000) return `Rp${(value / 1_000_000_000).toFixed(1).replace('.', ',')} M`;
+  if (value >= 1_000_000) return `Rp${(value / 1_000_000).toFixed(1).replace('.', ',')} jt`;
+  if (value >= 1_000) return `Rp${Math.round(value / 1_000)} rb`;
+  return 'Rp' + value;
+}
+
 export function formatTime(iso: string): string {
   if (!iso) return '-';
   try {
