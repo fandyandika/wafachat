@@ -3,11 +3,13 @@
 import { useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { Button } from '@/components/ui/button';
 import { MetricCard } from '@/components/ui/metric-card';
-import { formatRupiah } from '@/lib/format';
+import { CsAvatar } from '@/components/ui/cs-avatar';
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { formatRupiah, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { ReportCard, type ReportCardData } from '@/components/panel/report-card';
 import { crLabel } from '@/components/panel/report-text';
@@ -83,6 +85,21 @@ export function DailyReportDashboard() {
   const cards = ((report?.cs ?? []) as ReportCardData[]).filter((c) => !csName || c.csName === csName);
   const totalDuplicates = cards.reduce((s, c) => s + (c.duplicates ?? 0), 0);
 
+  // Team highlights (only on the unfiltered team view). Derived, not new data.
+  const allCs = (report?.cs ?? []) as ReportCardData[];
+  const topClosing = allCs.reduce<ReportCardData | null>((best, c) => (!best || c.closings > best.closings ? c : best), null);
+  const topCr = allCs
+    .filter((c) => c.leads >= 3)
+    .reduce<ReportCardData | null>((best, c) => (!best || c.cr > best.cr ? c : best), null);
+  let fastestResp: { csName: string; ms: number } | null = null;
+  for (const c of allCs) {
+    const r = respByCs.get(c.csName);
+    if (r && r.firstReplyCount >= 3 && r.firstReplyMedianMs != null && (!fastestResp || r.firstReplyMedianMs < fastestResp.ms)) {
+      fastestResp = { csName: c.csName, ms: r.firstReplyMedianMs };
+    }
+  }
+  const showHighlights = !csName && allCs.length > 0 && (topClosing?.closings ?? 0) > 0;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-2">
@@ -112,6 +129,16 @@ export function DailyReportDashboard() {
       ) : (
         <>
           <GrandStrip totals={report.totals} />
+          {showHighlights && (
+            <div>
+              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Sorotan</div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {topClosing && <HighlightCard title="Closing terbanyak" name={topClosing.csName} value={`${topClosing.closings} closing`} />}
+                {topCr && <HighlightCard title="CR tertinggi" name={topCr.csName} value={crLabel(topCr.cr, topCr.leads)} />}
+                {fastestResp && <HighlightCard title="Respon tercepat" name={fastestResp.csName} value={formatDuration(fastestResp.ms)} />}
+              </div>
+            </div>
+          )}
           {cards.length === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-card/50 p-10 text-center">
               <ClipboardList className="size-7 text-muted-foreground/60" />
@@ -134,18 +161,41 @@ export function DailyReportDashboard() {
   );
 }
 
+function HighlightCard({ title, name, value }: { title: string; name: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{title}</div>
+      <div className="mt-2 flex items-center gap-2.5">
+        <CsAvatar name={name} size="md" />
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold tracking-tight">{name}</div>
+          <div className="text-xs tabular-nums text-muted-foreground">{value}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DoubleOrderBanner({ count }: { count: number }) {
   if (count > 0) {
     return (
-      <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+      <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
           <Copy className="size-5" />
         </span>
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-amber-900">{count} order double terdeteksi</div>
-          <div className="mt-0.5 text-xs leading-relaxed text-amber-700/90">
-            Pelanggan dengan ≥2 order di periode ini — calon mis-rep. CR sudah dihitung dari leads unik, jadi angkanya tetap akurat.
-          </div>
+        <div className="flex items-center gap-1.5 text-sm font-semibold text-amber-900">
+          <span>{count} order double terdeteksi</span>
+          <Tooltip>
+            <TooltipTrigger
+              aria-label="Penjelasan order double"
+              className="inline-flex items-center justify-center rounded-full text-amber-600 transition-colors hover:text-amber-800 focus-visible:outline-none"
+            >
+              <Info className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipContent>
+              Pelanggan dengan ≥2 order di periode ini — calon mis-rep. CR sudah dihitung dari leads unik, jadi angkanya tetap akurat.
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
     );
