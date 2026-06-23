@@ -1,7 +1,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone } from "./lib";
-import { normalizeProductName, normalizeCsName } from "./shippingRecaps";
+import { normalizeCsName, canonicalizeProduct } from "./shippingRecaps";
 
 type CsAgg = { leads: Set<string>; closings: Set<string>; revenue: number };
 
@@ -66,11 +66,11 @@ async function computeProductAgg(ctx: any, startAt: number, endAt: number) {
   const leads = new Map<string, number>();
   const closings = new Map<string, Set<string>>();
   for (const o of orders) {
-    const p = normalizeProductName(o.productName || o.products);
+    const p = canonicalizeProduct(o.productName || o.products);
     leads.set(p, (leads.get(p) ?? 0) + 1);
   }
   for (const r of recaps) {
-    const p = normalizeProductName(r.packageContent);
+    const p = canonicalizeProduct(r.packageContent);
     const s = closings.get(p) ?? new Set<string>();
     s.add(r.orderIdBerdu || normalizePhone(r.customerPhone));
     closings.set(p, s);
@@ -235,7 +235,7 @@ export const getDailyReport = query({
       a.rawLeads += 1;
       const phone = normalizePhone(o.customerPhone);
       a.leads.add(phone);
-      getProd(a, normalizeProductName(o.productName || o.products)).leads.add(phone);
+      getProd(a, canonicalizeProduct(o.productName || o.products)).leads.add(phone);
     }
     for (const r of recaps) {
       const a = getCs(r.csName);
@@ -245,7 +245,7 @@ export const getDailyReport = query({
       a.discount += r.discount ?? 0;
       const cphone = normalizePhone(r.customerPhone);
       const matched = latestOrderByPhone.get(cphone) ?? fallbackOrderByPhone.get(cphone);
-      getProd(a, normalizeProductName(matched?.productName || matched?.products || r.packageContent)).closings.add(key);
+      getProd(a, canonicalizeProduct(matched?.productName || matched?.products || r.packageContent)).closings.add(key);
     }
 
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);

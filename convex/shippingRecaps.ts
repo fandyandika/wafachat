@@ -209,6 +209,28 @@ export function normalizeProductName(value: string | undefined): string {
     .trim() || "Tanpa Data Produk";
 }
 
+// A closing with no matching order carries the message's SKU-style name
+// ("QURAN MAPPING 1 PCS") instead of the order's display name, which fragments the
+// per-product breakdown. Collapse every known variant to one canonical display name so
+// leads and closings group identically. Each keyword is unique within the catalog;
+// unknown products fall through unchanged (never mis-merged).
+const PRODUCT_ALIASES: Array<{ canonical: string; match: RegExp }> = [
+  { canonical: "Quran Mapping", match: /quran mapping/i },
+  { canonical: "Al Qur'an Medis [A5] dengan Hadis Medis + Jurnal Kesehatan", match: /medis/i },
+  { canonical: "7 Surat Istimewa", match: /surat/i },
+  { canonical: "Sound Book: Learning How To Do Shalat", match: /sound book|learning.*shalat/i },
+  { canonical: "Alquran Tulis Tazyin 1 Jilid", match: /tazyin/i },
+  { canonical: "Kumpulan Doa Berbagai Acara & Keperluan", match: /kumpulan doa|doa acara/i },
+];
+
+export function canonicalizeProduct(value: string | undefined): string {
+  const name = normalizeProductName(value);
+  for (const { canonical, match } of PRODUCT_ALIASES) {
+    if (match.test(name)) return canonical;
+  }
+  return name;
+}
+
 export function normalizeCsName(value: string | undefined): string {
   const name = cleanMarkdown(value ?? "") || "Tanpa Data CS";
   if (/^aisyah$/i.test(name)) return "CS Aisyah";
@@ -1202,7 +1224,7 @@ export const getPerformance = query({
     const csMap = new Map<string, { csName: string; leads: number; closing: number; revenue: number; discount: number }>();
 
     for (const order of uniqueOrders) {
-      const product = normalizeProductName(order.productName || order.products);
+      const product = canonicalizeProduct(order.productName || order.products);
       const productRow = productMap.get(product) ?? { product, leads: 0, closing: 0, revenue: 0, discount: 0 };
       productRow.leads += 1;
       productMap.set(product, productRow);
@@ -1216,9 +1238,10 @@ export const getPerformance = query({
     for (const recap of validClosings) {
       const phone = normalizePhone(recap.customerPhone);
       const matchedOrder = latestOrderByPhone.get(phone) ?? fallbackOrderByPhone.get(phone);
-      // Group closings under the canonical ORDER product name (same as leads) so the
-      // message's SKU-style name (e.g. "QURAN MAPPING 1 PCS") doesn't fragment the breakdown.
-      const product = normalizeProductName(matchedOrder?.productName || matchedOrder?.products || recap.packageContent);
+      // Group closings under the canonical product name (same as leads) so the message's
+      // SKU-style name (e.g. "QURAN MAPPING 1 PCS") doesn't fragment the breakdown — even when
+      // no order matched and only the recap SKU is available.
+      const product = canonicalizeProduct(matchedOrder?.productName || matchedOrder?.products || recap.packageContent);
       const revenue = recap.total ?? recap.codValue ?? recap.nonCodItemPrice ?? 0;
       const discount = recap.discount ?? (args.includeInferredDiscount ? recap.inferredDiscount ?? 0 : 0);
       const productRow = productMap.get(product) ?? { product, leads: 0, closing: 0, revenue: 0, discount: 0 };

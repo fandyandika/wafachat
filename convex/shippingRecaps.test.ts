@@ -2,9 +2,24 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { parseClosingMessage } from "./shippingRecaps";
+import { parseClosingMessage, canonicalizeProduct } from "./shippingRecaps";
 
 const t0 = 1_750_000_000_000;
+
+test("canonicalizeProduct: SKU-style closing names collapse into the order's canonical product", () => {
+  // Each SKU fragment (orphan closing) maps to the same canonical name the leads use.
+  expect(canonicalizeProduct("QURAN MAPPING 1 PCS")).toBe("Quran Mapping");
+  expect(canonicalizeProduct("Quran Mapping")).toBe("Quran Mapping");
+  expect(canonicalizeProduct("QURAN MEDIS 1 PCS")).toBe("Al Qur'an Medis [A5] dengan Hadis Medis + Jurnal Kesehatan");
+  expect(canonicalizeProduct("Al Qur'an Medis [A5] dengan Hadis Medis + Jurnal Kesehatan")).toBe("Al Qur'an Medis [A5] dengan Hadis Medis + Jurnal Kesehatan");
+  expect(canonicalizeProduct("BUKU 7 SURAT PILIHAN 1 PCS")).toBe("7 Surat Istimewa");
+  expect(canonicalizeProduct("BUKU LEARNING SHALAT 1 PCS")).toBe("Sound Book: Learning How To Do Shalat");
+  expect(canonicalizeProduct("BUKU TULIS TAZYIN 3 PAKET LENGKAP")).toBe("Alquran Tulis Tazyin 1 Jilid");
+  expect(canonicalizeProduct("BUKU KUMPULAN DOA ACARA 1 PCS")).toBe("Kumpulan Doa Berbagai Acara & Keperluan");
+  // Unknown products fall through unchanged — never mis-merged.
+  expect(canonicalizeProduct("Buku Iqro Jilid 1")).toBe("Buku Iqro Jilid 1");
+  expect(canonicalizeProduct(undefined)).toBe("Tanpa Data Produk");
+});
 
 test("backfillFromMessages still upserts one recap for an outbound PEMESANAN BERHASIL", async () => {
   const t = convexTest(schema);
