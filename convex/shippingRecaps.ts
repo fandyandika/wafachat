@@ -1,7 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { isInternalTestPhone } from "./lib";
+import { isInternalTestPhone, csKey } from "./lib";
 import { getActiveClosingPhrases } from "./closingRules";
 
 type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
@@ -1149,6 +1149,7 @@ export const getPerformance = query({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const key = args.csName ? csKey(args.csName) : null;
     const orders = await ctx.db
       .query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
@@ -1161,17 +1162,17 @@ export const getPerformance = query({
       .collect();
 
     const realOrders = orders.filter(
-      (order) => !isInternalTestPhone(order.customerPhone) && (!args.csName || order.assignedCsName === args.csName),
+      (order) => !isInternalTestPhone(order.customerPhone) && (!key || csKey(order.assignedCsName) === key),
     );
     const validCandidateRows = recaps.filter(
       (row) =>
         row.status !== "cancelled" &&
         row.status !== "cancelled_after_export" &&
-        (!args.csName || row.csName === args.csName) &&
+        (!key || csKey(row.csName) === key) &&
         !isInternalTestPhone(row.customerPhone),
     );
     const totalDelivered = recaps.filter(
-      (row) => row.status === "delivered" && (!args.csName || row.csName === args.csName) && !isInternalTestPhone(row.customerPhone),
+      (row) => row.status === "delivered" && (!key || csKey(row.csName) === key) && !isInternalTestPhone(row.customerPhone),
     ).length;
     const validClosingRows = validCandidateRows;
     const latestOrderByPhone = new Map<string, Doc<"orders">>();

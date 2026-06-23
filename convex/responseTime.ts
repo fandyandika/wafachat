@@ -1,6 +1,6 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
-import { isInternalTestPhone } from "./lib";
+import { isInternalTestPhone, csKey } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile, pairResponseEvents, type RtMessage } from "./responseTimeMath";
 
@@ -52,7 +52,10 @@ export const getResponseTimes = query({
       ongoingMedianMs: median(a.all),
       ongoingCount: a.all.length,
     }));
-    if (args.csName) cs = cs.filter((c) => c.csName === args.csName || c.csNameRaw === args.csName);
+    if (args.csName) {
+      const key = csKey(args.csName);
+      cs = cs.filter((c) => csKey(c.csNameRaw) === key);
+    }
     cs.sort((x, y) => y.firstReplyCount - x.firstReplyCount);
 
     return {

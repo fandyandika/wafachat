@@ -1,6 +1,6 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
-import { normalizePhone, isInternalTestPhone, getJakartaDate } from "./lib";
+import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
 
 export const getDashboardSummary = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
@@ -15,7 +15,8 @@ export const getDashboardSummary = query({
       .withIndex("by_type_createdAt", (q) => q.eq("type", "handover").gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
 
-    const csOk = (cs: string | undefined) => !args.csName || cs === args.csName;
+    const key = args.csName ? csKey(args.csName) : null;
+    const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
     const leadPhones = new Set(
       orders.filter((o) => !isInternalTestPhone(o.customerPhone) && csOk(o.assignedCsName))
         .map((o) => normalizePhone(o.customerPhone)),
@@ -64,7 +65,8 @@ export const getTrend = query({
   args: { startAt: v.number(), endAt: v.number(),
     bucket: v.union(v.literal("day"), v.literal("week"), v.literal("month")), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const csOk = (cs: string | undefined) => !args.csName || cs === args.csName;
+    const key = args.csName ? csKey(args.csName) : null;
+    const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
     const orders = (await ctx.db.query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect())
       .filter((o) => !isInternalTestPhone(o.customerPhone) && csOk(o.assignedCsName));
@@ -91,12 +93,13 @@ export const getTrend = query({
 export const getDuplicateOrders = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const key = args.csName ? csKey(args.csName) : null;
     const orders = (
       await ctx.db
         .query("orders")
         .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
         .collect()
-    ).filter((o) => !isInternalTestPhone(o.customerPhone) && (!args.csName || o.assignedCsName === args.csName));
+    ).filter((o) => !isInternalTestPhone(o.customerPhone) && (!key || csKey(o.assignedCsName) === key));
 
     const groups = new Map<string, typeof orders>();
     for (const o of orders) {

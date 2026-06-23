@@ -147,3 +147,19 @@ test("getDailyReport: cross-window closing canonicalizes product via order (no S
   expect(a.leads).toBe(0);
   expect(a.closings).toBe(1);
 });
+
+test("getCsLeaderboard honors csName via csKey (CS Aisyah == Aisyah)", async () => {
+  const t = convexTest(schema);
+  const t0_new = Date.parse("2026-06-22T10:00:00+07:00");
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", { ...ordBase, orderId: "O1", customerPhone: "62811", customerName: "A", productName: "Quran Mapping", assignedCsName: "Aisyah", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "O2", customerPhone: "62822", customerName: "B", productName: "Quran Mapping", assignedCsName: "Risma", createdAt: t0_new, updatedAt: t0_new });
+  });
+  const start = Date.parse("2026-06-22T00:00:00+07:00");
+  const end = Date.parse("2026-06-23T00:00:00+07:00");
+  const all = await t.query(api.analytics.getCsLeaderboard, { startAt: start, endAt: end });
+  expect(all.length).toBe(2);
+  const filtered = await t.query(api.analytics.getCsLeaderboard, { startAt: start, endAt: end, csName: "CS Aisyah" });
+  expect(filtered.length).toBe(1);
+  expect(filtered[0].csName).toBe("Aisyah");
+});

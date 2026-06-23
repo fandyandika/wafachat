@@ -1,17 +1,18 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
-import { normalizePhone, isInternalTestPhone } from "./lib";
+import { normalizePhone, isInternalTestPhone, csKey } from "./lib";
 import { normalizeCsName, canonicalizeProduct } from "./shippingRecaps";
 
 type CsAgg = { leads: Set<string>; closings: Set<string>; revenue: number };
 
-async function computeCsAgg(ctx: any, startAt: number, endAt: number): Promise<Map<string, CsAgg>> {
+async function computeCsAgg(ctx: any, startAt: number, endAt: number, csName?: string): Promise<Map<string, CsAgg>> {
+  const key = csName ? csKey(csName) : null;
   const orders = (
     await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-  ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
+  ).filter((o: any) => !isInternalTestPhone(o.customerPhone) && (!key || csKey(o.assignedCsName) === key));
   const recaps = (
     await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone));
+  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone) && (!key || csKey(r.csName) === key));
 
   const map = new Map<string, CsAgg>();
   const get = (cs: string) => {
@@ -29,11 +30,11 @@ async function computeCsAgg(ctx: any, startAt: number, endAt: number): Promise<M
 }
 
 export const getCsLeaderboard = query({
-  args: { startAt: v.number(), endAt: v.number() },
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const len = args.endAt - args.startAt;
-    const cur = await computeCsAgg(ctx, args.startAt, args.endAt);
-    const prev = await computeCsAgg(ctx, args.startAt - len, args.startAt - 1);
+    const cur = await computeCsAgg(ctx, args.startAt, args.endAt, args.csName);
+    const prev = await computeCsAgg(ctx, args.startAt - len, args.startAt - 1, args.csName);
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
     const names = Array.from(new Set(Array.from(cur.keys()).concat(Array.from(prev.keys()))));
     const rows = names.map((csName) => {
@@ -55,13 +56,14 @@ export const getCsLeaderboard = query({
   },
 });
 
-async function computeProductAgg(ctx: any, startAt: number, endAt: number) {
+async function computeProductAgg(ctx: any, startAt: number, endAt: number, csName?: string) {
+  const key = csName ? csKey(csName) : null;
   const orders = (
     await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-  ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
+  ).filter((o: any) => !isInternalTestPhone(o.customerPhone) && (!key || csKey(o.assignedCsName) === key));
   const recaps = (
     await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone));
+  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone) && (!key || csKey(r.csName) === key));
 
   const leads = new Map<string, number>();
   const closings = new Map<string, Set<string>>();
@@ -79,13 +81,13 @@ async function computeProductAgg(ctx: any, startAt: number, endAt: number) {
 }
 
 export const getProductDifficulty = query({
-  args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()) },
+  args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const minLeads = args.minLeads ?? 3;
     const len = args.endAt - args.startAt;
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-    const cur = await computeProductAgg(ctx, args.startAt, args.endAt);
-    const prev = await computeProductAgg(ctx, args.startAt - len, args.startAt - 1);
+    const cur = await computeProductAgg(ctx, args.startAt, args.endAt, args.csName);
+    const prev = await computeProductAgg(ctx, args.startAt - len, args.startAt - 1, args.csName);
     const rows = Array.from(cur.leads.entries())
       .filter(([, leads]) => leads >= minLeads)
       .map(([productName, leads]) => {
