@@ -23,17 +23,7 @@ import { api } from '@/convex/_generated/api';
 import type { PerformanceData } from '@/components/panel/types';
 import { formatRupiah, formatDuration } from '@/lib/format';
 import { CsAvatar } from '@/components/ui/cs-avatar';
-
-function Sparkline({ values, tone }: { values: number[]; tone: string }) {
-  const max = Math.max(1, ...values);
-  return (
-    <div className="flex h-8 items-end gap-0.5">
-      {values.map((v, i) => (
-        <div key={i} className={cn('w-1.5 rounded-sm', tone)} style={{ height: `${Math.max(4, (v / max) * 100)}%` }} title={String(v)} />
-      ))}
-    </div>
-  );
-}
+import { TrendChart } from '@/components/ui/trend-chart';
 
 function PerformanceTable({ columns, rows, title }: { columns: string[]; rows: Array<Array<string | number>>; title: string }) {
   return (
@@ -278,11 +268,8 @@ export function PerformancePanel({
           ) : trendData.length === 0 ? (
             <p className="text-sm text-muted-foreground">Belum ada data.</p>
           ) : (
-            <div className="space-y-3">
-              <div className="flex items-center gap-4">
-                <div><div className="text-xs text-muted-foreground">Leads</div><Sparkline values={trendData.map((b) => b.leads)} tone="bg-lead" /></div>
-                <div><div className="text-xs text-muted-foreground">Closing</div><Sparkline values={trendData.map((b) => b.closings)} tone="bg-positive" /></div>
-              </div>
+            <div className="space-y-4">
+              <TrendChart data={trendData.map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }))} />
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">

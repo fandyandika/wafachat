@@ -2,8 +2,14 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Check,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw,
   Search,
+  Upload,
+  X,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -12,9 +18,6 @@ import { Checkbox } from '@/components/ui/checkbox';
 import {
   Card,
   CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
 } from '@/components/ui/card';
 import {
   Select,
@@ -144,11 +147,11 @@ export function ShippingRecapPanel({
 
   const statusItems: Array<{ label: string; value: RecapStatus | 'all'; count: number }> = [
     { label: 'Semua', value: 'all', count: counts.all },
-    { label: '⚠ Perlu Review', value: 'needs_review', count: counts.needs_review },
-    { label: '✓ Siap Export', value: 'ready', count: counts.ready },
-    { label: '📤 Diekspor', value: 'exported', count: counts.exported },
-    { label: '✅ Terkirim', value: 'delivered', count: counts.delivered },
-    { label: '✕ Dibatalkan', value: 'cancelled', count: counts.cancelled },
+    { label: 'Perlu Review', value: 'needs_review', count: counts.needs_review },
+    { label: 'Siap Export', value: 'ready', count: counts.ready },
+    { label: 'Diekspor', value: 'exported', count: counts.exported },
+    { label: 'Terkirim', value: 'delivered', count: counts.delivered },
+    { label: 'Dibatalkan', value: 'cancelled', count: counts.cancelled },
   ];
 
   // Stats for summary cards
@@ -168,14 +171,13 @@ export function ShippingRecapPanel({
           { label: 'Sudah Terkirim', value: counts.delivered, tone: 'text-positive' },
           { label: 'Nilai COD', value: formatRupiah(totalCodValue), tone: 'text-primary' },
         ].map((c) => (
-          <Card key={c.label} size="sm">
-            <CardHeader>
-              <CardDescription className="text-xs">{c.label}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className={cn('text-xl font-bold tabular-nums', c.tone)}>{c.value}</div>
-            </CardContent>
-          </Card>
+          <div
+            key={c.label}
+            className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate"
+          >
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{c.label}</div>
+            <div className={cn('mt-1.5 text-2xl font-semibold tabular-nums', c.tone)}>{c.value}</div>
+          </div>
         ))}
       </div>
 
@@ -278,32 +280,35 @@ export function ShippingRecapPanel({
             onClick={onBulkReady}
             size="sm"
             variant="secondary"
+            className="gap-1.5"
           >
-            ✓ Tandai Siap Export
+            <Check className="size-4" /> Tandai Siap Export
           </Button>
           <Button
             disabled={!!actionLoading || actionLoading === 'shipping-export'}
             onClick={onBulkExport}
             size="sm"
             variant="secondary"
+            className="gap-1.5"
           >
-            📤 Export Terpilih
+            <Upload className="size-4" /> Export Terpilih
           </Button>
           <Button
             disabled={!!actionLoading}
             onClick={onBulkDelivered}
             size="sm"
-            className="bg-emerald-600 text-white hover:bg-emerald-700"
+            className="gap-1.5 bg-emerald-600 text-white hover:bg-emerald-700"
           >
-            ✅ Tandai Terkirim
+            <CheckCircle2 className="size-4" /> Tandai Terkirim
           </Button>
           <Button
             disabled={!!actionLoading}
             onClick={onBulkCancel}
             size="sm"
             variant="destructive"
+            className="gap-1.5"
           >
-            ✕ Batalkan
+            <X className="size-4" /> Batalkan
           </Button>
         </div>
       )}
@@ -375,7 +380,7 @@ export function ShippingRecapPanel({
                     <TableCell className="text-xs">
                       {row.csName
                         ? <span className="text-muted-foreground">{row.csName}</span>
-                        : <span className="font-medium text-amber-500">? Tanpa CS</span>
+                        : <span className="font-medium text-amber-500">Tanpa CS</span>
                       }
                     </TableCell>
                     <TableCell className="max-w-[180px]">
@@ -412,9 +417,9 @@ export function ShippingRecapPanel({
                             onClick={() => onReady(row)}
                             size="sm"
                             variant="outline"
-                            className="text-blue-600 border-blue-200 hover:bg-blue-50"
+                            className="gap-1 text-blue-600 border-blue-200 hover:bg-blue-50"
                           >
-                            ✓ Siap
+                            <Check className="size-3.5" /> Siap
                           </Button>
                         )}
                         {row.status === 'exported' && (
@@ -423,9 +428,9 @@ export function ShippingRecapPanel({
                             onClick={() => onDelivered(row)}
                             size="sm"
                             variant="outline"
-                            className="text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                            className="gap-1 text-emerald-600 border-emerald-200 hover:bg-emerald-50"
                           >
-                            ✅ Terkirim
+                            <CheckCircle2 className="size-3.5" /> Terkirim
                           </Button>
                         )}
                         {row.status === 'delivered' && (
@@ -434,9 +439,9 @@ export function ShippingRecapPanel({
                             onClick={() => onUndoDelivered(row)}
                             size="sm"
                             variant="ghost"
-                            className="text-xs text-muted-foreground"
+                            className="gap-1 text-xs text-muted-foreground"
                           >
-                            ↩ Undo
+                            <RotateCcw className="size-3.5" /> Undo
                           </Button>
                         )}
                         {(row.status === 'cancelled' || row.status === 'cancelled_after_export') ? (
@@ -445,19 +450,20 @@ export function ShippingRecapPanel({
                             onClick={() => onUndoCancel(row)}
                             size="sm"
                             variant="ghost"
-                            className="text-xs text-muted-foreground"
+                            className="gap-1 text-xs text-muted-foreground"
                           >
-                            ↩ Pulihkan
+                            <RotateCcw className="size-3.5" /> Pulihkan
                           </Button>
                         ) : row.status !== 'delivered' && (
                           <Button
                             disabled={actionLoading === row._id + ':cancel'}
                             onClick={() => onCancel(row)}
-                            size="sm"
+                            size="icon-sm"
                             variant="ghost"
                             className="text-muted-foreground hover:text-destructive"
+                            aria-label="Batalkan"
                           >
-                            ✕
+                            <X className="size-4" />
                           </Button>
                         )}
                       </div>
@@ -476,10 +482,10 @@ export function ShippingRecapPanel({
           <button
             disabled={currentPage === 1}
             onClick={() => setCurrentPage((p) => p - 1)}
-            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
             type="button"
           >
-            ← Prev
+            <ChevronLeft className="size-3.5" /> Prev
           </button>
           {Array.from({ length: totalPages }, (_, i) => i + 1)
             .filter((page) => {
@@ -517,10 +523,10 @@ export function ShippingRecapPanel({
           <button
             disabled={currentPage === totalPages}
             onClick={() => setCurrentPage((p) => p + 1)}
-            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
             type="button"
           >
-            Next →
+            Next <ChevronRight className="size-3.5" />
           </button>
         </div>
       )}
@@ -600,25 +606,25 @@ function DetailRow({ label, value, strong = false }: { label: string; value: str
   );
 }
 
+function StatusDot({ className }: { className: string }) {
+  return <span className={cn('size-1.5 rounded-full', className)} aria-hidden />;
+}
+
 export function RecapStatusBadge({ status }: { status: RecapStatus }) {
   if (status === 'needs_review') {
-    return <Badge className="border-amber-500/40 bg-amber-50 text-amber-700" variant="outline">⚠ Perlu Review</Badge>;
+    return <Badge className="gap-1.5 border-amber-500/40 bg-amber-50 text-amber-700" variant="outline"><StatusDot className="bg-amber-500" /> Perlu Review</Badge>;
   }
 
   if (status === 'ready') {
-    return <Badge className="border-blue-500/40 bg-blue-50 text-blue-700" variant="outline">✓ Siap Export</Badge>;
+    return <Badge className="gap-1.5 border-blue-500/40 bg-blue-50 text-blue-700" variant="outline"><StatusDot className="bg-blue-500" /> Siap Export</Badge>;
   }
 
   if (status === 'exported') {
-    return <Badge className="border-emerald-500/40 bg-emerald-50 text-emerald-700" variant="outline">📤 Diekspor</Badge>;
+    return <Badge className="gap-1.5 border-emerald-500/40 bg-emerald-50 text-emerald-700" variant="outline"><StatusDot className="bg-emerald-500" /> Diekspor</Badge>;
   }
 
   if (status === 'delivered') {
-    return <Badge className="border-teal-500/40 bg-teal-50 text-teal-700 font-semibold" variant="outline">✅ Terkirim</Badge>;
-  }
-
-  if (status === 'cancelled_after_export') {
-    return <Badge className="border-destructive/30 text-destructive line-through" variant="outline">Dibatalkan</Badge>;
+    return <Badge className="gap-1.5 border-teal-500/40 bg-teal-50 text-teal-700 font-semibold" variant="outline"><StatusDot className="bg-teal-500" /> Terkirim</Badge>;
   }
 
   return <Badge className="border-destructive/30 text-destructive line-through" variant="outline">Dibatalkan</Badge>;
