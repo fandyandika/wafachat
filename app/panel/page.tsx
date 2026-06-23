@@ -3,9 +3,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from 'convex/react';
 import {
-  Users,
-  CheckCircle2,
-  TrendingUp,
   XCircle,
   Wallet,
   Clock,
@@ -20,6 +17,7 @@ import { MetricCard, type MetricTone } from '@/components/ui/metric-card';
 import { AnimatedNumber } from '@/components/ui/animated-number';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { TrendChart } from '@/components/ui/trend-chart';
+import { StatsWidget } from '@/components/ui/stats-widget';
 import { cn } from '@/lib/utils';
 import { crBarClass } from '@/lib/cr';
 import {
@@ -88,6 +86,18 @@ export default function DashboardPage() {
   const topCs = [...(performance?.cs ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
   const topProducts = [...(performance?.products ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
   const trendPoints = (trendData ?? []).map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }));
+  const leadsSeries = trendPoints.map((p) => p.leads);
+  const closingSeries = trendPoints.map((p) => p.closings);
+  const crSeries = (trendData ?? []).map((b) => b.cr);
+  // Momentum = second half vs first half of the period (a real signal, not vs a phantom prev query).
+  const momentum = (s: number[]): number | null => {
+    if (s.length < 4) return null;
+    const mid = Math.floor(s.length / 2);
+    const a = s.slice(0, mid).reduce((x, y) => x + y, 0);
+    const b = s.slice(mid).reduce((x, y) => x + y, 0);
+    if (a === 0) return null;
+    return Math.round(((b - a) / a) * 100);
+  };
 
   const cards = useMemo(
     (): Array<{
@@ -99,29 +109,6 @@ export default function DashboardPage() {
       emphasis?: boolean;
       format?: (n: number) => string;
     }> => [
-      {
-        label: 'Leads',
-        value: stats.orders,
-        hint: 'nomor HP unik',
-        icon: Users,
-        tone: 'lead',
-      },
-      {
-        label: 'Closing',
-        value: totalClosing,
-        hint: 'closing CS periode ini',
-        icon: CheckCircle2,
-        tone: 'positive',
-      },
-      {
-        label: 'Closing Rate',
-        value: crPerf,
-        hint: 'closing dibagi leads',
-        icon: TrendingUp,
-        tone: crPerf > 100 ? 'negative' : 'positive',
-        emphasis: true,
-        format: pct,
-      },
       {
         label: 'Omzet',
         value: revenue,
@@ -138,7 +125,7 @@ export default function DashboardPage() {
         tone: 'negative',
       },
     ],
-    [crPerf, performance, revenue, stats, totalClosing],
+    [performance, revenue, stats],
   );
 
   return (
@@ -159,9 +146,16 @@ export default function DashboardPage() {
         </Button>
       </div>
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {/* Hero stats — figure + momentum + sparkline */}
+      <section className="grid gap-4 sm:grid-cols-3">
+        <StatsWidget label="Leads" value={<AnimatedNumber value={stats.orders} />} hint={periodLabel} series={leadsSeries} deltaPct={momentum(leadsSeries)} />
+        <StatsWidget label="Closing" value={<AnimatedNumber value={totalClosing} />} hint={periodLabel} series={closingSeries} deltaPct={momentum(closingSeries)} />
+        <StatsWidget label="Closing Rate" value={<AnimatedNumber value={crPerf} format={pct} />} hint={periodLabel} series={crSeries} deltaPct={momentum(crSeries)} />
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-3">
         {loading ? (
-          Array.from({ length: 6 }).map((_, index) => <MetricSkeleton key={index} />)
+          Array.from({ length: 3 }).map((_, index) => <MetricSkeleton key={index} />)
         ) : (
           <>
             {cards.map((card) => <DashboardStatCard key={card.label} {...card} />)}

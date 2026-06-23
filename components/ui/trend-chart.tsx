@@ -59,22 +59,31 @@ export function TrendChart({ data, className }: { data: TrendPoint[]; className?
   };
 
   const labelStep = Math.max(1, Math.ceil(n / 7));
+  const peakClosing = Math.max(0, ...data.map((d) => d.closings));
+  const avgClosing = Math.round(data.reduce((acc, d) => acc + d.closings, 0) / Math.max(1, n));
 
   if (n === 0) return null;
 
   return (
     <div className={cn('w-full', className)}>
-      <div className="mb-3 flex items-center gap-4 text-xs">
-        {SERIES.map((s) => (
-          <span key={s.key} className="flex items-center gap-1.5 text-muted-foreground">
-            <span className="size-2 rounded-full" style={{ background: s.color }} />
-            {s.name}
-          </span>
-        ))}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-4">
+          {SERIES.map((s) => (
+            <span key={s.key} className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="size-2 rounded-full" style={{ background: s.color }} />
+              {s.name}
+              <span className="font-semibold tabular-nums text-foreground">{data[n - 1][s.key]}</span>
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center gap-3 tabular-nums text-muted-foreground">
+          <span>Peak <span className="font-semibold text-foreground">{peakClosing}</span></span>
+          <span>Rata² <span className="font-semibold text-foreground">{avgClosing}</span></span>
+        </div>
       </div>
 
       <div className="relative" onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
-        <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Trend leads dan closing harian">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full animate-in fade-in-0 duration-700" role="img" aria-label="Trend leads dan closing harian">
           <defs>
             {SERIES.map((s) => (
               <linearGradient key={s.key} id={`${uid}-${s.key}`} x1="0" y1="0" x2="0" y2="1">
