@@ -1,9 +1,9 @@
 'use client';
 
-import { Suspense } from 'react';
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, LayoutDashboard, BarChart3, ClipboardList } from 'lucide-react';
+import { Bot, LayoutDashboard, BarChart3, ClipboardList, PanelLeft, PanelLeftClose } from 'lucide-react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
@@ -32,6 +32,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   const { range, cs } = usePanelFilters();
   const csConfigs = useQuery(api.csConfigs.list, {}) ?? [];
   const title = NAV.find((n) => n.href === pathname)?.label ?? 'Dashboard';
+  const [navHidden, setNavHidden] = useState(false);
 
   const setParam = (key: string, value: string | undefined) => {
     const next = new URLSearchParams(sp.toString());
@@ -44,7 +45,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
-        <aside className="hidden w-64 shrink-0 border-r border-border bg-card/60 md:flex md:flex-col">
+        <aside className={cn('hidden w-64 shrink-0 border-r border-border bg-card/60 md:flex md:flex-col', navHidden && 'md:hidden')}>
           <div className="px-6 py-6">
             <div className="flex items-center gap-3">
               <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
@@ -78,8 +79,16 @@ function PanelShell({ children }: { children: React.ReactNode }) {
 
         <main className="min-w-0 flex-1">
           <header className="sticky top-0 z-10 border-b border-border bg-background/80 px-4 py-4 backdrop-blur md:px-8">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setNavHidden((v) => !v)}
+                  className="hidden size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:scale-95 md:inline-flex"
+                  aria-label={navHidden ? 'Tampilkan menu' : 'Sembunyikan menu'}
+                >
+                  {navHidden ? <PanelLeft className="size-5" /> : <PanelLeftClose className="size-5" />}
+                </button>
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
                 <Badge variant="secondary">pustakaislam.net</Badge>
               </div>
@@ -113,7 +122,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
               </div>
             </div>
           </header>
-          <div className="space-y-6 p-4 pb-24 md:p-6 md:pb-8">{children}</div>
+          <div className="mx-auto w-full max-w-6xl space-y-6 p-4 pb-24 md:p-6 md:pb-8">{children}</div>
         </main>
       </div>
 

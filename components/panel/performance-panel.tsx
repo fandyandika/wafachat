@@ -60,7 +60,7 @@ export function PerformancePanel({
   const respByRaw = new Map((responseTimes ?? []).map((r) => [r.csNameRaw, r]));
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="space-y-4">
       {/* Topbar: tabs */}
       <div className="flex gap-1 rounded-lg border bg-muted/30 p-1 w-fit">
         {tabs.map((tab) => (
