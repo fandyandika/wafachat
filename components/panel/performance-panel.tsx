@@ -10,61 +10,13 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 import { api } from '@/convex/_generated/api';
 import type { PerformanceData } from '@/components/panel/types';
 import { formatRupiah, formatDuration } from '@/lib/format';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { TrendChart } from '@/components/ui/trend-chart';
-
-function PerformanceTable({ columns, rows, title }: { columns: string[]; rows: Array<Array<string | number>>; title: string }) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>Periode terpilih — dihitung dari leads unik & final recap closing.</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="overflow-hidden rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {columns.map((column) => (
-                  <TableHead key={column}>{column}</TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.length === 0 ? (
-                <TableRow>
-                  <TableCell className="h-24 text-center text-muted-foreground" colSpan={columns.length}>
-                    Belum ada data performance pada filter ini.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row, rowIndex) => (
-                  <TableRow key={rowIndex}>
-                    {row.map((cell, cellIndex) => (
-                      <TableCell key={cellIndex}>{cell}</TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+import { DeltaPill } from '@/components/ui/metric-card';
 
 export function PerformancePanel({
   data,
@@ -82,11 +34,7 @@ export function PerformancePanel({
   trendData?: Array<{ bucket: string; leads: number; closings: number; cr: number }>;
   responseTimes?: Array<{ csNameRaw: string; firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number }>;
 }) {
-  const deltaTag = (d: number, suffix = '') => {
-    if (d > 0) return <span className="text-positive">▲{d}{suffix}</span>;
-    if (d < 0) return <span className="text-destructive">▼{Math.abs(d)}{suffix}</span>;
-    return <span className="text-muted-foreground">–</span>;
-  };
+  const deltaTag = (d: number, suffix = '') => <DeltaPill value={d} suffix={suffix} />;
   const [perfTab, setPerfTab] = useState<'summary' | 'cs' | 'product'>('summary');
   const [reportPeriod, setReportPeriod] = useState<'week' | 'month'>('week');
   const report = useQuery(api.analytics.getPeriodReport, { period: reportPeriod });
@@ -112,7 +60,7 @@ export function PerformancePanel({
   const respByRaw = new Map((responseTimes ?? []).map((r) => [r.csNameRaw, r]));
 
   return (
-    <div className="space-y-4">
+    <div className="max-w-5xl space-y-4">
       {/* Topbar: tabs */}
       <div className="flex gap-1 rounded-lg border bg-muted/30 p-1 w-fit">
         {tabs.map((tab) => (
@@ -147,7 +95,7 @@ export function PerformancePanel({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Leaderboard CS</CardTitle>
-          <CardDescription>Ranking juara→lesu periode terpilih, dengan perubahan ▲▼ vs periode sebelumnya yang sama panjang. Kolom “Balas chat” = median waktu balas chat pertama (sepanjang periode terpilih).</CardDescription>
+          <CardDescription>Ranking juara→lesu periode terpilih. Pill ↑/↓ = perubahan vs periode sebelumnya yang sama panjang. “Balas chat” = median waktu balas chat pertama.</CardDescription>
         </CardHeader>
         <CardContent>
           {csLeaderboard === undefined ? (
@@ -268,25 +216,8 @@ export function PerformancePanel({
           ) : trendData.length === 0 ? (
             <p className="text-sm text-muted-foreground">Belum ada data.</p>
           ) : (
-            <div className="space-y-4">
+            <div className="max-w-2xl">
               <TrendChart data={trendData.map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }))} />
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                    <tr><th className="py-2 pr-3 font-medium">Hari</th><th className="py-2 pr-3 text-right font-medium">Leads</th><th className="py-2 pr-3 text-right font-medium">Closing</th><th className="py-2 pr-3 text-right font-medium">CR</th></tr>
-                  </thead>
-                  <tbody>
-                    {trendData.map((b) => (
-                      <tr key={b.bucket} className="border-t border-border transition-colors hover:bg-accent">
-                        <td className="py-2.5 pr-3">{b.bucket}</td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{b.leads}</td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{b.closings}</td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{b.cr}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
             </div>
           )}
         </CardContent>
@@ -328,23 +259,22 @@ export function PerformancePanel({
                 <div><div className="text-xs text-muted-foreground">Dibatalkan</div><div className="font-semibold text-destructive">{report.cancelled}</div></div>
               </div>
               {report.perCs.length > 0 && (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                      <tr><th className="py-2 pr-3 font-medium">CS</th><th className="py-2 pr-3 text-right font-medium">Leads</th><th className="py-2 pr-3 text-right font-medium">Closing</th><th className="py-2 pr-3 text-right font-medium">CR</th><th className="py-2 pr-3 text-right font-medium">Omzet</th></tr>
-                    </thead>
-                    <tbody>
-                      {report.perCs.map((c) => (
-                        <tr key={c.csName} className="border-t border-border transition-colors hover:bg-accent">
-                          <td className="py-2.5 pr-3 font-medium">{c.csName || '—'}</td>
-                          <td className="py-2.5 pr-3 text-right tabular-nums">{c.leads}</td>
-                          <td className="py-2.5 pr-3 text-right tabular-nums">{c.closings}</td>
-                          <td className="py-2.5 pr-3 text-right tabular-nums">{c.cr}%</td>
-                          <td className="py-2.5 pr-3 text-right tabular-nums">{formatRupiah(c.revenue)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="space-y-2.5 border-t pt-3">
+                  {report.perCs.map((c) => (
+                    <div key={c.csName} className="flex items-center gap-3">
+                      <CsAvatar name={c.csName || '?'} size="sm" />
+                      <span className="w-16 shrink-0 truncate text-sm font-medium">{c.csName || '—'}</span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={cn('h-full rounded-full', c.cr >= 60 ? 'bg-positive' : c.cr >= 35 ? 'bg-primary' : 'bg-negative')}
+                          style={{ width: `${Math.min(Math.max(c.cr, 0), 100)}%` }}
+                        />
+                      </div>
+                      <span className="shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                        {c.closings}/{c.leads} · {c.cr}% · {formatRupiah(c.revenue)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -354,18 +284,37 @@ export function PerformancePanel({
       )}
 
       {perfTab === 'product' && (
-        <PerformanceTable
-          columns={['Produk', 'Leads', 'Closing', 'CR', 'Omzet', 'Diskon']}
-          rows={sortedProducts.map((row) => [
-            row.product,
-            row.leads,
-            row.closing,
-            `${row.cr}%`,
-            formatRupiah(row.revenue),
-            formatRupiah(row.discount),
-          ])}
-          title="Performance per Produk"
-        />
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Performance per Produk</CardTitle>
+            <CardDescription>Diurutkan dari closing terbanyak. Bar = closing rate.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3.5">
+            {sortedProducts.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Belum ada data produk.</p>
+            ) : (
+              sortedProducts.map((p) => (
+                <div key={p.product} className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 flex-1 truncate font-medium text-foreground">{p.product}</span>
+                    <span className="shrink-0 tabular-nums text-muted-foreground">
+                      {p.closing}/{p.leads} · {formatRupiah(p.revenue)}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={cn('h-full rounded-full', p.cr >= 60 ? 'bg-positive' : p.cr >= 35 ? 'bg-primary' : 'bg-negative')}
+                        style={{ width: `${Math.min(Math.max(p.cr, 0), 100)}%` }}
+                      />
+                    </div>
+                    <span className="w-10 shrink-0 text-right text-xs font-semibold tabular-nums">{p.cr}%</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

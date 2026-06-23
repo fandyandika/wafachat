@@ -16,10 +16,10 @@ export function TrendChart({ data, className }: { data: TrendPoint[]; className?
   const [hover, setHover] = React.useState<number | null>(null);
 
   const W = 720;
-  const H = 240;
+  const H = 200;
   const padL = 10;
   const padR = 10;
-  const padT = 16;
+  const padT = 14;
   const padB = 8;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
