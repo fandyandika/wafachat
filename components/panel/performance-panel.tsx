@@ -178,7 +178,6 @@ export function PerformancePanel({
                     <th className="py-1 pr-3">Closing (Δ)</th>
                     <th className="py-1 pr-3">CR (Δ)</th>
                     <th className="py-1 pr-3">Balas chat</th>
-                    <th className="py-1 pr-3">90% di bawah</th>
                     <th className="py-1 pr-3">Omzet</th>
                   </tr>
                 </thead>
@@ -191,7 +190,6 @@ export function PerformancePanel({
                       <td className="py-1.5 pr-3">{r.closings} {deltaTag(r.deltaClosings)}</td>
                       <td className="py-1.5 pr-3">{r.cr}% {deltaTag(r.deltaCr, '%')}</td>
                       <td className="py-1.5 pr-3 tabular-nums">{respByRaw.get(r.csName)?.firstReplyCount ? formatDuration(respByRaw.get(r.csName)!.firstReplyMedianMs) : '–'}</td>
-                      <td className="py-1.5 pr-3 tabular-nums text-muted-foreground">{respByRaw.get(r.csName)?.firstReplyCount ? formatDuration(respByRaw.get(r.csName)!.firstReplyP90Ms) : '–'}</td>
                       <td className="py-1.5 pr-3">{formatRupiah(r.revenue)}</td>
                     </tr>
                   ))}

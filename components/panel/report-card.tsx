@@ -69,7 +69,7 @@ export function ReportCard({
               <span className="text-muted-foreground">⚡ Balas chat baru</span>
               <span className="font-medium tabular-nums text-foreground">{formatDuration(resp.firstReplyMedianMs)}</span>
             </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">90% di bawah {formatDuration(resp.firstReplyP90Ms)} · {resp.firstReplyCount} chat</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">dari {resp.firstReplyCount} chat</div>
           </div>
         )}
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 border-t pt-3 text-sm">
