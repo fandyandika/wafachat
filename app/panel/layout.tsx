@@ -29,7 +29,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const sp = useSearchParams();
   const { range, cs } = usePanelFilters();
-  const csConfigs = useQuery(api.csConfigs.list, {}) ?? [];
+  const csList = useQuery(api.cs.listCs, {}) ?? [];
   const title = NAV.find((n) => n.href === pathname)?.label ?? 'Dashboard';
   const [navHidden, setNavHidden] = useState(false);
 
@@ -116,8 +116,8 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                   <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Semua CS" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Semua CS</SelectItem>
-                    {csConfigs.map((c: { csName: string }) => (
-                      <SelectItem key={c.csName} value={c.csName}>{c.csName.replace(/^CS\s+/i, '')}</SelectItem>
+                    {csList.map((c) => (
+                      <SelectItem key={c.key} value={c.csName}>{c.csName.replace(/^CS\s+/i, '')}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
