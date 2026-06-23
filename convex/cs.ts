@@ -77,3 +77,17 @@ export const setCsAvatar = mutation({
     return { success: true } as const;
   },
 });
+
+export const clearCsAvatar = mutation({
+  args: { csName: v.string() },
+  handler: async (ctx, args) => {
+    const normalizedName = normalizeCsName(args.csName);
+    const existing = await ctx.db.query("csConfigs")
+      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName)).unique();
+    if (existing?.avatarStorageId) {
+      await ctx.storage.delete(existing.avatarStorageId);
+      await ctx.db.patch(existing._id, { avatarStorageId: undefined, updatedAt: Date.now() });
+    }
+    return { success: true } as const;
+  },
+});

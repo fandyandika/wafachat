@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery } from 'convex/react';
-import { Upload, Zap, MessageSquare, TrendingUp, Power } from 'lucide-react';
+import { Upload, Trash2, Zap, MessageSquare, TrendingUp, Power } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,7 @@ export function SettingsDashboard() {
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const genUrl = useMutation(api.cs.generateUploadUrl);
   const setAvatar = useMutation(api.cs.setCsAvatar);
+  const clearAvatar = useMutation(api.cs.clearCsAvatar);
   const upsert = useMutation(api.csConfigs.upsert);
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -45,6 +46,18 @@ export function SettingsDashboard() {
       if (!res.ok) throw new Error('Upload gagal');
       const { storageId } = await res.json();
       await setAvatar({ csName, storageId });
+    } catch (e) {
+      setErr(`${csName}: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onClear(csName: string) {
+    setBusy(csName);
+    setErr(null);
+    try {
+      await clearAvatar({ csName });
     } catch (e) {
       setErr(`${csName}: ${(e as Error).message}`);
     } finally {
@@ -85,8 +98,8 @@ export function SettingsDashboard() {
             </CardHeader>
 
             <CardContent className="space-y-4 flex-1">
-              {/* Upload Button */}
-              <div>
+              {/* Upload / Hapus foto */}
+              <div className="flex gap-2">
                 <Button
                   variant="outline"
                   size="sm"
@@ -101,11 +114,23 @@ export function SettingsDashboard() {
                     };
                     input.click();
                   }}
-                  className="w-full gap-2"
+                  className="flex-1 gap-2"
                 >
                   <Upload className="size-4" />
-                  {busy === c.csName ? 'Uploading...' : 'Upload foto'}
+                  {busy === c.csName ? 'Memproses...' : c.avatarUrl ? 'Ganti foto' : 'Upload foto'}
                 </Button>
+                {c.avatarUrl && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy === c.csName}
+                    onClick={() => onClear(c.csName)}
+                    aria-label="Hapus foto"
+                    className="gap-1.5 text-destructive hover:text-destructive"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                )}
               </div>
 
               {/* Phone (read-only) */}
