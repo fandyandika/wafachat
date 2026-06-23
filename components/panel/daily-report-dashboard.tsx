@@ -6,15 +6,16 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { Button } from '@/components/ui/button';
-import { MetricCard } from '@/components/ui/metric-card';
+import { MetricCard, DeltaPill } from '@/components/ui/metric-card';
 import { CsAvatar } from '@/components/ui/cs-avatar';
+import { AnimatedNumber } from '@/components/ui/animated-number';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { formatRupiah, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
-import { ReportCard, type ReportCardData } from '@/components/panel/report-card';
+import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/panel/report-card';
 import { crLabel } from '@/components/panel/report-text';
 import {
-  JAK_MS, clampStartToCutoff, currentReportLabelDate, reportWindowForLabelDate, wibDateParts,
+  JAK_MS, DATA_CUTOFF_MS, clampStartToCutoff, currentReportLabelDate, reportWindowForLabelDate, wibDateParts,
 } from '@/components/panel/report-window';
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
@@ -53,6 +54,14 @@ export function DailyReportDashboard() {
 
   const report = useQuery(api.analytics.getDailyReport, { startAt, endAt });
   const respData = useQuery(api.responseTime.getResponseTimes, { startAt, endAt });
+  // Previous window (same 24h length, one day earlier) for ▲▼ deltas. Skipped when
+  // the prior period falls before the data cutoff (no reliable comparison).
+  const prevStart = rawWindow.startAt - 86_400_000;
+  const prevValid = prevStart >= DATA_CUTOFF_MS;
+  const prevReport = useQuery(
+    api.analytics.getDailyReport,
+    prevValid ? { startAt: prevStart, endAt: rawWindow.startAt } : 'skip',
+  );
   // cs is sorted by firstReplyCount desc; keep the FIRST (dominant) row per display name —
   // conversation.assignedCsName has mixed forms ("Aisyah"/"CS Aisyah") that normalize equal,
   // so a tiny straggler row must not overwrite the real one.
@@ -100,6 +109,25 @@ export function DailyReportDashboard() {
   }
   const showHighlights = !csName && allCs.length > 0 && (topClosing?.closings ?? 0) > 0;
 
+  // Peringkat by closing (getDailyReport already returns CS sorted by closing) + team-average CR.
+  const rankByCs = new Map<string, number>();
+  allCs.forEach((c, i) => rankByCs.set(c.csName, i + 1));
+  const avgCr = report?.totals.cr ?? 0;
+
+  // Deltas vs the previous window.
+  const prevByCs = new Map<string, { leads: number; closings: number; cr: number }>(
+    (prevReport?.cs ?? []).map((c: { csName: string; leads: number; closings: number; cr: number }) => [c.csName, c]),
+  );
+  const deltaFor = (c: ReportCardData): ReportDelta | null => {
+    if (!prevValid || prevReport === undefined) return null;
+    const p = prevByCs.get(c.csName);
+    return {
+      leads: c.leads - (p?.leads ?? 0),
+      closings: c.closings - (p?.closings ?? 0),
+      cr: Math.round((c.cr - (p?.cr ?? 0)) * 10) / 10,
+    };
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-2">
@@ -128,7 +156,7 @@ export function DailyReportDashboard() {
         <div className="text-sm text-muted-foreground">Memuat…</div>
       ) : (
         <>
-          <GrandStrip totals={report.totals} />
+          <GrandStrip totals={report.totals} prev={prevValid ? (prevReport?.totals ?? null) : null} />
           {showHighlights && (
             <div>
               <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Sorotan</div>
@@ -150,7 +178,17 @@ export function DailyReportDashboard() {
               <DoubleOrderBanner count={totalDuplicates} />
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((c) => (
-                  <ReportCard key={c.csName} card={c} label={label} windowLabel={windowLabel} isCurrent={isCurrent} resp={respByCs.get(c.csName)} />
+                  <ReportCard
+                    key={c.csName}
+                    card={c}
+                    label={label}
+                    windowLabel={windowLabel}
+                    isCurrent={isCurrent}
+                    resp={respByCs.get(c.csName)}
+                    rank={rankByCs.get(c.csName)}
+                    avgCr={avgCr}
+                    delta={deltaFor(c)}
+                  />
                 ))}
               </div>
             </div>
@@ -212,21 +250,34 @@ function DoubleOrderBanner({ count }: { count: number }) {
 
 function GrandStrip({
   totals,
+  prev,
 }: {
   totals: { leads: number; closings: number; cr: number; revenue: number; discount: number; cpDiscount: number };
+  prev?: { leads: number; closings: number; cr: number } | null;
 }) {
+  const dLeads = prev ? totals.leads - prev.leads : null;
+  const dClosings = prev ? totals.closings - prev.closings : null;
+  const dCr = prev ? Math.round((totals.cr - prev.cr) * 10) / 10 : null;
+  const pill = (d: number | null, suffix = '') =>
+    d != null && d !== 0 ? <DeltaPill value={d} suffix={suffix} /> : undefined;
+
   const items = [
-    { label: 'Total Leads', value: String(totals.leads) },
-    { label: 'Total Closing', value: String(totals.closings) },
-    { label: 'Closing Rate', value: crLabel(totals.cr, totals.leads), emphasis: true },
-    { label: 'Omzet', value: formatRupiah(totals.revenue) },
-    { label: 'Diskon', value: formatRupiah(totals.discount) },
-    { label: 'CP Diskon', value: formatRupiah(totals.cpDiscount) },
+    { label: 'Total Leads', node: <AnimatedNumber value={totals.leads} />, delta: pill(dLeads) },
+    { label: 'Total Closing', node: <AnimatedNumber value={totals.closings} />, delta: pill(dClosings) },
+    {
+      label: 'Closing Rate',
+      node: totals.leads > 0 ? <AnimatedNumber value={totals.cr} format={(n) => `${Math.round(n * 10) / 10}%`} /> : <>–</>,
+      emphasis: true,
+      delta: pill(dCr, '%'),
+    },
+    { label: 'Omzet', node: <AnimatedNumber value={totals.revenue} format={formatRupiah} /> },
+    { label: 'Diskon', node: <AnimatedNumber value={totals.discount} format={formatRupiah} /> },
+    { label: 'CP Diskon', node: <AnimatedNumber value={totals.cpDiscount} format={formatRupiah} /> },
   ];
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
       {items.map((it) => (
-        <MetricCard key={it.label} label={it.label} value={it.value} emphasis={it.emphasis} />
+        <MetricCard key={it.label} label={it.label} value={it.node} emphasis={it.emphasis} delta={it.delta} />
       ))}
     </div>
   );

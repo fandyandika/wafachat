@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { CsAvatar } from '@/components/ui/cs-avatar';
+import { AnimatedNumber } from '@/components/ui/animated-number';
+import { DeltaPill } from '@/components/ui/metric-card';
 import { formatRupiah, formatDuration } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { reportText, crLabel, type ReportCsCard } from '@/components/panel/report-text';
@@ -14,14 +16,19 @@ export type ReportCardData = ReportCsCard & { duplicates: number; revenue: numbe
 
 export type RespStat = { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number };
 
+export type ReportDelta = { leads: number; closings: number; cr: number };
+
 export function ReportCard({
-  card, label, windowLabel, isCurrent, resp,
+  card, label, windowLabel, isCurrent, resp, rank, avgCr, delta,
 }: {
   card: ReportCardData;
   label: { y: number; m: number; d: number; dow: number };
   windowLabel: string;
   isCurrent: boolean;
   resp?: RespStat;
+  rank?: number;
+  avgCr?: number;
+  delta?: ReportDelta | null;
 }) {
   const [copied, setCopied] = useState(false);
   const onCopy = async () => {
@@ -35,13 +42,25 @@ export function ReportCard({
   };
 
   return (
-    <Card className="transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30">
+    <Card className={cn(
+      'transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30',
+      rank === 1 && 'ring-1 ring-primary/20',
+    )}>
       <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
         <div className="flex min-w-0 items-center gap-3">
+          {rank != null && (
+            <span className={cn(
+              'flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
+              rank === 1 ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+            )}>
+              {rank}
+            </span>
+          )}
           <CsAvatar name={card.csName} size="md" />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="truncate text-base font-semibold tracking-tight">{card.csName}</span>
+              {rank === 1 && <Badge>Teratas</Badge>}
               {isCurrent && <Badge variant="secondary">berjalan</Badge>}
             </div>
             <div className="mt-0.5 text-xs text-muted-foreground">{windowLabel}</div>
@@ -57,17 +76,23 @@ export function ReportCard({
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Closing Rate</span>
-            <span className={cn('text-xl font-semibold tabular-nums', crTone(card.cr))}>{crLabel(card.cr, card.leads)}</span>
+            <span className={cn('flex items-baseline gap-1.5 text-xl font-semibold tabular-nums', crTone(card.cr))}>
+              {card.leads > 0 ? <AnimatedNumber value={card.cr} format={(n) => `${Math.round(n * 10) / 10}%`} /> : '–'}
+              {delta && delta.cr !== 0 && <DeltaPill value={delta.cr} suffix="%" />}
+            </span>
           </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+          <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
             <div
               className={cn('h-full rounded-full transition-all duration-500', crBar(card.cr))}
-              style={{ width: `${Math.min(Math.max(card.cr, 0), 100)}%` }}
+              style={{ width: `${clampPct(card.cr)}%` }}
             />
+            {avgCr != null && avgCr > 0 && (
+              <div className="absolute inset-y-0 w-0.5 bg-foreground/50" style={{ left: `${clampPct(avgCr)}%` }} />
+            )}
           </div>
           <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
-            <span>{card.closings} closing</span>
-            <span>{card.leads} leads</span>
+            <span>{card.closings} closing · {card.leads} leads</span>
+            {avgCr != null && <span>rata-rata tim {Math.round(avgCr * 10) / 10}%</span>}
           </div>
         </div>
 
@@ -105,13 +130,29 @@ export function ReportCard({
         )}
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 border-t pt-3 text-sm">
-          <Row label="Total Leads" value={card.leads} />
-          <Row label="Total Closing" value={card.closings} />
+          <RowAnimated label="Total Leads" value={card.leads} delta={delta?.leads} />
+          <RowAnimated label="Total Closing" value={card.closings} delta={delta?.closings} />
           <Row label="Diskon" value={formatRupiah(card.discount)} />
           <Row label="CP Diskon" value={formatRupiah(card.cpDiscount)} />
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function clampPct(n: number): number {
+  return Math.min(Math.max(n, 0), 100);
+}
+
+function RowAnimated({ label, value, delta }: { label: string; value: number; delta?: number }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex items-center gap-1.5 font-medium tabular-nums text-foreground">
+        <AnimatedNumber value={value} />
+        {delta != null && delta !== 0 && <DeltaPill value={delta} />}
+      </span>
+    </div>
   );
 }
 
