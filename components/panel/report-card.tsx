@@ -52,8 +52,27 @@ export function ReportCard({
           {copied ? 'Tersalin' : 'Copy teks WA'}
         </Button>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="space-y-1">
+      <CardContent className="space-y-4">
+        {/* Closing Rate — the satisfying headline, visualised */}
+        <div className="space-y-1.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Closing Rate</span>
+            <span className={cn('text-xl font-semibold tabular-nums', crTone(card.cr))}>{crLabel(card.cr, card.leads)}</span>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn('h-full rounded-full transition-all duration-500', crBar(card.cr))}
+              style={{ width: `${Math.min(Math.max(card.cr, 0), 100)}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
+            <span>{card.closings} closing</span>
+            <span>{card.leads} leads</span>
+          </div>
+        </div>
+
+        {/* Per-product breakdown */}
+        <div className="space-y-1 border-t pt-3">
           {card.products.length === 0 ? (
             <div className="text-sm text-muted-foreground">Belum ada produk.</div>
           ) : (
@@ -67,25 +86,45 @@ export function ReportCard({
             ))
           )}
         </div>
+
         {resp && resp.firstReplyCount > 0 && (
-          <div className={cn('border-t pt-2', resp.firstReplyCount < 3 && 'opacity-50')}>
-            <div className="flex items-center justify-between gap-2 text-sm">
-              <span className="flex items-center gap-1.5 text-muted-foreground"><Zap className="size-3.5 text-primary" /> Balas chat baru</span>
-              <span className="font-medium tabular-nums text-foreground">{formatDuration(resp.firstReplyMedianMs)}</span>
-            </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">dari {resp.firstReplyCount} chat</div>
+          <div className={cn('flex items-center justify-between gap-2 border-t pt-3 text-sm', resp.firstReplyCount < 3 && 'opacity-50')}>
+            <span className="flex items-center gap-1.5 text-muted-foreground"><Zap className="size-3.5 text-primary" /> Balas chat baru</span>
+            <span className="font-medium tabular-nums text-foreground">
+              {formatDuration(resp.firstReplyMedianMs)} <span className="font-normal text-muted-foreground">· {resp.firstReplyCount} chat</span>
+            </span>
           </div>
         )}
+
+        {/* Potensi mis-rep: double orders inflate the lead list */}
+        {card.duplicates > 0 && (
+          <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+            <Copy className="size-3.5 shrink-0" />
+            <span>{card.duplicates} order double — CR sudah dihitung dari leads unik</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 border-t pt-3 text-sm">
           <Row label="Total Leads" value={card.leads} />
           <Row label="Total Closing" value={card.closings} />
-          <Row label="CR" value={crLabel(card.cr, card.leads)} />
           <Row label="Diskon" value={formatRupiah(card.discount)} />
           <Row label="CP Diskon" value={formatRupiah(card.cpDiscount)} />
         </div>
       </CardContent>
     </Card>
   );
+}
+
+function crTone(cr: number): string {
+  if (cr >= 60) return 'text-positive';
+  if (cr >= 35) return 'text-foreground';
+  return 'text-negative';
+}
+
+function crBar(cr: number): string {
+  if (cr >= 60) return 'bg-positive';
+  if (cr >= 35) return 'bg-primary';
+  return 'bg-negative';
 }
 
 function Row({ label, value }: { label: string; value: string | number }) {

@@ -210,7 +210,17 @@ export function PerformancePanel({
                         </td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{r.leads} {deltaTag(r.deltaLeads)}</td>
                         <td className={cn('py-2.5 pr-3 text-right tabular-nums', i === 0 && 'font-semibold')}>{r.closings} {deltaTag(r.deltaClosings)}</td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{r.cr}% {deltaTag(r.deltaCr, '%')}</td>
+                        <td className="py-2.5 pr-3">
+                          <div className="flex flex-col items-end gap-1">
+                            <span className="tabular-nums">{r.cr}% {deltaTag(r.deltaCr, '%')}</span>
+                            <div className="h-1 w-16 overflow-hidden rounded-full bg-muted">
+                              <div
+                                className={cn('h-full rounded-full', r.cr >= 60 ? 'bg-positive' : r.cr >= 35 ? 'bg-primary' : 'bg-negative')}
+                                style={{ width: `${Math.min(Math.max(r.cr, 0), 100)}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{respByRaw.get(r.csName)?.firstReplyCount ? formatDuration(respByRaw.get(r.csName)!.firstReplyMedianMs) : '–'}</td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{formatRupiah(r.revenue)}</td>
                       </tr>

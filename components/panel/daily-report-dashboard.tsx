@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight, ClipboardList, Users, CheckCircle2, TrendingUp, Wallet, Tag, Percent } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2 } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { Button } from '@/components/ui/button';
 import { MetricCard } from '@/components/ui/metric-card';
@@ -81,6 +81,7 @@ export function DailyReportDashboard() {
   };
 
   const cards = ((report?.cs ?? []) as ReportCardData[]).filter((c) => !csName || c.csName === csName);
+  const totalDuplicates = cards.reduce((s, c) => s + (c.duplicates ?? 0), 0);
 
   return (
     <div className="space-y-6">
@@ -118,14 +119,43 @@ export function DailyReportDashboard() {
               <p className="text-xs text-muted-foreground">Leads & closing untuk periode ini akan muncul di sini begitu masuk.</p>
             </div>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {cards.map((c) => (
-                <ReportCard key={c.csName} card={c} label={label} windowLabel={windowLabel} isCurrent={isCurrent} resp={respByCs.get(c.csName)} />
-              ))}
+            <div className="space-y-4">
+              <DoubleOrderBanner count={totalDuplicates} />
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {cards.map((c) => (
+                  <ReportCard key={c.csName} card={c} label={label} windowLabel={windowLabel} isCurrent={isCurrent} resp={respByCs.get(c.csName)} />
+                ))}
+              </div>
             </div>
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function DoubleOrderBanner({ count }: { count: number }) {
+  if (count > 0) {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+          <Copy className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-amber-900">{count} order double terdeteksi</div>
+          <div className="mt-0.5 text-xs leading-relaxed text-amber-700/90">
+            Pelanggan dengan ≥2 order di periode ini — calon mis-rep. CR sudah dihitung dari leads unik, jadi angkanya tetap akurat.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-positive/20 bg-positive-soft/50 p-4">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-positive-soft text-positive">
+        <CheckCircle2 className="size-5" />
+      </span>
+      <div className="text-sm font-medium text-foreground">Tidak ada order double — semua leads unik.</div>
     </div>
   );
 }
@@ -136,24 +166,17 @@ function GrandStrip({
   totals: { leads: number; closings: number; cr: number; revenue: number; discount: number; cpDiscount: number };
 }) {
   const items = [
-    { label: 'Total Leads', value: String(totals.leads), icon: Users, tone: 'lead' as const },
-    { label: 'Total Closing', value: String(totals.closings), icon: CheckCircle2, tone: 'positive' as const },
-    { label: 'Closing Rate', value: crLabel(totals.cr, totals.leads), icon: TrendingUp, tone: 'positive' as const, emphasis: true },
-    { label: 'Omzet', value: formatRupiah(totals.revenue), icon: Wallet, tone: 'default' as const },
-    { label: 'Diskon', value: formatRupiah(totals.discount), icon: Tag, tone: 'amber' as const },
-    { label: 'CP Diskon', value: formatRupiah(totals.cpDiscount), icon: Percent, tone: 'default' as const },
+    { label: 'Total Leads', value: String(totals.leads) },
+    { label: 'Total Closing', value: String(totals.closings) },
+    { label: 'Closing Rate', value: crLabel(totals.cr, totals.leads), emphasis: true },
+    { label: 'Omzet', value: formatRupiah(totals.revenue) },
+    { label: 'Diskon', value: formatRupiah(totals.discount) },
+    { label: 'CP Diskon', value: formatRupiah(totals.cpDiscount) },
   ];
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
       {items.map((it) => (
-        <MetricCard
-          key={it.label}
-          label={it.label}
-          value={it.value}
-          icon={it.icon}
-          tone={it.tone}
-          emphasis={it.emphasis}
-        />
+        <MetricCard key={it.label} label={it.label} value={it.value} emphasis={it.emphasis} />
       ))}
     </div>
   );
