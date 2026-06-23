@@ -75,7 +75,7 @@ test("getPeriodReport: week period, current vs prior week + per-CS", async () =>
   expect(r.prevLeads).toBe(1);
   expect(r.perCs[0].csName).toBe("CS A");
   expect(r.perCs[0].closings).toBe(1);
-  expect(r.label).toMatch(/^Minggu /);
+  expect(r.label).toMatch(/^Pekan /);
 });
 
 test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async () => {

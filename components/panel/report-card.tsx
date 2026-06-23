@@ -9,6 +9,7 @@ import { CsAvatar } from '@/components/ui/cs-avatar';
 import { AnimatedNumber } from '@/components/ui/animated-number';
 import { DeltaPill } from '@/components/ui/metric-card';
 import { formatRupiah, formatDuration } from '@/lib/format';
+import { crBarClass, crTextClass } from '@/lib/cr';
 import { cn } from '@/lib/utils';
 import { reportText, crLabel, type ReportCsCard } from '@/components/panel/report-text';
 
@@ -19,11 +20,10 @@ export type RespStat = { firstReplyMedianMs: number | null; firstReplyP90Ms: num
 export type ReportDelta = { leads: number; closings: number; cr: number };
 
 export function ReportCard({
-  card, label, windowLabel, isCurrent, resp, rank, avgCr, delta,
+  card, label, isCurrent, resp, rank, avgCr, delta,
 }: {
   card: ReportCardData;
   label: { y: number; m: number; d: number; dow: number };
-  windowLabel: string;
   isCurrent: boolean;
   resp?: RespStat;
   rank?: number;
@@ -47,8 +47,8 @@ export function ReportCard({
       'transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30',
       rank === 1 && 'ring-1 ring-primary/20',
     )}>
-      <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
-        <div className="flex min-w-0 items-center gap-3">
+      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
+        <div className="flex min-w-0 items-center gap-2.5">
           {rank != null && (
             <span className={cn(
               'flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
@@ -57,19 +57,18 @@ export function ReportCard({
               {rank}
             </span>
           )}
-          <CsAvatar name={card.csName} size="md" />
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="truncate text-base font-semibold tracking-tight">{card.csName}</span>
-              {rank === 1 && <Badge>Teratas</Badge>}
-              {isCurrent && <Badge variant="secondary">berjalan</Badge>}
-            </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">{windowLabel}</div>
-          </div>
+          <CsAvatar name={card.csName} size="md" online />
+          <span className="truncate text-base font-semibold tracking-tight">{card.csName}</span>
+          {isCurrent ? (
+            <Badge className="shrink-0 gap-1.5 bg-positive-soft text-positive">
+              <span className="size-1.5 animate-pulse rounded-full bg-positive" /> Live
+            </Badge>
+          ) : (
+            <Badge variant="secondary" className="shrink-0">Selesai</Badge>
+          )}
         </div>
-        <Button size="sm" variant="outline" onClick={onCopy} className="shrink-0 gap-1.5">
+        <Button size="icon-sm" variant="ghost" onClick={onCopy} aria-label="Copy teks WA" className="shrink-0 text-muted-foreground hover:text-foreground">
           {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-          {copied ? 'Tersalin' : 'Copy teks WA'}
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -77,14 +76,14 @@ export function ReportCard({
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Closing Rate</span>
-            <span className={cn('flex items-baseline gap-1.5 text-xl font-semibold tabular-nums', crTone(card.cr))}>
+            <span className={cn('flex items-baseline gap-1.5 text-xl font-semibold tabular-nums', crTextClass(card.cr))}>
               {card.leads > 0 ? <AnimatedNumber value={card.cr} format={(n) => `${Math.round(n * 10) / 10}%`} /> : '–'}
               {delta && delta.cr !== 0 && <DeltaPill value={delta.cr} suffix="%" />}
             </span>
           </div>
           <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
             <div
-              className={cn('h-full rounded-full transition-all duration-500', crBar(card.cr))}
+              className={cn('h-full rounded-full transition-all duration-500', crBarClass(card.cr))}
               style={{ width: `${clampPct(card.cr)}%` }}
             />
             {avgCr != null && avgCr > 0 && (
@@ -108,7 +107,7 @@ export function ReportCard({
                   <span className="min-w-0 flex-1 truncate text-foreground">{p.product}</span>
                   {p.leads > 0 && (
                     <div className="hidden h-1.5 w-12 shrink-0 overflow-hidden rounded-full bg-muted sm:block">
-                      <div className={cn('h-full rounded-full', crBar(p.cr))} style={{ width: `${clampPct(p.cr)}%` }} />
+                      <div className={cn('h-full rounded-full', crBarClass(p.cr))} style={{ width: `${clampPct(p.cr)}%` }} />
                     </div>
                   )}
                   <span className="shrink-0 tabular-nums text-muted-foreground">
@@ -171,18 +170,6 @@ function RowAnimated({ label, value, delta }: { label: string; value: number; de
       </span>
     </div>
   );
-}
-
-function crTone(cr: number): string {
-  if (cr >= 60) return 'text-positive';
-  if (cr >= 35) return 'text-foreground';
-  return 'text-negative';
-}
-
-function crBar(cr: number): string {
-  if (cr >= 60) return 'bg-positive';
-  if (cr >= 35) return 'bg-primary';
-  return 'bg-negative';
 }
 
 function Row({ label, value }: { label: string; value: string | number }) {

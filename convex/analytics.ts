@@ -114,7 +114,7 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
     const start = dayStart - mondayOffset * DAY_MS;
     const end = start + 7 * DAY_MS - 1;
     const mon = new Date(start + JAK_MS);
-    const label = `Minggu ${mon.getUTCFullYear()}-${String(mon.getUTCMonth() + 1).padStart(2, "0")}-${String(mon.getUTCDate()).padStart(2, "0")}`;
+    const label = `Pekan ${mon.getUTCFullYear()}-${String(mon.getUTCMonth() + 1).padStart(2, "0")}-${String(mon.getUTCDate()).padStart(2, "0")}`;
     return { start, end, prevStart: start - 7 * DAY_MS, prevEnd: start - 1, label };
   }
   const y = jak.getUTCFullYear(), m = jak.getUTCMonth();

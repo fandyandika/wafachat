@@ -21,6 +21,7 @@ import { AnimatedNumber } from '@/components/ui/animated-number';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { TrendChart } from '@/components/ui/trend-chart';
 import { cn } from '@/lib/utils';
+import { crBarClass } from '@/lib/cr';
 import {
   Sheet,
   SheetContent,
@@ -87,7 +88,6 @@ export default function DashboardPage() {
   const topCs = [...(performance?.cs ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
   const topProducts = [...(performance?.products ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
   const trendPoints = (trendData ?? []).map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }));
-  const crBar = (cr: number) => (cr >= 60 ? 'bg-positive' : cr >= 35 ? 'bg-primary' : 'bg-negative');
 
   const cards = useMemo(
     (): Array<{
@@ -208,7 +208,7 @@ export default function DashboardPage() {
                   <CsAvatar name={c.csName || '?'} size="sm" />
                   <span className="w-16 shrink-0 truncate text-sm font-medium">{c.csName || '—'}</span>
                   <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                    <div className={cn('h-full rounded-full', crBar(c.cr))} style={{ width: `${Math.min(Math.max(c.cr, 0), 100)}%` }} />
+                    <div className={cn('h-full rounded-full', crBarClass(c.cr))} style={{ width: `${Math.min(Math.max(c.cr, 0), 100)}%` }} />
                   </div>
                   <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{c.closing} · {c.cr}%</span>
                 </div>
@@ -235,7 +235,7 @@ export default function DashboardPage() {
                     <span className="shrink-0 tabular-nums text-muted-foreground">{p.closing} · {p.cr}%</span>
                   </div>
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                    <div className={cn('h-full rounded-full', crBar(p.cr))} style={{ width: `${Math.min(Math.max(p.cr, 0), 100)}%` }} />
+                    <div className={cn('h-full rounded-full', crBarClass(p.cr))} style={{ width: `${Math.min(Math.max(p.cr, 0), 100)}%` }} />
                   </div>
                 </div>
               ))

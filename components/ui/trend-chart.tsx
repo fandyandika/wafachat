@@ -31,8 +31,19 @@ export function TrendChart({ data, className }: { data: TrendPoint[]; className?
   const xAt = (i: number) => (n <= 1 ? padL + innerW / 2 : padL + (i / (n - 1)) * innerW);
   const yAt = (v: number) => padT + innerH - (v / maxY) * innerH;
 
-  const linePath = (key: 'leads' | 'closings') =>
-    data.map((d, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(d[key]).toFixed(1)}`).join(' ');
+  const linePath = (key: 'leads' | 'closings') => {
+    const pts = data.map((d, i) => [xAt(i), yAt(d[key])] as const);
+    if (pts.length < 2) return pts.length ? `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}` : '';
+    // Smooth horizontal-midpoint bezier between points.
+    let path = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [x1, y1] = pts[i];
+      const [x2, y2] = pts[i + 1];
+      const midX = (x1 + x2) / 2;
+      path += ` C${midX.toFixed(1)},${y1.toFixed(1)} ${midX.toFixed(1)},${y2.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
+    }
+    return path;
+  };
   const areaPath = (key: 'leads' | 'closings') => {
     const bottom = padT + innerH;
     return `${linePath(key)} L${xAt(n - 1).toFixed(1)},${bottom} L${xAt(0).toFixed(1)},${bottom} Z`;

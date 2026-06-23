@@ -17,6 +17,7 @@ import { formatRupiah, formatDuration } from '@/lib/format';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { TrendChart } from '@/components/ui/trend-chart';
 import { DeltaPill } from '@/components/ui/metric-card';
+import { crBarClass } from '@/lib/cr';
 
 export function PerformancePanel({
   data,
@@ -109,9 +110,9 @@ export function PerformancePanel({
                   <tr>
                     <th className="py-2 pr-3 font-medium">#</th>
                     <th className="py-2 pr-3 font-medium">CS</th>
-                    <th className="py-2 pr-3 text-right font-medium">Leads (Δ)</th>
-                    <th className="py-2 pr-3 text-right font-medium">Closing (Δ)</th>
-                    <th className="py-2 pr-3 text-right font-medium">CR (Δ)</th>
+                    <th className="py-2 pr-3 text-right font-medium">Leads</th>
+                    <th className="py-2 pr-3 text-right font-medium">Closing</th>
+                    <th className="py-2 pr-3 text-right font-medium">CR</th>
                     <th className="py-2 pr-3 text-right font-medium">Balas chat</th>
                     <th className="py-2 pr-3 text-right font-medium">Omzet</th>
                   </tr>
@@ -152,7 +153,7 @@ export function PerformancePanel({
                             <span className="tabular-nums">{r.cr}% {deltaTag(r.deltaCr, '%')}</span>
                             <div className="h-1 w-16 overflow-hidden rounded-full bg-muted">
                               <div
-                                className={cn('h-full rounded-full', r.cr >= 60 ? 'bg-positive' : r.cr >= 35 ? 'bg-primary' : 'bg-negative')}
+                                className={cn('h-full rounded-full', crBarClass(r.cr))}
                                 style={{ width: `${Math.min(Math.max(r.cr, 0), 100)}%` }}
                               />
                             </div>
@@ -174,7 +175,7 @@ export function PerformancePanel({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Produk Tersusah Closing</CardTitle>
-          <CardDescription>CR terendah dulu (min 3 leads). ΔCR = perubahan vs periode sebelumnya.</CardDescription>
+          <CardDescription>CR terendah dulu (min 3 leads). Pill ↑/↓ = perubahan vs periode sebelumnya.</CardDescription>
         </CardHeader>
         <CardContent>
           {productDifficulty === undefined ? (
@@ -185,7 +186,7 @@ export function PerformancePanel({
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                  <tr><th className="py-2 pr-3 font-medium">Produk</th><th className="py-2 pr-3 text-right font-medium">Leads</th><th className="py-2 pr-3 text-right font-medium">Closing</th><th className="py-2 pr-3 text-right font-medium">CR (Δ)</th></tr>
+                  <tr><th className="py-2 pr-3 font-medium">Produk</th><th className="py-2 pr-3 text-right font-medium">Leads</th><th className="py-2 pr-3 text-right font-medium">Closing</th><th className="py-2 pr-3 text-right font-medium">CR</th></tr>
                 </thead>
                 <tbody>
                   {productDifficulty.map((p) => (
@@ -226,8 +227,8 @@ export function PerformancePanel({
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">Laporan {reportPeriod === 'week' ? 'Mingguan' : 'Bulanan'}</CardTitle>
-              <CardDescription>{report ? report.label : '…'} — total + Δ vs periode sebelumnya.</CardDescription>
+              <CardTitle className="text-base">Laporan {reportPeriod === 'week' ? 'Pekanan' : 'Bulanan'}</CardTitle>
+              <CardDescription>{report ? report.label : '…'} — total + perubahan vs periode sebelumnya.</CardDescription>
             </div>
             <div className="flex gap-1 rounded-lg border bg-muted/30 p-1">
               {(['week', 'month'] as const).map((p) => (
@@ -237,7 +238,7 @@ export function PerformancePanel({
                   onClick={() => setReportPeriod(p)}
                   className={cn('rounded-md px-3 py-1 text-xs font-medium transition-colors', reportPeriod === p ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
                 >
-                  {p === 'week' ? 'Mingguan' : 'Bulanan'}
+                  {p === 'week' ? 'Pekanan' : 'Bulanan'}
                 </button>
               ))}
             </div>
@@ -263,7 +264,7 @@ export function PerformancePanel({
                       <span className="w-16 shrink-0 truncate text-sm font-medium">{c.csName || '—'}</span>
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                         <div
-                          className={cn('h-full rounded-full', c.cr >= 60 ? 'bg-positive' : c.cr >= 35 ? 'bg-primary' : 'bg-negative')}
+                          className={cn('h-full rounded-full', crBarClass(c.cr))}
                           style={{ width: `${Math.min(Math.max(c.cr, 0), 100)}%` }}
                         />
                       </div>
@@ -302,7 +303,7 @@ export function PerformancePanel({
                   <div className="flex items-center gap-2">
                     <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                       <div
-                        className={cn('h-full rounded-full', p.cr >= 60 ? 'bg-positive' : p.cr >= 35 ? 'bg-primary' : 'bg-negative')}
+                        className={cn('h-full rounded-full', crBarClass(p.cr))}
                         style={{ width: `${Math.min(Math.max(p.cr, 0), 100)}%` }}
                       />
                     </div>

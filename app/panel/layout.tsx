@@ -8,7 +8,6 @@ import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Badge } from '@/components/ui/badge';
 import { usePanelFilters, type DateRangeKey } from '@/components/panel/use-panel-filters';
 
 const NAV = [
@@ -36,7 +35,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
 
   const setParam = (key: string, value: string | undefined) => {
     const next = new URLSearchParams(sp.toString());
-    if (!value || (key === 'range' && value === 'today') || (key === 'cs' && value === 'all')) next.delete(key);
+    if (!value || (key === 'range' && value === '7d') || (key === 'cs' && value === 'all')) next.delete(key);
     else next.set(key, value);
     const qs = next.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname);
@@ -90,7 +89,10 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                   {navHidden ? <PanelLeft className="size-5" /> : <PanelLeftClose className="size-5" />}
                 </button>
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
-                <Badge variant="secondary">pustakaislam.net</Badge>
+                <span className="hidden h-6 w-px bg-border sm:block" />
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/logo.png" alt="Pustaka Islam" className="hidden h-6 w-auto sm:block" />
+                <span className="text-xs text-muted-foreground">via WaFaChat</span>
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 {pathname !== '/panel/laporan' && (

@@ -182,7 +182,6 @@ export function DailyReportDashboard() {
                     key={c.csName}
                     card={c}
                     label={label}
-                    windowLabel={windowLabel}
                     isCurrent={isCurrent}
                     resp={respByCs.get(c.csName)}
                     rank={rankByCs.get(c.csName)}
