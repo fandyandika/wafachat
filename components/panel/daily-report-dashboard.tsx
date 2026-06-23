@@ -114,6 +114,16 @@ export function DailyReportDashboard() {
   allCs.forEach((c, i) => rankByCs.set(c.csName, i + 1));
   const avgCr = report?.totals.cr ?? 0;
 
+  // Gamification: award one badge per category to the day's leaders (works Live + Selesai).
+  const rewardsByCs = new Map<string, string[]>();
+  const addReward = (name: string | undefined, labelText: string) => {
+    if (!name) return;
+    rewardsByCs.set(name, [...(rewardsByCs.get(name) ?? []), labelText]);
+  };
+  if (topClosing && topClosing.closings > 0) addReward(topClosing.csName, 'Closing Terbanyak');
+  if (topCr) addReward(topCr.csName, 'CR Tertinggi');
+  if (fastestResp) addReward(fastestResp.csName, 'Respon Tercepat');
+
   // Deltas vs the previous window.
   const prevByCs = new Map<string, { leads: number; closings: number; cr: number }>(
     (prevReport?.cs ?? []).map((c: { csName: string; leads: number; closings: number; cr: number }) => [c.csName, c]),
@@ -187,6 +197,7 @@ export function DailyReportDashboard() {
                     rank={rankByCs.get(c.csName)}
                     avgCr={avgCr}
                     delta={deltaFor(c)}
+                    rewards={rewardsByCs.get(c.csName)}
                   />
                 ))}
               </div>

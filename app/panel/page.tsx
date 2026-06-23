@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/sheet';
 import { api } from '@/convex/_generated/api';
 import type { Stats, PerformanceData } from '@/components/panel/types';
-import { pct, fmtTime, formatRupiah, formatDuration } from '@/lib/format';
+import { fmtTime, formatRupiah, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 
 export default function DashboardPage() {
@@ -150,7 +150,7 @@ export default function DashboardPage() {
       <section className="grid gap-4 sm:grid-cols-3">
         <StatsWidget label="Leads" value={<AnimatedNumber value={stats.orders} />} hint={periodLabel} series={leadsSeries} deltaPct={momentum(leadsSeries)} />
         <StatsWidget label="Closing" value={<AnimatedNumber value={totalClosing} />} hint={periodLabel} series={closingSeries} deltaPct={momentum(closingSeries)} />
-        <StatsWidget label="Closing Rate" value={<AnimatedNumber value={crPerf} format={pct} />} hint={periodLabel} series={crSeries} deltaPct={momentum(crSeries)} />
+        <StatsWidget label="Closing Rate" value={<AnimatedNumber value={crPerf} format={(n) => `${(Math.round(n * 10) / 10).toFixed(1)}%`} />} hint={periodLabel} series={crSeries} deltaPct={momentum(crSeries)} />
       </section>
 
       <section className="grid gap-4 sm:grid-cols-3">

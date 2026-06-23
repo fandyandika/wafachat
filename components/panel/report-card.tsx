@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { Copy, Check, Zap } from 'lucide-react';
+import { useState, type ComponentType } from 'react';
+import { Copy, Check, Zap, Trophy, Crown } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -19,8 +19,14 @@ export type RespStat = { firstReplyMedianMs: number | null; firstReplyP90Ms: num
 
 export type ReportDelta = { leads: number; closings: number; cr: number };
 
+const REWARD_ICON: Record<string, ComponentType<{ className?: string }>> = {
+  'Closing Terbanyak': Trophy,
+  'CR Tertinggi': Crown,
+  'Respon Tercepat': Zap,
+};
+
 export function ReportCard({
-  card, label, isCurrent, resp, rank, avgCr, delta,
+  card, label, isCurrent, resp, rank, avgCr, delta, rewards,
 }: {
   card: ReportCardData;
   label: { y: number; m: number; d: number; dow: number };
@@ -29,6 +35,7 @@ export function ReportCard({
   rank?: number;
   avgCr?: number;
   delta?: ReportDelta | null;
+  rewards?: string[];
 }) {
   const [copied, setCopied] = useState(false);
   const [productsExpanded, setProductsExpanded] = useState(false);
@@ -72,6 +79,22 @@ export function ReportCard({
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Gamification: badge penghargaan untuk juara hari itu */}
+        {rewards && rewards.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {rewards.map((r) => {
+              const Icon = REWARD_ICON[r] ?? Trophy;
+              return (
+                <span
+                  key={r}
+                  className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-100 to-yellow-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-300/60"
+                >
+                  <Icon className="size-3.5 text-amber-500" /> {r}
+                </span>
+              );
+            })}
+          </div>
+        )}
         {/* Closing Rate — the satisfying headline, visualised */}
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
