@@ -79,14 +79,14 @@ export function PerformancePanel({
       </div>
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {kpiCards.map((card) => (
           <div
             key={card.label}
             className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate"
           >
             <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{card.label}</div>
-            <div className={cn('mt-1.5 text-2xl font-semibold tabular-nums', card.tone)}>{card.value}</div>
+            <div className={cn('mt-1.5 truncate text-xl font-semibold tabular-nums sm:text-2xl', card.tone)}>{card.value}</div>
           </div>
         ))}
       </div>
@@ -205,6 +205,7 @@ export function PerformancePanel({
       )}
 
       {perfTab === 'summary' && (
+      <div className="grid items-start gap-4 lg:grid-cols-2">
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Trend Harian</CardTitle>
@@ -216,15 +217,11 @@ export function PerformancePanel({
           ) : trendData.length === 0 ? (
             <p className="text-sm text-muted-foreground">Belum ada data.</p>
           ) : (
-            <div className="max-w-2xl">
-              <TrendChart data={trendData.map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }))} />
-            </div>
+            <TrendChart data={trendData.map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }))} />
           )}
         </CardContent>
       </Card>
-      )}
 
-      {perfTab === 'summary' && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
@@ -251,7 +248,7 @@ export function PerformancePanel({
             <p className="text-sm text-muted-foreground">Memuat…</p>
           ) : (
             <div className="space-y-3 text-sm">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <div><div className="text-xs text-muted-foreground">Leads</div><div className="font-semibold">{report.leads} {deltaTag(report.leads - report.prevLeads)}</div></div>
                 <div><div className="text-xs text-muted-foreground">Closing</div><div className="font-semibold">{report.closings} {deltaTag(report.closings - report.prevClosings)}</div></div>
                 <div><div className="text-xs text-muted-foreground">CR</div><div className="font-semibold">{report.cr}% {deltaTag(Math.round((report.cr - report.prevCr) * 10) / 10, '%')}</div></div>
@@ -281,6 +278,7 @@ export function PerformancePanel({
           )}
         </CardContent>
       </Card>
+      </div>
       )}
 
       {perfTab === 'product' && (
