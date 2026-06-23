@@ -181,7 +181,7 @@ export function PerformancePanel({
                 </thead>
                 <tbody>
                   {csLeaderboard.map((r, i) => (
-                    <tr key={r.csName} className="border-t border-border transition-colors hover:bg-muted/50">
+                    <tr key={r.csName} className="border-t border-border transition-colors hover:bg-accent">
                       <td className="py-1.5 pr-3 text-muted-foreground">{i + 1}</td>
                       <td className="py-1.5 pr-3 font-medium">{r.csName || '—'}</td>
                       <td className="py-1.5 pr-3">{r.leads} {deltaTag(r.deltaLeads)}</td>

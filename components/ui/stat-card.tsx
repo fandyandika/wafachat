@@ -32,7 +32,7 @@ function StatCard({
     <div
       data-slot="stat-card"
       className={cn(
-        "flex flex-col gap-2 rounded-2xl border border-border bg-card p-5 shadow-sm transition-colors duration-500",
+        "flex flex-col gap-2 rounded-2xl border border-border bg-card p-5 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30",
         highlight && "bg-accent",
         className,
       )}
