@@ -128,12 +128,12 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
 }
 
 export const getPeriodReport = query({
-  args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()) },
+  args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-    const cur = await computeCsAgg(ctx, start, end);
-    const prev = await computeCsAgg(ctx, prevStart, prevEnd);
+    const cur = await computeCsAgg(ctx, start, end, args.csName);
+    const prev = await computeCsAgg(ctx, prevStart, prevEnd, args.csName);
     const totals = (m: Map<string, CsAgg>) => {
       const leads = new Set<string>(), closings = new Set<string>();
       let revenue = 0;

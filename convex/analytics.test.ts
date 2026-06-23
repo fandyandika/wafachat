@@ -163,3 +163,40 @@ test("getCsLeaderboard honors csName via csKey (CS Aisyah == Aisyah)", async () 
   expect(filtered.length).toBe(1);
   expect(filtered[0].csName).toBe("Aisyah");
 });
+
+test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () => {
+  const t = convexTest(schema);
+  const t0_new = Date.parse("2026-06-22T10:00:00+07:00");
+  await t.run(async (ctx) => {
+    // current week: CS Aisyah = 2 leads, 1 closing, revenue 50000; CS Risma = 1 lead, 0 closing
+    await ctx.db.insert("orders", { ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "Aisyah", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "C2", customerPhone: "62812", assignedCsName: "Aisyah", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "C3", customerPhone: "62813", assignedCsName: "Risma", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "Aisyah", closedAt: t0_new, total: 50000, status: "ready", createdAt: t0_new, updatedAt: t0_new });
+  });
+  const anchor = t0_new;
+  // Query all CSs
+  const allReport = await t.query(api.analytics.getPeriodReport, { period: "week", anchor });
+  expect(allReport.leads).toBe(3);
+  expect(allReport.closings).toBe(1);
+  expect(allReport.revenue).toBe(50000);
+  expect(allReport.perCs.length).toBe(2);
+
+  // Query filtered by "CS Aisyah" (should match normalized "Aisyah")
+  const aisyahReport = await t.query(api.analytics.getPeriodReport, { period: "week", anchor, csName: "CS Aisyah" });
+  expect(aisyahReport.leads).toBe(2);
+  expect(aisyahReport.closings).toBe(1);
+  expect(aisyahReport.revenue).toBe(50000);
+  expect(aisyahReport.perCs.length).toBe(1);
+  expect(aisyahReport.perCs[0].csName).toBe("Aisyah");
+  expect(aisyahReport.perCs[0].leads).toBe(2);
+  expect(aisyahReport.perCs[0].closings).toBe(1);
+
+  // Query filtered by "Risma" (exact match)
+  const rismaReport = await t.query(api.analytics.getPeriodReport, { period: "week", anchor, csName: "Risma" });
+  expect(rismaReport.leads).toBe(1);
+  expect(rismaReport.closings).toBe(0);
+  expect(rismaReport.revenue).toBe(0);
+  expect(rismaReport.perCs.length).toBe(1);
+  expect(rismaReport.perCs[0].csName).toBe("Risma");
+});

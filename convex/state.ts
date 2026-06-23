@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   ConversationStatus,
+  csKey,
   getJakartaDate,
   makeOrderKey,
   makeTransitionKey,
@@ -849,7 +850,7 @@ export const listConversations = query({
 
     const conversations = rows
       .filter((conversation) => !EXCLUDED_PHONES.has(normalizePhone(conversation.customerPhone)))
-      .filter((conversation) => !args.csName || conversation.assignedCsName === args.csName);
+      .filter((conversation) => !args.csName || csKey(conversation.assignedCsName) === csKey(args.csName));
 
     const stats = await ctx.db
       .query("dailyStats")

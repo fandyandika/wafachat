@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { Upload, Zap, MessageSquare, TrendingUp, Power } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
@@ -10,6 +10,16 @@ import { CsAvatar } from '@/components/ui/cs-avatar';
 import { Switch } from '@/components/ui/switch';
 import { resizeImage } from '@/lib/resize-image';
 import { cn } from '@/lib/utils';
+import type { Doc } from '@/convex/_generated/dataModel';
+
+type CsRow = {
+  csName: string;
+  csPhone?: string;
+  orderAutomationEnabled: boolean;
+  aiAssistantEnabled: boolean;
+  reportingEnabled: boolean;
+  isActive: boolean;
+};
 
 export function SettingsDashboard() {
   const csList = useQuery(api.cs.listCs, {}) ?? [];
@@ -19,7 +29,6 @@ export function SettingsDashboard() {
 
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   async function onPick(file: File, csName: string) {
     setBusy(csName);
@@ -43,7 +52,7 @@ export function SettingsDashboard() {
     }
   }
 
-  function onToggle(c: any, field: string, value: boolean) {
+  function onToggle(c: CsRow, field: keyof Omit<CsRow, 'csName' | 'csPhone'>, value: boolean) {
     upsert({
       csName: c.csName,
       csPhone: c.csPhone,
@@ -78,19 +87,6 @@ export function SettingsDashboard() {
             <CardContent className="space-y-4 flex-1">
               {/* Upload Button */}
               <div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.currentTarget.files?.[0];
-                    if (file) {
-                      onPick(file, c.csName);
-                      e.currentTarget.value = '';
-                    }
-                  }}
-                />
                 <Button
                   variant="outline"
                   size="sm"

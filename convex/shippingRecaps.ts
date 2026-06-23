@@ -705,7 +705,7 @@ export const list = query({
     const search = String(args.search ?? "").trim().toLowerCase();
     return rows
       .filter((row) => !isInternalTestPhone(row.customerPhone))
-      .filter((row) => !args.csName || row.csName === args.csName)
+      .filter((row) => !args.csName || csKey(row.csName) === csKey(args.csName))
       .filter((row) => !args.paymentMethod || row.paymentMethod === args.paymentMethod)
       .filter((row) => {
         if (!search) return true;
@@ -740,7 +740,7 @@ export const getCounts = query({
     const filtered = rows.filter(
       (row) =>
         !isInternalTestPhone(row.customerPhone) &&
-        (!args.csName || row.csName === args.csName),
+        (!args.csName || csKey(row.csName) === csKey(args.csName)),
     );
 
     const nonCancelled = filtered.filter(
@@ -1279,7 +1279,7 @@ export const getPerformance = query({
       cancelled: recaps.filter(
         (row) =>
           (row.status === "cancelled" || row.status === "cancelled_after_export") &&
-          (!args.csName || row.csName === args.csName) &&
+          (!args.csName || csKey(row.csName) === csKey(args.csName)) &&
           !isInternalTestPhone(row.customerPhone),
       ).length,
       products: Array.from(productMap.values()).map((row) => ({
