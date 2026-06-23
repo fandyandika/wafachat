@@ -34,7 +34,7 @@ export function ReportCard({
   };
 
   return (
-    <Card>
+    <Card className="transition-shadow duration-300 hover:shadow-elevate">
       <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-base font-semibold">
