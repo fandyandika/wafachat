@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { isInternalTestPhone } from "./lib";
+import { isInternalTestPhone, csKey } from "./lib";
 
 test("isInternalTestPhone: owner/admin/CS numbers are excluded", () => {
   const excluded = [
@@ -31,4 +31,16 @@ test("isInternalTestPhone: a normal customer number is NOT excluded", () => {
   expect(isInternalTestPhone("6281234567890")).toBe(false);
   expect(isInternalTestPhone("6289653903889")).toBe(false);
   expect(isInternalTestPhone("081234567890")).toBe(false);
+});
+
+test("csKey collapses the 'CS ' prefix so config and data names match", () => {
+  expect(csKey("CS Aisyah")).toBe("aisyah");
+  expect(csKey("Aisyah")).toBe("aisyah");
+  expect(csKey("CS Risma")).toBe("risma");
+  expect(csKey("Risma")).toBe("risma");
+  expect(csKey("Azelia")).toBe("azelia");
+  expect(csKey(undefined)).toBe("");
+  expect(csKey("")).toBe("");
+  // does not over-strip a name that legitimately starts with "cs"
+  expect(csKey("Cynthia Sari")).toBe("cynthiasari");
 });

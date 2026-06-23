@@ -6,6 +6,14 @@ export function normalizeCsName(csName: string): string {
   return csName.toLowerCase().replace(/[^a-z]/g, "");
 }
 
+// Canonical CS identity: collapses the "CS " prefix so config ("CS Aisyah")
+// and data ("Aisyah") resolve to the same key. Only strips a leading "cs"
+// when the remainder is non-empty (so "Cs"-only inputs keep a key).
+export function csKey(name: string | undefined): string {
+  const n = normalizeCsName(name ?? "");
+  return n.startsWith("cs") && n.length > 2 ? n.slice(2) : n;
+}
+
 export function isAisyah(csName: string): boolean {
   return normalizeCsName(csName).includes("aisyah");
 }
