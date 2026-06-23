@@ -16,6 +16,8 @@ import type * as http from "../http.js";
 import type * as lib from "../lib.js";
 import type * as messages from "../messages.js";
 import type * as metrics from "../metrics.js";
+import type * as responseTime from "../responseTime.js";
+import type * as responseTimeMath from "../responseTimeMath.js";
 import type * as settings from "../settings.js";
 import type * as shippingRecaps from "../shippingRecaps.js";
 import type * as state from "../state.js";
@@ -35,6 +37,8 @@ declare const fullApi: ApiFromModules<{
   lib: typeof lib;
   messages: typeof messages;
   metrics: typeof metrics;
+  responseTime: typeof responseTime;
+  responseTimeMath: typeof responseTimeMath;
   settings: typeof settings;
   shippingRecaps: typeof shippingRecaps;
   state: typeof state;

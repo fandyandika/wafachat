@@ -49,6 +49,8 @@ export function DailyReportDashboard() {
   const isCurrent = current.y === labelDate.y && current.m === labelDate.m && current.d === labelDate.d;
 
   const report = useQuery(api.analytics.getDailyReport, { startAt, endAt });
+  const respData = useQuery(api.responseTime.getResponseTimes, { startAt, endAt });
+  const respByCs = new Map((respData?.cs ?? []).map((r) => [r.csName, r]));
 
   // Open-date label = the day the window OPENS (= rawWindow.startAt's WIB date), not endAt (next day).
   const label = wibDateParts(rawWindow.startAt);
@@ -111,7 +113,7 @@ export function DailyReportDashboard() {
           ) : (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {cards.map((c) => (
-                <ReportCard key={c.csName} card={c} label={label} windowLabel={windowLabel} isCurrent={isCurrent} />
+                <ReportCard key={c.csName} card={c} label={label} windowLabel={windowLabel} isCurrent={isCurrent} resp={respByCs.get(c.csName)} />
               ))}
             </div>
           )}

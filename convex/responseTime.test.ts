@@ -20,7 +20,11 @@ test("getResponseTimes: first-reply median/p90 + ongoing, template excluded, per
     conv2 = await ctx.db.insert("conversations", { ...convBase, customerPhone: "62812", assignedCsName: "CS A" });
     convX = await ctx.db.insert("conversations", { ...convBase, customerPhone: "6285715682110", assignedCsName: "CS A" }); // internal phone
 
-    const ins = (conversationId: any, customerPhone: string, direction: "inbound" | "outbound", createdAt: number, messageType = "text", role = "cs") =>
+    const ins = (
+      conversationId: any, customerPhone: string, direction: "inbound" | "outbound", createdAt: number,
+      messageType: "text" | "image" | "template" | "button" = "text",
+      role: "customer" | "ai" | "cs" | "system" = "cs",
+    ) =>
       ctx.db.insert("messages", { ...msgBase, conversationId, customerPhone, direction, messageType, role, createdAt });
 
     // conv1: template (skip) -> greeting -> reply 60s -> COD -> reply 30s

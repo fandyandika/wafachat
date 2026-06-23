@@ -5,18 +5,22 @@ import { Copy, Check } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { formatRupiah } from '@/lib/format';
+import { formatRupiah, formatDuration } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import { reportText, crLabel, type ReportCsCard } from '@/components/panel/report-text';
 
 export type ReportCardData = ReportCsCard & { duplicates: number; revenue: number };
 
+export type RespStat = { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number };
+
 export function ReportCard({
-  card, label, windowLabel, isCurrent,
+  card, label, windowLabel, isCurrent, resp,
 }: {
   card: ReportCardData;
   label: { y: number; m: number; d: number; dow: number };
   windowLabel: string;
   isCurrent: boolean;
+  resp?: RespStat;
 }) {
   const [copied, setCopied] = useState(false);
   const onCopy = async () => {
@@ -59,6 +63,13 @@ export function ReportCard({
             ))
           )}
         </div>
+        {resp && resp.firstReplyCount > 0 && (
+          <div className={cn('flex items-center gap-2 border-t pt-2 text-sm', resp.firstReplyCount < 3 && 'opacity-50')}>
+            <span className="text-muted-foreground">⚡ Respon</span>
+            <span className="font-medium tabular-nums text-foreground">{formatDuration(resp.firstReplyMedianMs)}</span>
+            <span className="text-xs text-muted-foreground">· p90 {formatDuration(resp.firstReplyP90Ms)} (n={resp.firstReplyCount})</span>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 border-t pt-3 text-sm">
           <Row label="Total Leads" value={card.leads} />
           <Row label="Diskon" value={formatRupiah(card.discount)} />

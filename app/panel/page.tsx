@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   CircleAlert,
   Wallet,
+  Zap,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -25,7 +26,7 @@ import {
 import { cn } from '@/lib/utils';
 import { api } from '@/convex/_generated/api';
 import type { Stats, PerformanceData } from '@/components/panel/types';
-import { pct, fmtTime, formatRupiah } from '@/lib/format';
+import { pct, fmtTime, formatRupiah, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 
 export default function DashboardPage() {
@@ -49,6 +50,8 @@ export default function DashboardPage() {
     includeInferredDiscount: false,
     csName,
   });
+
+  const respData = useQuery(api.responseTime.getResponseTimes, { startAt, endAt, csName });
 
   const [dupOpen, setDupOpen] = useState(false);
   const dupCount = duplicateOrders?.length ?? 0;
@@ -133,6 +136,16 @@ export default function DashboardPage() {
         {loading
           ? Array.from({ length: 5 }).map((_, index) => <MetricSkeleton key={index} />)
           : cards.map((card) => <DashboardStatCard key={card.label} {...card} />)}
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <StatCard
+          label="Avg respon"
+          value={respData?.overall.firstReplyMedianMs != null ? formatDuration(respData.overall.firstReplyMedianMs) : '–'}
+          detail={`First-reply median${respData ? ` · n=${respData.overall.firstReplyCount}` : ''}`}
+          icon={Zap}
+          tone="default"
+        />
       </section>
 
       <div className="flex items-center gap-3">
