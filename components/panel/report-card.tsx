@@ -12,6 +12,7 @@ import { formatRupiah, formatDuration } from '@/lib/format';
 import { crBarClass, crTextClass } from '@/lib/cr';
 import { cn } from '@/lib/utils';
 import { reportText, crLabel, type ReportCsCard } from '@/components/panel/report-text';
+import { csKey } from '@/lib/cs-key';
 
 export type ReportCardData = ReportCsCard & { duplicates: number; revenue: number };
 
@@ -26,7 +27,7 @@ const REWARD_ICON: Record<string, ComponentType<{ className?: string }>> = {
 };
 
 export function ReportCard({
-  card, label, isCurrent, resp, rank, avgCr, delta, rewards,
+  card, label, isCurrent, resp, rank, avgCr, delta, rewards, avatarByKey,
 }: {
   card: ReportCardData;
   label: { y: number; m: number; d: number; dow: number };
@@ -36,6 +37,7 @@ export function ReportCard({
   avgCr?: number;
   delta?: ReportDelta | null;
   rewards?: string[];
+  avatarByKey?: Map<string, string | null>;
 }) {
   const [copied, setCopied] = useState(false);
   const [productsExpanded, setProductsExpanded] = useState(false);
@@ -64,7 +66,7 @@ export function ReportCard({
               {rank}
             </span>
           )}
-          <CsAvatar name={card.csName} size="md" online />
+          <CsAvatar name={card.csName} size="md" online src={avatarByKey?.get(csKey(card.csName)) ?? undefined} />
           <span className="truncate text-base font-semibold tracking-tight">{card.csName}</span>
           {isCurrent ? (
             <Badge className="shrink-0 gap-1.5 bg-positive-soft text-positive">

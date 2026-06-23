@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
@@ -8,6 +9,8 @@ import type { PerformanceData } from '@/components/panel/types';
 
 export default function PerformancePage() {
   const { startAt, endAt, csName } = usePanelFilters();
+  const csList = useQuery(api.cs.listCs, {}) ?? [];
+  const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
 
   const csLeaderboard = useQuery(api.analytics.getCsLeaderboard, { startAt, endAt });
   const productDifficulty = useQuery(api.analytics.getProductDifficulty, { startAt, endAt });
@@ -30,6 +33,7 @@ export default function PerformancePage() {
       productDifficulty={productDifficulty ?? undefined}
       trendData={trendData ?? undefined}
       responseTimes={responseTimes?.cs ?? undefined}
+      avatarByKey={avatarByKey}
     />
   );
 }

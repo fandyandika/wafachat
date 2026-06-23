@@ -3,7 +3,7 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, LayoutDashboard, BarChart3, ClipboardList, PanelLeft, PanelLeftClose } from 'lucide-react';
+import { Bot, LayoutDashboard, BarChart3, ClipboardList, PanelLeft, PanelLeftClose, Settings } from 'lucide-react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
@@ -14,6 +14,7 @@ const NAV = [
   { href: '/panel', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/panel/performance', label: 'Performance', icon: BarChart3 },
   { href: '/panel/laporan', label: 'Laporan', icon: ClipboardList },
+  { href: '/panel/settings', label: 'Settings', icon: Settings },
 ] as const;
 
 const RANGES: Array<{ label: string; value: DateRangeKey }> = [

@@ -5,6 +5,7 @@ import { useQuery } from 'convex/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
+import { csKey } from '@/lib/cs-key';
 import { Button } from '@/components/ui/button';
 import { MetricCard, DeltaPill } from '@/components/ui/metric-card';
 import { CsAvatar } from '@/components/ui/cs-avatar';
@@ -36,6 +37,8 @@ export function DailyReportDashboard() {
   const pathname = usePathname();
   const { csName } = usePanelFilters();
   const dayParam = sp.get('day');
+  const csList = useQuery(api.cs.listCs, {}) ?? [];
+  const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
 
   const now = Date.now();
   const current = useMemo(() => currentReportLabelDate(now), [now]);
@@ -171,9 +174,9 @@ export function DailyReportDashboard() {
             <div>
               <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Sorotan</div>
               <div className="grid gap-3 sm:grid-cols-3">
-                {topClosing && <HighlightCard title="Closing terbanyak" name={topClosing.csName} value={`${topClosing.closings} closing`} />}
-                {topCr && <HighlightCard title="CR tertinggi" name={topCr.csName} value={crLabel(topCr.cr, topCr.leads)} />}
-                {fastestResp && <HighlightCard title="Respon tercepat" name={fastestResp.csName} value={formatDuration(fastestResp.ms)} />}
+                {topClosing && <HighlightCard title="Closing terbanyak" name={topClosing.csName} value={`${topClosing.closings} closing`} avatarByKey={avatarByKey} />}
+                {topCr && <HighlightCard title="CR tertinggi" name={topCr.csName} value={crLabel(topCr.cr, topCr.leads)} avatarByKey={avatarByKey} />}
+                {fastestResp && <HighlightCard title="Respon tercepat" name={fastestResp.csName} value={formatDuration(fastestResp.ms)} avatarByKey={avatarByKey} />}
               </div>
             </div>
           )}
@@ -198,6 +201,7 @@ export function DailyReportDashboard() {
                     avgCr={avgCr}
                     delta={deltaFor(c)}
                     rewards={rewardsByCs.get(c.csName)}
+                    avatarByKey={avatarByKey}
                   />
                 ))}
               </div>
@@ -209,12 +213,12 @@ export function DailyReportDashboard() {
   );
 }
 
-function HighlightCard({ title, name, value }: { title: string; name: string; value: string }) {
+function HighlightCard({ title, name, value, avatarByKey }: { title: string; name: string; value: string; avatarByKey: Map<string, string | null> }) {
   return (
     <div className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate">
       <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{title}</div>
       <div className="mt-2 flex items-center gap-2.5">
-        <CsAvatar name={name} size="md" />
+        <CsAvatar name={name} size="md" src={avatarByKey.get(csKey(name)) ?? undefined} />
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold tracking-tight">{name}</div>
           <div className="text-xs tabular-nums text-muted-foreground">{value}</div>

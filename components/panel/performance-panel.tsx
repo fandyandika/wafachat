@@ -18,6 +18,7 @@ import { CsAvatar } from '@/components/ui/cs-avatar';
 import { TrendChart } from '@/components/ui/trend-chart';
 import { DeltaPill } from '@/components/ui/metric-card';
 import { crBarClass } from '@/lib/cr';
+import { csKey } from '@/lib/cs-key';
 
 const MONTHS_ID = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 /** Readable WIB date range, e.g. "16–22 Jun 2026" — replaces the cryptic "Pekan 2026-06-22". */
@@ -39,6 +40,7 @@ export function PerformancePanel({
   productDifficulty,
   trendData,
   responseTimes,
+  avatarByKey,
 }: {
   data?: PerformanceData;
   csLeaderboard?: Array<{
@@ -48,6 +50,7 @@ export function PerformancePanel({
   productDifficulty?: Array<{ productName: string; leads: number; closings: number; cr: number; prevCr: number; deltaCr: number }>;
   trendData?: Array<{ bucket: string; leads: number; closings: number; cr: number }>;
   responseTimes?: Array<{ csNameRaw: string; firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number }>;
+  avatarByKey?: Map<string, string | null>;
 }) {
   const deltaTag = (d: number, suffix = '') => <DeltaPill value={d} suffix={suffix} />;
   const [perfTab, setPerfTab] = useState<'summary' | 'cs' | 'product'>('summary');
@@ -156,7 +159,7 @@ export function PerformancePanel({
                         </td>
                         <td className="py-2.5 pr-3">
                           <div className="flex items-center gap-2.5">
-                            <CsAvatar name={r.csName || '?'} size="sm" />
+                            <CsAvatar name={r.csName || '?'} size="sm" src={avatarByKey?.get(csKey(r.csName)) ?? undefined} />
                             <span className={cn('font-medium', i === 0 && 'font-semibold')}>{r.csName || '—'}</span>
                           </div>
                         </td>
@@ -274,7 +277,7 @@ export function PerformancePanel({
                 <div className="space-y-2.5 border-t pt-3">
                   {report.perCs.map((c) => (
                     <div key={c.csName} className="flex items-center gap-3">
-                      <CsAvatar name={c.csName || '?'} size="sm" />
+                      <CsAvatar name={c.csName || '?'} size="sm" src={avatarByKey?.get(csKey(c.csName)) ?? undefined} />
                       <span className="w-16 shrink-0 truncate text-sm font-medium">{c.csName || '—'}</span>
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                         <div

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery } from 'convex/react';
+import { csKey } from '@/lib/cs-key';
 import {
   XCircle,
   Wallet,
@@ -34,6 +35,8 @@ import { usePanelFilters } from '@/components/panel/use-panel-filters';
 
 export default function DashboardPage() {
   const { startAt, endAt, csName, jakartaDate, range } = usePanelFilters();
+  const csList = useQuery(api.cs.listCs, {}) ?? [];
+  const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
   const periodLabel = ({ today: 'hari ini', yesterday: 'kemarin', '7d': '7 hari', '30d': '30 hari', month: 'bulan ini', custom: 'tanggal dipilih' } as const)[range];
 
   const summaryData = useQuery(api.metrics.getDashboardSummary, {
@@ -199,7 +202,7 @@ export default function DashboardPage() {
               topCs.map((c, i) => (
                 <div key={c.csName} className="flex items-center gap-3">
                   <span className="w-3 shrink-0 text-xs font-semibold tabular-nums text-muted-foreground">{i + 1}</span>
-                  <CsAvatar name={c.csName || '?'} size="sm" />
+                  <CsAvatar name={c.csName || '?'} size="sm" src={avatarByKey.get(csKey(c.csName)) ?? undefined} />
                   <span className="w-16 shrink-0 truncate text-sm font-medium">{c.csName || '—'}</span>
                   <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                     <div className={cn('h-full rounded-full', crBarClass(c.cr))} style={{ width: `${Math.min(Math.max(c.cr, 0), 100)}%` }} />
