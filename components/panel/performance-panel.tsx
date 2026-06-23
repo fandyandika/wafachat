@@ -21,7 +21,7 @@ import {
 import { cn } from '@/lib/utils';
 import { api } from '@/convex/_generated/api';
 import type { PerformanceData } from '@/components/panel/types';
-import { formatRupiah } from '@/lib/format';
+import { formatRupiah, formatDuration } from '@/lib/format';
 
 function Sparkline({ values, tone }: { values: number[]; tone: string }) {
   const max = Math.max(1, ...values);
@@ -80,6 +80,7 @@ export function PerformancePanel({
   csLeaderboard,
   productDifficulty,
   trendData,
+  responseTimes,
 }: {
   data?: PerformanceData;
   csLeaderboard?: Array<{
@@ -88,6 +89,7 @@ export function PerformancePanel({
   }>;
   productDifficulty?: Array<{ productName: string; leads: number; closings: number; cr: number; prevCr: number; deltaCr: number }>;
   trendData?: Array<{ bucket: string; leads: number; closings: number; cr: number }>;
+  responseTimes?: Array<{ csNameRaw: string; firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number }>;
 }) {
   const deltaTag = (d: number, suffix = '') => {
     if (d > 0) return <span className="text-positive">▲{d}{suffix}</span>;
@@ -120,6 +122,7 @@ export function PerformancePanel({
   const sortedCS = [...(data?.cs ?? [])].sort((a, b) => b.closing - a.closing);
   const maxCSClosing = sortedCS[0]?.closing ?? 1;
   const sortedProducts = [...(data?.products ?? [])].sort((a, b) => b.closing - a.closing);
+  const respByRaw = new Map((responseTimes ?? []).map((r) => [r.csNameRaw, r]));
 
   return (
     <div className="space-y-4">
@@ -174,6 +177,8 @@ export function PerformancePanel({
                     <th className="py-1 pr-3">Leads (Δ)</th>
                     <th className="py-1 pr-3">Closing (Δ)</th>
                     <th className="py-1 pr-3">CR (Δ)</th>
+                    <th className="py-1 pr-3">Respon</th>
+                    <th className="py-1 pr-3">p90</th>
                     <th className="py-1 pr-3">Omzet</th>
                   </tr>
                 </thead>
@@ -185,6 +190,8 @@ export function PerformancePanel({
                       <td className="py-1.5 pr-3">{r.leads} {deltaTag(r.deltaLeads)}</td>
                       <td className="py-1.5 pr-3">{r.closings} {deltaTag(r.deltaClosings)}</td>
                       <td className="py-1.5 pr-3">{r.cr}% {deltaTag(r.deltaCr, '%')}</td>
+                      <td className="py-1.5 pr-3 tabular-nums">{respByRaw.get(r.csName)?.firstReplyCount ? formatDuration(respByRaw.get(r.csName)!.firstReplyMedianMs) : '–'}</td>
+                      <td className="py-1.5 pr-3 tabular-nums text-muted-foreground">{respByRaw.get(r.csName)?.firstReplyCount ? formatDuration(respByRaw.get(r.csName)!.firstReplyP90Ms) : '–'}</td>
                       <td className="py-1.5 pr-3">{formatRupiah(r.revenue)}</td>
                     </tr>
                   ))}

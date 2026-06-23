@@ -19,6 +19,8 @@ export default function PerformancePage() {
     csName,
   });
 
+  const responseTimes = useQuery(api.responseTime.getResponseTimes, { startAt, endAt });
+
   const performance = performanceData as PerformanceData | undefined;
 
   return (
@@ -27,6 +29,7 @@ export default function PerformancePage() {
       csLeaderboard={csLeaderboard ?? undefined}
       productDifficulty={productDifficulty ?? undefined}
       trendData={trendData ?? undefined}
+      responseTimes={responseTimes?.cs ?? undefined}
     />
   );
 }
