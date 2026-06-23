@@ -142,16 +142,15 @@ export function PerformancePanel({
       </div>
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-8">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-8">
         {kpiCards.map((card) => (
-          <Card key={card.label} size="sm">
-            <CardHeader>
-              <CardDescription className="text-[11px]">{card.label}</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className={cn('text-lg font-bold tabular-nums', card.tone)}>{card.value}</div>
-            </CardContent>
-          </Card>
+          <div
+            key={card.label}
+            className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate"
+          >
+            <div className="text-[11px] font-medium text-muted-foreground">{card.label}</div>
+            <div className={cn('mt-1.5 text-xl font-semibold tabular-nums', card.tone)}>{card.value}</div>
+          </div>
         ))}
       </div>
 
@@ -168,29 +167,40 @@ export function PerformancePanel({
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-left text-xs text-muted-foreground">
+                <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                   <tr>
-                    <th className="py-1 pr-3">#</th>
-                    <th className="py-1 pr-3">CS</th>
-                    <th className="py-1 pr-3">Leads (Δ)</th>
-                    <th className="py-1 pr-3">Closing (Δ)</th>
-                    <th className="py-1 pr-3">CR (Δ)</th>
-                    <th className="py-1 pr-3">Balas chat</th>
-                    <th className="py-1 pr-3">Omzet</th>
+                    <th className="py-2 pr-3 font-medium">#</th>
+                    <th className="py-2 pr-3 font-medium">CS</th>
+                    <th className="py-2 pr-3 text-right font-medium">Leads (Δ)</th>
+                    <th className="py-2 pr-3 text-right font-medium">Closing (Δ)</th>
+                    <th className="py-2 pr-3 text-right font-medium">CR (Δ)</th>
+                    <th className="py-2 pr-3 text-right font-medium">Balas chat</th>
+                    <th className="py-2 pr-3 text-right font-medium">Omzet</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {csLeaderboard.map((r, i) => (
-                    <tr key={r.csName} className="border-t border-border transition-colors hover:bg-accent">
-                      <td className="py-1.5 pr-3 text-muted-foreground">{i + 1}</td>
-                      <td className="py-1.5 pr-3 font-medium">{r.csName || '—'}</td>
-                      <td className="py-1.5 pr-3">{r.leads} {deltaTag(r.deltaLeads)}</td>
-                      <td className="py-1.5 pr-3">{r.closings} {deltaTag(r.deltaClosings)}</td>
-                      <td className="py-1.5 pr-3">{r.cr}% {deltaTag(r.deltaCr, '%')}</td>
-                      <td className="py-1.5 pr-3 tabular-nums">{respByRaw.get(r.csName)?.firstReplyCount ? formatDuration(respByRaw.get(r.csName)!.firstReplyMedianMs) : '–'}</td>
-                      <td className="py-1.5 pr-3">{formatRupiah(r.revenue)}</td>
-                    </tr>
-                  ))}
+                  {csLeaderboard.map((r, i) => {
+                    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : null;
+                    return (
+                      <tr
+                        key={r.csName}
+                        className={cn(
+                          'border-t border-border transition-colors hover:bg-accent',
+                          i === 0 && 'bg-accent/40',
+                        )}
+                      >
+                        <td className="py-2.5 pr-3">
+                          {medal ? <span className="text-base">{medal}</span> : <span className="text-muted-foreground tabular-nums">{i + 1}</span>}
+                        </td>
+                        <td className={cn('py-2.5 pr-3 font-medium', i === 0 && 'font-semibold')}>{r.csName || '—'}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">{r.leads} {deltaTag(r.deltaLeads)}</td>
+                        <td className={cn('py-2.5 pr-3 text-right tabular-nums', i === 0 && 'font-semibold')}>{r.closings} {deltaTag(r.deltaClosings)}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">{r.cr}% {deltaTag(r.deltaCr, '%')}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">{respByRaw.get(r.csName)?.firstReplyCount ? formatDuration(respByRaw.get(r.csName)!.firstReplyMedianMs) : '–'}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">{formatRupiah(r.revenue)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -211,16 +221,16 @@ export function PerformancePanel({
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-left text-xs text-muted-foreground">
-                  <tr><th className="py-1 pr-3">Produk</th><th className="py-1 pr-3">Leads</th><th className="py-1 pr-3">Closing</th><th className="py-1 pr-3">CR (Δ)</th></tr>
+                <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                  <tr><th className="py-2 pr-3 font-medium">Produk</th><th className="py-2 pr-3 text-right font-medium">Leads</th><th className="py-2 pr-3 text-right font-medium">Closing</th><th className="py-2 pr-3 text-right font-medium">CR (Δ)</th></tr>
                 </thead>
                 <tbody>
                   {productDifficulty.map((p) => (
-                    <tr key={p.productName} className="border-t border-border">
-                      <td className="py-1.5 pr-3 font-medium">{p.productName}</td>
-                      <td className="py-1.5 pr-3">{p.leads}</td>
-                      <td className="py-1.5 pr-3">{p.closings}</td>
-                      <td className="py-1.5 pr-3">{p.cr}% {deltaTag(p.deltaCr, '%')}</td>
+                    <tr key={p.productName} className="border-t border-border transition-colors hover:bg-accent">
+                      <td className="py-2.5 pr-3 font-medium">{p.productName}</td>
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{p.leads}</td>
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{p.closings}</td>
+                      <td className="py-2.5 pr-3 text-right tabular-nums">{p.cr}% {deltaTag(p.deltaCr, '%')}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -248,16 +258,16 @@ export function PerformancePanel({
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="text-left text-xs text-muted-foreground">
-                    <tr><th className="py-1 pr-3">Hari</th><th className="py-1 pr-3">Leads</th><th className="py-1 pr-3">Closing</th><th className="py-1 pr-3">CR</th></tr>
+                  <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <tr><th className="py-2 pr-3 font-medium">Hari</th><th className="py-2 pr-3 text-right font-medium">Leads</th><th className="py-2 pr-3 text-right font-medium">Closing</th><th className="py-2 pr-3 text-right font-medium">CR</th></tr>
                   </thead>
                   <tbody>
                     {trendData.map((b) => (
-                      <tr key={b.bucket} className="border-t border-border">
-                        <td className="py-1.5 pr-3">{b.bucket}</td>
-                        <td className="py-1.5 pr-3">{b.leads}</td>
-                        <td className="py-1.5 pr-3">{b.closings}</td>
-                        <td className="py-1.5 pr-3">{b.cr}%</td>
+                      <tr key={b.bucket} className="border-t border-border transition-colors hover:bg-accent">
+                        <td className="py-2.5 pr-3">{b.bucket}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">{b.leads}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">{b.closings}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">{b.cr}%</td>
                       </tr>
                     ))}
                   </tbody>
@@ -304,17 +314,17 @@ export function PerformancePanel({
               {report.perCs.length > 0 && (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead className="text-left text-xs text-muted-foreground">
-                      <tr><th className="py-1 pr-3">CS</th><th className="py-1 pr-3">Leads</th><th className="py-1 pr-3">Closing</th><th className="py-1 pr-3">CR</th><th className="py-1 pr-3">Omzet</th></tr>
+                    <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <tr><th className="py-2 pr-3 font-medium">CS</th><th className="py-2 pr-3 text-right font-medium">Leads</th><th className="py-2 pr-3 text-right font-medium">Closing</th><th className="py-2 pr-3 text-right font-medium">CR</th><th className="py-2 pr-3 text-right font-medium">Omzet</th></tr>
                     </thead>
                     <tbody>
                       {report.perCs.map((c) => (
-                        <tr key={c.csName} className="border-t border-border">
-                          <td className="py-1.5 pr-3 font-medium">{c.csName || '—'}</td>
-                          <td className="py-1.5 pr-3">{c.leads}</td>
-                          <td className="py-1.5 pr-3">{c.closings}</td>
-                          <td className="py-1.5 pr-3">{c.cr}%</td>
-                          <td className="py-1.5 pr-3">{formatRupiah(c.revenue)}</td>
+                        <tr key={c.csName} className="border-t border-border transition-colors hover:bg-accent">
+                          <td className="py-2.5 pr-3 font-medium">{c.csName || '—'}</td>
+                          <td className="py-2.5 pr-3 text-right tabular-nums">{c.leads}</td>
+                          <td className="py-2.5 pr-3 text-right tabular-nums">{c.closings}</td>
+                          <td className="py-2.5 pr-3 text-right tabular-nums">{c.cr}%</td>
+                          <td className="py-2.5 pr-3 text-right tabular-nums">{formatRupiah(c.revenue)}</td>
                         </tr>
                       ))}
                     </tbody>

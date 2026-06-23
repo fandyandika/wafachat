@@ -133,20 +133,21 @@ export default function DashboardPage() {
 
   return (
     <>
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        {loading
-          ? Array.from({ length: 5 }).map((_, index) => <MetricSkeleton key={index} />)
-          : cards.map((card) => <DashboardStatCard key={card.label} {...card} />)}
-      </section>
-
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <StatCard
-          label="Kecepatan Balas CS"
-          value={respData?.overall.firstReplyMedianMs != null ? formatDuration(respData.overall.firstReplyMedianMs) : '–'}
-          detail={`${periodLabel}${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
-          icon={Zap}
-          tone="default"
-        />
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        {loading ? (
+          Array.from({ length: 6 }).map((_, index) => <MetricSkeleton key={index} />)
+        ) : (
+          <>
+            {cards.map((card) => <DashboardStatCard key={card.label} {...card} />)}
+            <StatCard
+              label="Kecepatan Balas CS"
+              value={respData?.overall.firstReplyMedianMs != null ? formatDuration(respData.overall.firstReplyMedianMs) : '–'}
+              detail={`${periodLabel}${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
+              icon={Zap}
+              tone="default"
+            />
+          </>
+        )}
       </section>
 
       <div className="flex items-center gap-3">

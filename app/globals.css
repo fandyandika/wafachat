@@ -47,10 +47,28 @@
   * {
     @apply border-border;
   }
-  body {
-    @apply bg-background text-foreground;
-  }
   html {
     @apply font-sans;
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background text-foreground;
+    /* Ambient depth: a whisper of indigo light from the top so large surfaces
+       don't read as flat white. Fixed so it doesn't scroll away. */
+    background-image:
+      radial-gradient(120% 70% at 50% -10%, oklch(0.62 0.16 280 / 0.06), transparent 60%),
+      radial-gradient(80% 50% at 100% 0%, oklch(0.62 0.16 252 / 0.04), transparent 55%);
+    background-attachment: fixed;
+  }
+  /* Headlines breathe: balance wrapping, no orphans. */
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+  /* One consistent, visible focus ring for keyboard users. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+  ::selection {
+    background: oklch(0.52 0.22 280 / 0.18);
   }
 }

@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ClipboardList } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { Button } from '@/components/ui/button';
 import { formatRupiah } from '@/lib/format';
@@ -96,7 +96,7 @@ export function DailyReportDashboard() {
         <Button size="icon" variant="outline" className="size-9" onClick={() => step(1)} disabled={isCurrent} aria-label="Hari berikutnya">
           <ChevronRight className="size-4" />
         </Button>
-        <div className="ml-1 text-sm font-medium">Laporan {titleDate}</div>
+        <div className="ml-1 text-base font-semibold tracking-tight">Laporan {titleDate}</div>
       </div>
 
       <div className="text-xs text-muted-foreground">
@@ -111,8 +111,10 @@ export function DailyReportDashboard() {
         <>
           <GrandStrip totals={report.totals} />
           {cards.length === 0 ? (
-            <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-              Belum ada aktivitas di window ini.
+            <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-card/50 p-10 text-center">
+              <ClipboardList className="size-7 text-muted-foreground/60" />
+              <p className="text-sm font-medium text-foreground">Belum ada aktivitas</p>
+              <p className="text-xs text-muted-foreground">Leads & closing untuk periode ini akan muncul di sini begitu masuk.</p>
             </div>
           ) : (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -143,9 +145,12 @@ function GrandStrip({
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {items.map((it) => (
-        <div key={it.label} className="rounded-lg border bg-card p-3">
-          <div className="text-xs text-muted-foreground">{it.label}</div>
-          <div className="mt-1 text-lg font-semibold tabular-nums">{it.value}</div>
+        <div
+          key={it.label}
+          className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate"
+        >
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{it.label}</div>
+          <div className="mt-1.5 text-2xl font-semibold tabular-nums text-foreground">{it.value}</div>
         </div>
       ))}
     </div>

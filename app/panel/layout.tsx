@@ -112,17 +112,35 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                 </Select>
               </div>
             </div>
-            <div className="mt-4 flex gap-2 overflow-x-auto pb-1 md:hidden">
-              {NAV.map((item) => (
-                <Link key={item.href} href={`${item.href}?${sp.toString()}`}>
-                  <Badge variant={pathname === item.href ? 'default' : 'secondary'}>{item.label}</Badge>
-                </Link>
-              ))}
-            </div>
           </header>
-          <div className="space-y-6 p-4 md:p-6">{children}</div>
+          <div className="space-y-6 p-4 pb-24 md:p-6 md:pb-8">{children}</div>
         </main>
       </div>
+
+      {/* Mobile bottom nav — thumb-reachable, app-like. Replaces the badge row. Hidden on md+. */}
+      <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/90 backdrop-blur md:hidden">
+        <div className="mx-auto flex max-w-md items-stretch justify-around px-2 pb-[env(safe-area-inset-bottom)]">
+          {NAV.map((item) => {
+            const active = pathname === item.href;
+            return (
+              <Link
+                key={item.href}
+                href={`${item.href}?${sp.toString()}`}
+                aria-current={active ? 'page' : undefined}
+                className={cn(
+                  'flex flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium transition-colors active:scale-95',
+                  active ? 'text-primary' : 'text-muted-foreground',
+                )}
+              >
+                <span className={cn('flex size-9 items-center justify-center rounded-xl transition-colors', active && 'bg-accent')}>
+                  <item.icon className="size-5" />
+                </span>
+                {item.label}
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }
