@@ -10,6 +10,7 @@
 
 import type * as analytics from "../analytics.js";
 import type * as closingRules from "../closingRules.js";
+import type * as cs from "../cs.js";
 import type * as csConfigs from "../csConfigs.js";
 import type * as events from "../events.js";
 import type * as http from "../http.js";
@@ -31,6 +32,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   analytics: typeof analytics;
   closingRules: typeof closingRules;
+  cs: typeof cs;
   csConfigs: typeof csConfigs;
   events: typeof events;
   http: typeof http;

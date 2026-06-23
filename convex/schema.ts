@@ -61,6 +61,7 @@ export default defineSchema({
     aiAssistantEnabled: v.boolean(),
     reportingEnabled: v.boolean(),
     isActive: v.boolean(),
+    avatarStorageId: v.optional(v.id("_storage")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
