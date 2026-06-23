@@ -160,7 +160,7 @@ export function PerformancePanel({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">🏆 Leaderboard CS</CardTitle>
-          <CardDescription>Ranking juara→lesu periode terpilih, dengan perubahan ▲▼ vs periode sebelumnya yang sama panjang.</CardDescription>
+          <CardDescription>Ranking juara→lesu periode terpilih, dengan perubahan ▲▼ vs periode sebelumnya yang sama panjang. Kolom “Balas chat” = median waktu balas chat pertama (sepanjang periode terpilih).</CardDescription>
         </CardHeader>
         <CardContent>
           {csLeaderboard === undefined ? (

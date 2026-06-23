@@ -30,7 +30,8 @@ import { pct, fmtTime, formatRupiah, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 
 export default function DashboardPage() {
-  const { startAt, endAt, csName, jakartaDate } = usePanelFilters();
+  const { startAt, endAt, csName, jakartaDate, range } = usePanelFilters();
+  const periodLabel = ({ today: 'hari ini', yesterday: 'kemarin', '7d': '7 hari', '30d': '30 hari', month: 'bulan ini', custom: 'tanggal dipilih' } as const)[range];
 
   const summaryData = useQuery(api.metrics.getDashboardSummary, {
     startAt,
@@ -142,7 +143,7 @@ export default function DashboardPage() {
         <StatCard
           label="Kecepatan Balas CS"
           value={respData?.overall.firstReplyMedianMs != null ? formatDuration(respData.overall.firstReplyMedianMs) : '–'}
-          detail={`biasanya balas chat baru${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
+          detail={`${periodLabel}${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
           icon={Zap}
           tone="default"
         />
