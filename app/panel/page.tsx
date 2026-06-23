@@ -15,8 +15,12 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { MetricCard, type MetricTone } from '@/components/ui/metric-card';
 import { AnimatedNumber } from '@/components/ui/animated-number';
+import { CsAvatar } from '@/components/ui/cs-avatar';
+import { TrendChart } from '@/components/ui/trend-chart';
+import { cn } from '@/lib/utils';
 import {
   Sheet,
   SheetContent,
@@ -54,6 +58,8 @@ export default function DashboardPage() {
 
   const respData = useQuery(api.responseTime.getResponseTimes, { startAt, endAt, csName });
 
+  const trendData = useQuery(api.metrics.getTrend, { startAt, endAt, bucket: 'day' });
+
   const [dupOpen, setDupOpen] = useState(false);
   const dupCount = duplicateOrders?.length ?? 0;
 
@@ -77,6 +83,11 @@ export default function DashboardPage() {
   const handoverTodayCount = stats.handovers;
   const handoverRate = stats.orders > 0 ? Math.round((handoverTodayCount / stats.orders) * 100) : 0;
   const revenue = summaryData?.revenue ?? 0;
+
+  const topCs = [...(performance?.cs ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
+  const topProducts = [...(performance?.products ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
+  const trendPoints = (trendData ?? []).map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }));
+  const crBar = (cr: number) => (cr >= 60 ? 'bg-positive' : cr >= 35 ? 'bg-primary' : 'bg-negative');
 
   const cards = useMemo(
     (): Array<{
@@ -164,6 +175,74 @@ export default function DashboardPage() {
           </>
         )}
       </section>
+
+      {trendPoints.length >= 2 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Trend Harian</CardTitle>
+            <CardDescription>Leads &amp; closing per hari · {periodLabel}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="max-w-2xl">
+              <TrendChart data={trendPoints} />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Top CS</CardTitle>
+            <CardDescription>Closing terbanyak · {periodLabel}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {performanceData === undefined ? (
+              <p className="text-sm text-muted-foreground">Memuat…</p>
+            ) : topCs.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Belum ada data.</p>
+            ) : (
+              topCs.map((c, i) => (
+                <div key={c.csName} className="flex items-center gap-3">
+                  <span className="w-3 shrink-0 text-xs font-semibold tabular-nums text-muted-foreground">{i + 1}</span>
+                  <CsAvatar name={c.csName || '?'} size="sm" />
+                  <span className="w-16 shrink-0 truncate text-sm font-medium">{c.csName || '—'}</span>
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div className={cn('h-full rounded-full', crBar(c.cr))} style={{ width: `${Math.min(Math.max(c.cr, 0), 100)}%` }} />
+                  </div>
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{c.closing} · {c.cr}%</span>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Top Produk</CardTitle>
+            <CardDescription>Closing terbanyak · {periodLabel}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {performanceData === undefined ? (
+              <p className="text-sm text-muted-foreground">Memuat…</p>
+            ) : topProducts.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Belum ada data.</p>
+            ) : (
+              topProducts.map((p) => (
+                <div key={p.product} className="space-y-1.5">
+                  <div className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 flex-1 truncate font-medium text-foreground">{p.product}</span>
+                    <span className="shrink-0 tabular-nums text-muted-foreground">{p.closing} · {p.cr}%</span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div className={cn('h-full rounded-full', crBar(p.cr))} style={{ width: `${Math.min(Math.max(p.cr, 0), 100)}%` }} />
+                  </div>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       <Sheet open={dupOpen} onOpenChange={setDupOpen}>
         <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
