@@ -74,11 +74,10 @@ export function ReportCard({
         )}
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 border-t pt-3 text-sm">
           <Row label="Total Leads" value={card.leads} />
-          <Row label="Diskon" value={formatRupiah(card.discount)} />
           <Row label="Total Closing" value={card.closings} />
-          <Row label="CP Diskon" value={formatRupiah(card.cpDiscount)} />
           <Row label="CR" value={crLabel(card.cr, card.leads)} />
-          <Row label="Duplikat" value={card.duplicates} />
+          <Row label="Diskon" value={formatRupiah(card.discount)} />
+          <Row label="CP Diskon" value={formatRupiah(card.cpDiscount)} />
         </div>
       </CardContent>
     </Card>
