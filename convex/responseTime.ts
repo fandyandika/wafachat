@@ -25,12 +25,11 @@ export const getResponseTimes = query({
       arr.push({ direction: m.direction, messageType: m.messageType, role: m.role, createdAt: m.createdAt });
     }
 
-    // Join conversation -> raw assignedCsName.
+    // Join conversation -> raw assignedCsName. Fetch ALL conversations in parallel
+    // (Promise.all) — a sequential await-loop here is an N+1 that made this query ~20s.
+    const convDocs = await Promise.all(convOrder.map((key) => ctx.db.get(convIdByKey.get(key))));
     const csByKey = new Map<string, string>();
-    for (const key of convOrder) {
-      const conv = await ctx.db.get(convIdByKey.get(key));
-      csByKey.set(key, (conv as any)?.assignedCsName || "Unknown");
-    }
+    convOrder.forEach((key, i) => csByKey.set(key, (convDocs[i] as any)?.assignedCsName || "Unknown"));
 
     const agg = new Map<string, { first: number[]; all: number[] }>();
     const overallFirst: number[] = [];

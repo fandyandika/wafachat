@@ -192,20 +192,31 @@ export const getDailyReport = query({
     // recap's SKU packageContent ("QURAN MAPPING 1 PCS") and fragment from the canonical lead
     // name ("Quran Mapping"). Fetch the real order (by Berdu order id, else latest by phone) to
     // canonicalize. Counts (leads/closings) are unaffected — this only resolves the product name.
-    const fallbackOrderByPhone = new Map<string, any>();
+    // Collect the unique phones needing a fallback lookup (first recap per phone wins), then
+    // fetch them ALL in parallel — a sequential await-loop here was an N+1 that slowed this query.
+    const fbNeeded: Array<{ phone: string; orderIdBerdu?: string }> = [];
+    const fbSeen = new Set<string>();
     for (const r of recaps) {
       const phone = normalizePhone(r.customerPhone);
-      if (latestOrderByPhone.has(phone) || fallbackOrderByPhone.has(phone)) continue;
-      let order: any = null;
-      if (r.orderIdBerdu) {
-        order = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", r.orderIdBerdu)).unique();
-      }
-      if (!order) {
-        const all = await ctx.db.query("orders").withIndex("by_customerPhone", (q: any) => q.eq("customerPhone", phone)).collect();
-        order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
-      }
-      if (order) fallbackOrderByPhone.set(phone, order);
+      if (latestOrderByPhone.has(phone) || fbSeen.has(phone)) continue;
+      fbSeen.add(phone);
+      fbNeeded.push({ phone, orderIdBerdu: r.orderIdBerdu });
     }
+    const fbResults = await Promise.all(
+      fbNeeded.map(async ({ phone, orderIdBerdu }) => {
+        let order: any = null;
+        if (orderIdBerdu) {
+          order = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderIdBerdu)).unique();
+        }
+        if (!order) {
+          const all = await ctx.db.query("orders").withIndex("by_customerPhone", (q: any) => q.eq("customerPhone", phone)).collect();
+          order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
+        }
+        return { phone, order };
+      }),
+    );
+    const fallbackOrderByPhone = new Map<string, any>();
+    for (const { phone, order } of fbResults) if (order) fallbackOrderByPhone.set(phone, order);
 
     const map = new Map<string, CsReportAcc>();
     const getCs = (cs: string): CsReportAcc => {
