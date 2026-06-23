@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 import { api } from '@/convex/_generated/api';
 import type { PerformanceData } from '@/components/panel/types';
 import { formatRupiah, formatDuration } from '@/lib/format';
+import { CsAvatar } from '@/components/ui/cs-avatar';
 
 function Sparkline({ values, tone }: { values: number[]; tone: string }) {
   const max = Math.max(1, ...values);
@@ -148,15 +149,15 @@ export function PerformancePanel({
             key={card.label}
             className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate"
           >
-            <div className="text-[11px] font-medium text-muted-foreground">{card.label}</div>
-            <div className={cn('mt-1.5 text-xl font-semibold tabular-nums', card.tone)}>{card.value}</div>
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{card.label}</div>
+            <div className={cn('mt-1.5 text-2xl font-semibold tabular-nums', card.tone)}>{card.value}</div>
           </div>
         ))}
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">🏆 Leaderboard CS</CardTitle>
+          <CardTitle className="text-base">Leaderboard CS</CardTitle>
           <CardDescription>Ranking juara→lesu periode terpilih, dengan perubahan ▲▼ vs periode sebelumnya yang sama panjang. Kolom “Balas chat” = median waktu balas chat pertama (sepanjang periode terpilih).</CardDescription>
         </CardHeader>
         <CardContent>
@@ -179,9 +180,7 @@ export function PerformancePanel({
                   </tr>
                 </thead>
                 <tbody>
-                  {csLeaderboard.map((r, i) => {
-                    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : null;
-                    return (
+                  {csLeaderboard.map((r, i) => (
                       <tr
                         key={r.csName}
                         className={cn(
@@ -190,17 +189,32 @@ export function PerformancePanel({
                         )}
                       >
                         <td className="py-2.5 pr-3">
-                          {medal ? <span className="text-base">{medal}</span> : <span className="text-muted-foreground tabular-nums">{i + 1}</span>}
+                          <span
+                            className={cn(
+                              'inline-flex size-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
+                              i === 0
+                                ? 'bg-primary text-primary-foreground'
+                                : i < 3
+                                  ? 'bg-accent text-accent-foreground'
+                                  : 'text-muted-foreground',
+                            )}
+                          >
+                            {i + 1}
+                          </span>
                         </td>
-                        <td className={cn('py-2.5 pr-3 font-medium', i === 0 && 'font-semibold')}>{r.csName || '—'}</td>
+                        <td className="py-2.5 pr-3">
+                          <div className="flex items-center gap-2.5">
+                            <CsAvatar name={r.csName || '?'} size="sm" />
+                            <span className={cn('font-medium', i === 0 && 'font-semibold')}>{r.csName || '—'}</span>
+                          </div>
+                        </td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{r.leads} {deltaTag(r.deltaLeads)}</td>
                         <td className={cn('py-2.5 pr-3 text-right tabular-nums', i === 0 && 'font-semibold')}>{r.closings} {deltaTag(r.deltaClosings)}</td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{r.cr}% {deltaTag(r.deltaCr, '%')}</td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{respByRaw.get(r.csName)?.firstReplyCount ? formatDuration(respByRaw.get(r.csName)!.firstReplyMedianMs) : '–'}</td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">{formatRupiah(r.revenue)}</td>
                       </tr>
-                    );
-                  })}
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -210,7 +224,7 @@ export function PerformancePanel({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">📉 Produk Tersusah Closing</CardTitle>
+          <CardTitle className="text-base">Produk Tersusah Closing</CardTitle>
           <CardDescription>CR terendah dulu (min 3 leads). ΔCR = perubahan vs periode sebelumnya.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -242,7 +256,7 @@ export function PerformancePanel({
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">📈 Trend Harian</CardTitle>
+          <CardTitle className="text-base">Trend Harian</CardTitle>
           <CardDescription>Leads & closing per hari di periode terpilih.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -282,7 +296,7 @@ export function PerformancePanel({
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">🧾 Laporan {reportPeriod === 'week' ? 'Mingguan' : 'Bulanan'}</CardTitle>
+              <CardTitle className="text-base">Laporan {reportPeriod === 'week' ? 'Mingguan' : 'Bulanan'}</CardTitle>
               <CardDescription>{report ? report.label : '…'} — total + Δ vs periode sebelumnya.</CardDescription>
             </div>
             <div className="flex gap-1 rounded-lg border bg-muted/30 p-1">
@@ -391,10 +405,26 @@ export function PerformancePanel({
                     <TableRow><TableCell colSpan={7} className="h-24 text-center text-muted-foreground">Belum ada data.</TableCell></TableRow>
                   ) : sortedCS.map((row, idx) => (
                     <TableRow key={row.csName}>
-                      <TableCell className="text-sm font-bold text-muted-foreground">
-                        {idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : idx + 1}
+                      <TableCell>
+                        <span
+                          className={cn(
+                            'inline-flex size-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
+                            idx === 0
+                              ? 'bg-primary text-primary-foreground'
+                              : idx < 3
+                                ? 'bg-accent text-accent-foreground'
+                                : 'text-muted-foreground',
+                          )}
+                        >
+                          {idx + 1}
+                        </span>
                       </TableCell>
-                      <TableCell className="font-medium">{row.csName}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2.5">
+                          <CsAvatar name={row.csName} size="sm" />
+                          <span className="font-medium">{row.csName}</span>
+                        </div>
+                      </TableCell>
                       <TableCell>{row.leads}</TableCell>
                       <TableCell className="font-bold text-positive">{row.closing}</TableCell>
                       <TableCell>

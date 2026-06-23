@@ -3,9 +3,10 @@
 import { useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight, ClipboardList } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ClipboardList, Users, CheckCircle2, TrendingUp, Wallet, Tag, Percent } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { Button } from '@/components/ui/button';
+import { MetricCard } from '@/components/ui/metric-card';
 import { formatRupiah } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { ReportCard, type ReportCardData } from '@/components/panel/report-card';
@@ -135,23 +136,24 @@ function GrandStrip({
   totals: { leads: number; closings: number; cr: number; revenue: number; discount: number; cpDiscount: number };
 }) {
   const items = [
-    { label: 'Total Leads', value: totals.leads },
-    { label: 'Total Closing', value: totals.closings },
-    { label: 'CR', value: crLabel(totals.cr, totals.leads) },
-    { label: 'Omzet', value: formatRupiah(totals.revenue) },
-    { label: 'Diskon', value: formatRupiah(totals.discount) },
-    { label: 'CP Diskon', value: formatRupiah(totals.cpDiscount) },
+    { label: 'Total Leads', value: String(totals.leads), icon: Users, tone: 'lead' as const },
+    { label: 'Total Closing', value: String(totals.closings), icon: CheckCircle2, tone: 'positive' as const },
+    { label: 'Closing Rate', value: crLabel(totals.cr, totals.leads), icon: TrendingUp, tone: 'positive' as const, emphasis: true },
+    { label: 'Omzet', value: formatRupiah(totals.revenue), icon: Wallet, tone: 'default' as const },
+    { label: 'Diskon', value: formatRupiah(totals.discount), icon: Tag, tone: 'amber' as const },
+    { label: 'CP Diskon', value: formatRupiah(totals.cpDiscount), icon: Percent, tone: 'default' as const },
   ];
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
       {items.map((it) => (
-        <div
+        <MetricCard
           key={it.label}
-          className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate"
-        >
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{it.label}</div>
-          <div className="mt-1.5 text-2xl font-semibold tabular-nums text-foreground">{it.value}</div>
-        </div>
+          label={it.label}
+          value={it.value}
+          icon={it.icon}
+          tone={it.tone}
+          emphasis={it.emphasis}
+        />
       ))}
     </div>
   );

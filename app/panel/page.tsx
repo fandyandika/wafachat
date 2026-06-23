@@ -3,19 +3,20 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from 'convex/react';
 import {
-  Activity,
-  BarChart3,
+  Users,
   CheckCircle2,
-  CircleAlert,
+  TrendingUp,
+  XCircle,
   Wallet,
-  Zap,
+  Clock,
+  CircleAlert,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { StatCard, type StatTone } from '@/components/ui/stat-card';
+import { MetricCard, type MetricTone } from '@/components/ui/metric-card';
 import { AnimatedNumber } from '@/components/ui/animated-number';
-import { useHighlightOnChange } from '@/components/ui/use-highlight-on-change';
 import {
   Sheet,
   SheetContent,
@@ -23,7 +24,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet';
-import { cn } from '@/lib/utils';
 import { api } from '@/convex/_generated/api';
 import type { Stats, PerformanceData } from '@/components/panel/types';
 import { pct, fmtTime, formatRupiah, formatDuration } from '@/lib/format';
@@ -82,50 +82,49 @@ export default function DashboardPage() {
     (): Array<{
       label: string;
       value: number;
-      detail: string;
+      hint: string;
       icon: React.ComponentType<{ className?: string }>;
-      tone: StatTone;
+      tone: MetricTone;
+      emphasis?: boolean;
       format?: (n: number) => string;
-      highlightable?: boolean;
     }> => [
       {
-        label: 'Orders',
+        label: 'Leads',
         value: stats.orders,
-        detail: 'Leads · HP unik',
-        icon: Activity,
+        hint: 'nomor HP unik',
+        icon: Users,
         tone: 'lead',
-        highlightable: true,
       },
       {
-        label: 'Total Closing',
+        label: 'Closing',
         value: totalClosing,
-        detail: 'Closing CS · periode ini',
+        hint: 'closing CS periode ini',
         icon: CheckCircle2,
         tone: 'positive',
-        highlightable: true,
       },
       {
-        label: 'Closing rate',
+        label: 'Closing Rate',
         value: crPerf,
-        detail: 'Closing / orders',
-        icon: BarChart3,
+        hint: 'closing dibagi leads',
+        icon: TrendingUp,
         tone: crPerf > 100 ? 'negative' : 'positive',
+        emphasis: true,
         format: pct,
-      },
-      {
-        label: 'Cancelled',
-        value: performance?.cancelled ?? stats.cancelled ?? 0,
-        detail: 'Customer cancelled',
-        icon: CircleAlert,
-        tone: 'negative',
       },
       {
         label: 'Omzet',
         value: revenue,
-        detail: 'Revenue periode',
+        hint: 'revenue periode',
         icon: Wallet,
-        tone: 'positive',
+        tone: 'default',
         format: formatRupiah,
+      },
+      {
+        label: 'Dibatalkan',
+        value: performance?.cancelled ?? stats.cancelled ?? 0,
+        hint: 'dibatalkan customer',
+        icon: XCircle,
+        tone: 'negative',
       },
     ],
     [crPerf, performance, revenue, stats, totalClosing],
@@ -133,41 +132,38 @@ export default function DashboardPage() {
 
   return (
     <>
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">
+          Metrik <span className="font-medium text-foreground">{periodLabel}</span>
+        </p>
+        <Button
+          variant="outline"
+          onClick={() => setDupOpen(true)}
+          disabled={dupCount === 0}
+          className="gap-2"
+        >
+          <CircleAlert className="size-4" />
+          Order Double
+          <Badge variant={dupCount > 0 ? 'warning' : 'secondary'}>{dupCount}</Badge>
+        </Button>
+      </div>
+
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {loading ? (
           Array.from({ length: 6 }).map((_, index) => <MetricSkeleton key={index} />)
         ) : (
           <>
             {cards.map((card) => <DashboardStatCard key={card.label} {...card} />)}
-            <StatCard
-              label="Kecepatan Balas CS"
+            <MetricCard
+              label="Respon CS"
               value={respData?.overall.firstReplyMedianMs != null ? formatDuration(respData.overall.firstReplyMedianMs) : '–'}
-              detail={`${periodLabel}${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
-              icon={Zap}
+              hint={`balas chat baru · ${periodLabel}${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
+              icon={Clock}
               tone="default"
             />
           </>
         )}
       </section>
-
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => setDupOpen(true)}
-          disabled={dupCount === 0}
-          className={cn(
-            'inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-medium transition-colors disabled:cursor-default',
-            dupCount > 0
-              ? 'border-amber-500/40 bg-amber-50 text-amber-700 hover:bg-amber-100'
-              : 'border-border bg-card text-muted-foreground',
-          )}
-        >
-          <CircleAlert className="size-4" />
-          Order Double
-          <Badge variant={dupCount > 0 ? 'warning' : 'secondary'}>{dupCount}</Badge>
-        </button>
-        <span className="text-xs text-muted-foreground">Kroscek customer dengan ≥2 order di periode ini.</span>
-      </div>
 
       <Sheet open={dupOpen} onOpenChange={setDupOpen}>
         <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
@@ -220,38 +216,40 @@ export default function DashboardPage() {
 function DashboardStatCard({
   label,
   value,
-  detail,
+  hint,
   icon,
   tone,
+  emphasis,
   format,
-  highlightable,
 }: {
   label: string;
   value: number;
-  detail: string;
+  hint: string;
   icon: React.ComponentType<{ className?: string }>;
-  tone: StatTone;
+  tone: MetricTone;
+  emphasis?: boolean;
   format?: (n: number) => string;
-  highlightable?: boolean;
 }) {
-  const highlight = useHighlightOnChange(highlightable ? value : undefined);
   return (
-    <StatCard
+    <MetricCard
       label={label}
       value={<AnimatedNumber value={value} format={format} />}
-      detail={detail}
+      hint={hint}
       icon={icon}
       tone={tone}
-      highlight={highlight}
+      emphasis={emphasis}
     />
   );
 }
 
 function MetricSkeleton() {
   return (
-    <div className="flex flex-col gap-2 rounded-2xl border border-border bg-card p-5 shadow-sm">
-      <Skeleton className="h-3 w-24" />
-      <Skeleton className="h-8 w-16" />
+    <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5 shadow-sm">
+      <div className="flex items-center justify-between">
+        <Skeleton className="h-3 w-20" />
+        <Skeleton className="size-8 rounded-xl" />
+      </div>
+      <Skeleton className="h-7 w-24" />
       <Skeleton className="h-3 w-28" />
     </div>
   );
