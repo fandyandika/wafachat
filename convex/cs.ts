@@ -28,7 +28,7 @@ export const listCs = query({
 
     const configs = await ctx.db.query("csConfigs").collect();
     const configByKey = new Map(configs.map((c) => [csKey(c.csName), c]));
-    const keys = new Set<string>([...dataName.keys(), ...configByKey.keys()].filter(Boolean));
+    const keys = Array.from(new Set<string>([...Array.from(dataName.keys()), ...Array.from(configByKey.keys())].filter(Boolean)));
 
     const rows: CsRow[] = [];
     for (const k of keys) {
