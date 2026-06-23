@@ -40,7 +40,7 @@ function PerformanceTable({ columns, rows, title }: { columns: string[]; rows: A
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>Hari ini, dihitung dari unique leads dan final recap closing.</CardDescription>
+        <CardDescription>Periode terpilih — dihitung dari leads unik & final recap closing.</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="overflow-hidden rounded-lg border">
@@ -118,8 +118,6 @@ export function PerformancePanel({
     { label: 'Dibatalkan', value: data?.cancelled ?? 0, tone: 'text-destructive' },
   ];
 
-  const sortedCS = [...(data?.cs ?? [])].sort((a, b) => b.closing - a.closing);
-  const maxCSClosing = sortedCS[0]?.closing ?? 1;
   const sortedProducts = [...(data?.products ?? [])].sort((a, b) => b.closing - a.closing);
   const respByRaw = new Map((responseTimes ?? []).map((r) => [r.csNameRaw, r]));
 
@@ -155,6 +153,7 @@ export function PerformancePanel({
         ))}
       </div>
 
+      {perfTab === 'cs' && (
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Leaderboard CS</CardTitle>
@@ -231,7 +230,9 @@ export function PerformancePanel({
           )}
         </CardContent>
       </Card>
+      )}
 
+      {perfTab === 'product' && (
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Produk Tersusah Closing</CardTitle>
@@ -263,7 +264,9 @@ export function PerformancePanel({
           )}
         </CardContent>
       </Card>
+      )}
 
+      {perfTab === 'summary' && (
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Trend Harian</CardTitle>
@@ -301,7 +304,9 @@ export function PerformancePanel({
           )}
         </CardContent>
       </Card>
+      )}
 
+      {perfTab === 'summary' && (
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
@@ -359,104 +364,6 @@ export function PerformancePanel({
           )}
         </CardContent>
       </Card>
-
-      {/* Tab content */}
-      {perfTab === 'summary' && (
-        <div className="grid gap-4 xl:grid-cols-2">
-          <div className="space-y-1">
-            <PerformanceTable
-              columns={['Produk', 'Leads', 'Closing', 'CR', 'Omzet']}
-              rows={sortedProducts.map((row) => [
-                row.product,
-                row.leads,
-                row.closing,
-                `${row.cr}%`,
-                formatRupiah(row.revenue),
-              ])}
-              title="Produk Terlaris"
-            />
-          </div>
-          <PerformanceTable
-            columns={['CS', 'Leads', 'Closing', 'CR', 'Omzet']}
-            rows={sortedCS.map((row) => [
-              row.csName,
-              row.leads,
-              row.closing,
-              `${row.cr}%`,
-              formatRupiah(row.revenue),
-            ])}
-            title="Ranking CS"
-          />
-        </div>
-      )}
-
-      {perfTab === 'cs' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Performa per CS</CardTitle>
-            <CardDescription>Diurutkan berdasarkan closing</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-hidden rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-8">#</TableHead>
-                    <TableHead>CS</TableHead>
-                    <TableHead>Percakapan</TableHead>
-                    <TableHead>Closing</TableHead>
-                    <TableHead>Conversion Rate</TableHead>
-                    <TableHead>Omzet</TableHead>
-                    <TableHead>Diskon</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sortedCS.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} className="h-24 text-center text-muted-foreground">Belum ada data.</TableCell></TableRow>
-                  ) : sortedCS.map((row, idx) => (
-                    <TableRow key={row.csName}>
-                      <TableCell>
-                        <span
-                          className={cn(
-                            'inline-flex size-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
-                            idx === 0
-                              ? 'bg-primary text-primary-foreground'
-                              : idx < 3
-                                ? 'bg-accent text-accent-foreground'
-                                : 'text-muted-foreground',
-                          )}
-                        >
-                          {idx + 1}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2.5">
-                          <CsAvatar name={row.csName} size="sm" />
-                          <span className="font-medium">{row.csName}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>{row.leads}</TableCell>
-                      <TableCell className="font-bold text-positive">{row.closing}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
-                            <div
-                              className="h-full rounded-full bg-positive"
-                              style={{ width: `${row.cr}%` }}
-                            />
-                          </div>
-                          <span className="text-xs font-semibold text-positive">{row.cr}%</span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-medium">{formatRupiah(row.revenue)}</TableCell>
-                      <TableCell className="text-muted-foreground">{formatRupiah(row.discount)}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
       )}
 
       {perfTab === 'product' && (
