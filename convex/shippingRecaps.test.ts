@@ -116,3 +116,24 @@ test("getPerformance: closing groups under the order product name, not the messa
   expect(row.leads).toBe(1);
   expect(row.closing).toBe(1);
 });
+
+test("renameCsName: renames CS across orders/recaps/conversations, others untouched", async () => {
+  const t = convexTest(schema);
+  const ord = { products: "", productName: "Q", productsSubtotal: "", shippingCost: "", total: "", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu" as const, aiEligible: true, createdAt: t0, updatedAt: t0 };
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", { ...ord, orderId: "O-1", customerName: "A", customerPhone: "62811", assignedCsName: "Afisah" });
+    await ctx.db.insert("orders", { ...ord, orderId: "O-2", customerName: "B", customerPhone: "62812", assignedCsName: "Lila" });
+    await ctx.db.insert("shippingRecaps", { orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "Afisah", recipientName: "A", recipientPhone: "x", recipientAddress: "", recipientDistrict: "", recipientCity: "", packageContent: "Q", paymentMethod: "cod" as const, flags: [], sourceMessageText: "", version: 1, closedAt: t0, status: "ready" as const, createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("conversations", { orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Afisah", status: "active" as const, aiEnabled: false, note: "", createdAt: t0, updatedAt: t0 });
+  });
+  const res = await t.mutation(api.shippingRecaps.renameCsName, { from: "Afisah", to: "Nabila" });
+  expect(res).toEqual({ from: "Afisah", to: "Nabila", orders: 1, recaps: 1, conversations: 1 });
+  await t.run(async (ctx) => {
+    const o1 = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-1")).unique();
+    expect(o1!.assignedCsName).toBe("Nabila");
+    const o2 = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-2")).unique();
+    expect(o2!.assignedCsName).toBe("Lila"); // untouched
+    const rec = (await ctx.db.query("shippingRecaps").collect())[0];
+    expect(rec.csName).toBe("Nabila");
+  });
+});

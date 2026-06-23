@@ -11,6 +11,7 @@ test("isInternalTestPhone: owner/admin/CS numbers are excluded", () => {
     "6282321381742", // CS Risma line
     "6285210047441", // CS Lila line
     "6282113515152", // CS Azelia line
+    "6281220823210", // CS Nabila line
   ];
   for (const phone of excluded) {
     expect(isInternalTestPhone(phone)).toBe(true);

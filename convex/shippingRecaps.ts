@@ -1318,6 +1318,39 @@ export const backfillCsNameByOrderIds = mutation({
   },
 });
 
+// One-off admin: rename a CS everywhere (orders.assignedCsName / shippingRecaps.csName /
+// conversations.assignedCsName) — e.g. a placeholder name to the real one.
+// Run via: npx convex run shippingRecaps:renameCsName '{"from":"Afisah","to":"Nabila"}'
+export const renameCsName = mutation({
+  args: { from: v.string(), to: v.string() },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    let orders = 0;
+    for (const o of await ctx.db.query("orders").collect()) {
+      if (o.assignedCsName === args.from) {
+        await ctx.db.patch(o._id, { assignedCsName: args.to, updatedAt: now });
+        orders++;
+      }
+    }
+    let recaps = 0;
+    for (const r of await ctx.db.query("shippingRecaps").collect()) {
+      if (r.csName === args.from) {
+        await ctx.db.patch(r._id, { csName: args.to, updatedAt: now });
+        recaps++;
+      }
+    }
+    let conversations = 0;
+    for (const c of await ctx.db
+      .query("conversations")
+      .withIndex("by_assignedCsName_status", (q) => q.eq("assignedCsName", args.from))
+      .collect()) {
+      await ctx.db.patch(c._id, { assignedCsName: args.to, updatedAt: now });
+      conversations++;
+    }
+    return { from: args.from, to: args.to, orders, recaps, conversations };
+  },
+});
+
 // One-off backfill: patch customerName + csName on conversations/orders/recaps by phone number.
 // Run via: npx convex run shippingRecaps:backfillByPhone '{"entries":[{"phone":"6285260251151","customerName":"Fika Syi Farol","csName":"CS Risma"}]}'
 export const backfillByPhone = mutation({

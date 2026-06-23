@@ -29,6 +29,7 @@ const INTERNAL_TEST_PHONES = new Set([
   "6282321381742", // CS Risma line
   "6285210047441", // CS Lila line
   "6282113515152", // CS Azelia line
+  "6281220823210", // CS Nabila line
 ]);
 
 export function isInternalTestPhone(value: string | undefined): boolean {
