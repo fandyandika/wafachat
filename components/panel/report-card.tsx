@@ -64,10 +64,12 @@ export function ReportCard({
           )}
         </div>
         {resp && resp.firstReplyCount > 0 && (
-          <div className={cn('flex items-center gap-2 border-t pt-2 text-sm', resp.firstReplyCount < 3 && 'opacity-50')}>
-            <span className="text-muted-foreground">⚡ Respon</span>
-            <span className="font-medium tabular-nums text-foreground">{formatDuration(resp.firstReplyMedianMs)}</span>
-            <span className="text-xs text-muted-foreground">· p90 {formatDuration(resp.firstReplyP90Ms)} (n={resp.firstReplyCount})</span>
+          <div className={cn('border-t pt-2', resp.firstReplyCount < 3 && 'opacity-50')}>
+            <div className="flex items-center justify-between gap-2 text-sm">
+              <span className="text-muted-foreground">⚡ Balas chat baru</span>
+              <span className="font-medium tabular-nums text-foreground">{formatDuration(resp.firstReplyMedianMs)}</span>
+            </div>
+            <div className="mt-0.5 text-xs text-muted-foreground">90% di bawah {formatDuration(resp.firstReplyP90Ms)} · {resp.firstReplyCount} chat</div>
           </div>
         )}
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 border-t pt-3 text-sm">

@@ -140,9 +140,9 @@ export default function DashboardPage() {
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard
-          label="Avg respon"
+          label="Kecepatan Balas CS"
           value={respData?.overall.firstReplyMedianMs != null ? formatDuration(respData.overall.firstReplyMedianMs) : '–'}
-          detail={`First-reply median${respData ? ` · n=${respData.overall.firstReplyCount}` : ''}`}
+          detail={`biasanya balas chat baru${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
           icon={Zap}
           tone="default"
         />

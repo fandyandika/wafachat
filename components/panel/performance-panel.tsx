@@ -177,8 +177,8 @@ export function PerformancePanel({
                     <th className="py-1 pr-3">Leads (Δ)</th>
                     <th className="py-1 pr-3">Closing (Δ)</th>
                     <th className="py-1 pr-3">CR (Δ)</th>
-                    <th className="py-1 pr-3">Respon</th>
-                    <th className="py-1 pr-3">p90</th>
+                    <th className="py-1 pr-3">Balas chat</th>
+                    <th className="py-1 pr-3">90% di bawah</th>
                     <th className="py-1 pr-3">Omzet</th>
                   </tr>
                 </thead>

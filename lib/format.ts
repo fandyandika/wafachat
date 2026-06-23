@@ -33,10 +33,10 @@ export function fmtTime(ms: number): string {
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || Number.isNaN(ms)) return '–';
   const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
+  if (s < 60) return `${s} dtk`;
   const m = Math.round(s / 60);
-  if (m < 60) return `${m}m`;
+  if (m < 60) return `${m} mnt`;
   const h = Math.floor(m / 60);
   const rem = m % 60;
-  return rem ? `${h}j ${rem}m` : `${h}j`;
+  return rem ? `${h} jam ${rem} mnt` : `${h} jam`;
 }
