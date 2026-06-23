@@ -79,6 +79,7 @@ export default defineSchema({
     externalMessageId: v.optional(v.string()),
     createdAt: v.number(),
   })
+    .index("by_createdAt", ["createdAt"])
     .index("by_conversation_createdAt", ["conversationId", "createdAt"])
     .index("by_customerPhone_createdAt", ["customerPhone", "createdAt"])
     .index("by_orderId_createdAt", ["orderId", "createdAt"])
