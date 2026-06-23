@@ -31,6 +31,7 @@ export function ReportCard({
   delta?: ReportDelta | null;
 }) {
   const [copied, setCopied] = useState(false);
+  const [productsExpanded, setProductsExpanded] = useState(false);
   const onCopy = async () => {
     try {
       await navigator.clipboard.writeText(reportText(card, label));
@@ -96,19 +97,35 @@ export function ReportCard({
           </div>
         </div>
 
-        {/* Per-product breakdown */}
-        <div className="space-y-1 border-t pt-3">
+        {/* Per-product breakdown — bars + top 5, the rest collapsed (sinks the 0-lead SKU fragments) */}
+        <div className="space-y-2 border-t pt-3">
           {card.products.length === 0 ? (
             <div className="text-sm text-muted-foreground">Belum ada produk.</div>
           ) : (
-            card.products.map((p) => (
-              <div key={p.product} className="flex items-center justify-between gap-2 text-sm">
-                <span className="truncate text-foreground">{p.product}</span>
-                <span className="shrink-0 tabular-nums text-muted-foreground">
-                  {crLabel(p.cr, p.leads)} ({p.closings}/{p.leads})
-                </span>
-              </div>
-            ))
+            <>
+              {(productsExpanded ? card.products : card.products.slice(0, 5)).map((p) => (
+                <div key={p.product} className="flex items-center gap-2.5 text-sm">
+                  <span className="min-w-0 flex-1 truncate text-foreground">{p.product}</span>
+                  {p.leads > 0 && (
+                    <div className="hidden h-1.5 w-12 shrink-0 overflow-hidden rounded-full bg-muted sm:block">
+                      <div className={cn('h-full rounded-full', crBar(p.cr))} style={{ width: `${clampPct(p.cr)}%` }} />
+                    </div>
+                  )}
+                  <span className="shrink-0 tabular-nums text-muted-foreground">
+                    {crLabel(p.cr, p.leads)} <span className="text-xs">({p.closings}/{p.leads})</span>
+                  </span>
+                </div>
+              ))}
+              {card.products.length > 5 && (
+                <button
+                  type="button"
+                  onClick={() => setProductsExpanded((v) => !v)}
+                  className="text-xs font-medium text-primary transition-colors hover:text-primary/80"
+                >
+                  {productsExpanded ? 'Sembunyikan' : `Lihat ${card.products.length - 5} produk lainnya`}
+                </button>
+              )}
+            </>
           )}
         </div>
 
