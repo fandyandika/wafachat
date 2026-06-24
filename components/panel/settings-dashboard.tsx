@@ -23,7 +23,7 @@ type CsRow = {
 
 function TeamSection() {
   const [users, setUsers] = useState<Array<{ email: string; name: string; role: 'admin' | 'cs'; isActive: boolean }>>([]);
-  const [form, setForm] = useState({ email: '', name: '', role: 'cs', password: '' });
+  const [form, setForm] = useState<{ email: string; name: string; role: 'admin' | 'cs'; password: string }>({ email: '', name: '', role: 'cs', password: '' });
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -68,7 +68,7 @@ function TeamSection() {
         <div className="grid gap-2 border-t border-border pt-4 sm:grid-cols-2">
           <input className="rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Nama" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           <input className="rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-          <select className="rounded-lg border border-input bg-background px-3 py-2 text-sm" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+          <select className="rounded-lg border border-input bg-background px-3 py-2 text-sm" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as 'admin' | 'cs' })}>
             <option value="cs">CS</option>
             <option value="admin">Admin</option>
           </select>
