@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, type ComponentType } from 'react';
-import { Copy, Check, Zap, Trophy, Crown } from 'lucide-react';
+import { Copy, Check, Zap, Trophy, Crown, Clock } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,7 +16,7 @@ import { csKey } from '@/lib/cs-key';
 
 export type ReportCardData = ReportCsCard & { duplicates: number; revenue: number };
 
-export type RespStat = { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number };
+export type RespStat = { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number; slaBreaches: number };
 
 export type ReportDelta = { leads: number; closings: number; cr: number };
 
@@ -154,11 +154,17 @@ export function ReportCard({
         </div>
 
         {resp && resp.firstReplyCount > 0 && (
-          <div className={cn('flex items-center justify-between gap-2 border-t pt-3 text-sm', resp.firstReplyCount < 3 && 'opacity-50')}>
-            <span className="flex items-center gap-1.5 text-muted-foreground"><Zap className="size-3.5 text-primary" /> Balas chat baru</span>
-            <span className="font-medium tabular-nums text-foreground">
-              {formatDuration(resp.firstReplyMedianMs)} <span className="font-normal text-muted-foreground">· {resp.firstReplyCount} chat</span>
-            </span>
+          <div className="space-y-1.5 border-t pt-3 text-sm">
+            <div className={cn('flex items-center justify-between gap-2', resp.firstReplyCount < 3 && 'opacity-50')}>
+              <span className="flex items-center gap-1.5 text-muted-foreground"><Zap className="size-3.5 text-primary" /> Balas chat baru</span>
+              <span className="font-medium tabular-nums text-foreground">
+                {formatDuration(resp.firstReplyMedianMs)} <span className="font-normal text-muted-foreground">· {resp.firstReplyCount} chat</span>
+              </span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-muted-foreground"><Clock className="size-3.5" /> Lewat SLA (&gt;15m)</span>
+              <span className={cn('font-medium tabular-nums', resp.slaBreaches > 0 ? 'text-destructive' : 'text-muted-foreground')}>{resp.slaBreaches} chat</span>
+            </div>
           </div>
         )}
 
