@@ -202,4 +202,15 @@ export default defineSchema({
     active: v.boolean(),
     createdAt: v.number(),
   }).index("by_active", ["active"]),
+
+  users: defineTable({
+    email: v.string(),
+    name: v.string(),
+    passwordHash: v.string(),
+    role: v.union(v.literal("admin"), v.literal("cs")),
+    isActive: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    lastLoginAt: v.optional(v.number()),
+  }).index("by_email", ["email"]),
 });

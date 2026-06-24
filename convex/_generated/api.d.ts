@@ -9,6 +9,7 @@
  */
 
 import type * as analytics from "../analytics.js";
+import type * as auth from "../auth.js";
 import type * as closingRules from "../closingRules.js";
 import type * as cs from "../cs.js";
 import type * as csConfigs from "../csConfigs.js";
@@ -17,6 +18,7 @@ import type * as http from "../http.js";
 import type * as lib from "../lib.js";
 import type * as messages from "../messages.js";
 import type * as metrics from "../metrics.js";
+import type * as passwordHash from "../passwordHash.js";
 import type * as responseTime from "../responseTime.js";
 import type * as responseTimeMath from "../responseTimeMath.js";
 import type * as settings from "../settings.js";
@@ -31,6 +33,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   analytics: typeof analytics;
+  auth: typeof auth;
   closingRules: typeof closingRules;
   cs: typeof cs;
   csConfigs: typeof csConfigs;
@@ -39,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   lib: typeof lib;
   messages: typeof messages;
   metrics: typeof metrics;
+  passwordHash: typeof passwordHash;
   responseTime: typeof responseTime;
   responseTimeMath: typeof responseTimeMath;
   settings: typeof settings;
