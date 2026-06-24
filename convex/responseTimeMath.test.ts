@@ -55,3 +55,43 @@ test("pairResponseEvents: multiple inbounds before a reply use the FIRST", () =>
   expect(r.firstReplyMs).toBe(60000);
   expect(r.allReplyMs).toEqual([60000]);
 });
+
+import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
+
+// WIB (UTC+7) wall-clock -> UTC ms helper for tests.
+const wib = (y: number, mo: number, d: number, h: number, mi: number) => Date.UTC(y, mo, d, h, mi) - 7 * 60 * 60 * 1000;
+
+test("businessMinutesBetween counts only 05:30-18:00 WIB", () => {
+  // 10:00 -> 10:20 same day = 20 active min
+  expect(businessMinutesBetween(wib(2026, 5, 24, 10, 0), wib(2026, 5, 24, 10, 20))).toBe(20);
+  // 17:55 -> next 06:00 = 5 (17:55-18:00) + 30 (05:30-06:00) = 35
+  expect(businessMinutesBetween(wib(2026, 5, 24, 17, 55), wib(2026, 5, 25, 6, 0))).toBe(35);
+  // 20:00 -> 20:10 (fully off-hours) = 0
+  expect(businessMinutesBetween(wib(2026, 5, 24, 20, 0), wib(2026, 5, 24, 20, 10))).toBe(0);
+  // 20:00 -> next 05:40 = 10 (05:30-05:40)
+  expect(businessMinutesBetween(wib(2026, 5, 24, 20, 0), wib(2026, 5, 25, 5, 40))).toBe(10);
+  // end <= start
+  expect(businessMinutesBetween(wib(2026, 5, 24, 10, 0), wib(2026, 5, 24, 10, 0))).toBe(0);
+});
+
+test("isSlaBreach: strictly greater than threshold", () => {
+  // exactly 15 active min -> not a breach
+  expect(isSlaBreach(wib(2026, 5, 24, 10, 0), wib(2026, 5, 24, 10, 15))).toBe(false);
+  // 16 active min -> breach
+  expect(isSlaBreach(wib(2026, 5, 24, 10, 0), wib(2026, 5, 24, 10, 16))).toBe(true);
+});
+
+test("pairResponseEvents returns first reply timestamps", () => {
+  const i = wib(2026, 5, 24, 10, 0);
+  const o = wib(2026, 5, 24, 10, 5);
+  const r = pairResponseEvents([
+    { direction: "inbound", messageType: "text", role: "customer", createdAt: i },
+    { direction: "outbound", messageType: "text", role: "cs", createdAt: o },
+  ]);
+  expect(r.firstInboundAt).toBe(i);
+  expect(r.firstReplyAt).toBe(o);
+  // no reply -> nulls
+  const r2 = pairResponseEvents([{ direction: "inbound", messageType: "text", role: "customer", createdAt: i }]);
+  expect(r2.firstInboundAt).toBeNull();
+  expect(r2.firstReplyAt).toBeNull();
+});

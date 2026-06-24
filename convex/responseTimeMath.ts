@@ -4,6 +4,34 @@
 
 export type RtMessage = { direction: "inbound" | "outbound"; messageType: string; role: string; createdAt: number };
 
+const JAK_MS = 7 * 60 * 60 * 1000;
+export const SLA_THRESHOLD_MIN = 15;
+export const BH_START_MIN = 330; // 05:30 WIB
+export const BH_END_MIN = 1080; // 18:00 WIB
+
+/** Minutes within [start,end] that fall inside the daily [05:30,18:00] WIB active window. */
+export function businessMinutesBetween(startMs: number, endMs: number, startMin = BH_START_MIN, endMin = BH_END_MIN): number {
+  if (endMs <= startMs) return 0;
+  const DAY = 86_400_000;
+  // UTC ms of the WIB midnight that contains startMs.
+  const firstMidnight = Math.floor((startMs + JAK_MS) / DAY) * DAY - JAK_MS;
+  let total = 0;
+  for (let i = 0; i < 14; i++) {
+    const dayMid = firstMidnight + i * DAY;
+    if (dayMid > endMs) break;
+    const winStart = dayMid + startMin * 60_000;
+    const winEnd = dayMid + endMin * 60_000;
+    const lo = Math.max(startMs, winStart);
+    const hi = Math.min(endMs, winEnd);
+    if (hi > lo) total += (hi - lo) / 60_000;
+  }
+  return total;
+}
+
+export function isSlaBreach(inboundAt: number, replyAt: number, thresholdMin = SLA_THRESHOLD_MIN): boolean {
+  return businessMinutesBetween(inboundAt, replyAt) > thresholdMin;
+}
+
 export function median(nums: number[]): number | null {
   if (nums.length === 0) return null;
   const s = [...nums].sort((a, b) => a - b);
@@ -18,24 +46,28 @@ export function percentile(nums: number[], p: number): number | null {
   return s[Math.min(rank, s.length) - 1];
 }
 
-export function pairResponseEvents(msgs: RtMessage[]): { firstReplyMs: number | null; allReplyMs: number[] } {
+export function pairResponseEvents(msgs: RtMessage[]): { firstReplyMs: number | null; allReplyMs: number[]; firstInboundAt: number | null; firstReplyAt: number | null } {
   const allReplyMs: number[] = [];
   let firstReplyMs: number | null = null;
+  let firstInboundAt: number | null = null;
+  let firstReplyAt: number | null = null;
   let pendingInboundAt: number | null = null;
   for (const m of msgs) {
     if (m.direction === "inbound") {
       if (pendingInboundAt === null) pendingInboundAt = m.createdAt;
       continue;
     }
-    // outbound
     const isReply = m.messageType !== "template" && m.role !== "system";
     if (isReply && pendingInboundAt !== null) {
       const gap = m.createdAt - pendingInboundAt;
       allReplyMs.push(gap);
-      if (firstReplyMs === null) firstReplyMs = gap;
+      if (firstReplyMs === null) {
+        firstReplyMs = gap;
+        firstInboundAt = pendingInboundAt;
+        firstReplyAt = m.createdAt;
+      }
       pendingInboundAt = null;
     }
-    // non-reply outbound (template/system): ignore, do NOT reset pending
   }
-  return { firstReplyMs, allReplyMs };
+  return { firstReplyMs, allReplyMs, firstInboundAt, firstReplyAt };
 }
