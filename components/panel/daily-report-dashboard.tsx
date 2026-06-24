@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info, Clock, Crown } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { csKey } from '@/lib/cs-key';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,7 @@ import { crLabel } from '@/components/panel/report-text';
 import {
   JAK_MS, DATA_CUTOFF_MS, clampStartToCutoff, currentReportLabelDate, reportWindowForLabelDate, wibDateParts,
 } from '@/components/panel/report-window';
+import { computeQueenCs } from '@/lib/queen';
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 const DAYS_SHORT = ['Ahad', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
@@ -117,6 +118,24 @@ export function DailyReportDashboard() {
   }
   const showHighlights = !csName && allCs.length > 0 && (topClosing?.closings ?? 0) > 0;
 
+  const queen = !csName
+    ? computeQueenCs(
+        allCs.map((c) => {
+          const r = respByCs.get(c.csName);
+          return {
+            csName: c.csName,
+            closings: c.closings,
+            cr: c.cr,
+            leads: c.leads,
+            respMedianMs: r?.firstReplyMedianMs ?? null,
+            respCount: r?.firstReplyCount ?? 0,
+          };
+        }),
+      )
+    : null;
+  const queenName = queen?.csName;
+  const queenCard = queenName ? allCs.find((c) => c.csName === queenName) : undefined;
+
   // Peringkat by closing (getDailyReport already returns CS sorted by closing) + team-average CR.
   const rankByCs = new Map<string, number>();
   allCs.forEach((c, i) => rankByCs.set(c.csName, i + 1));
@@ -176,6 +195,9 @@ export function DailyReportDashboard() {
       ) : (
         <>
           <GrandStrip totals={report.totals} prev={prevValid ? (prevReport?.totals ?? null) : null} />
+          {queen && queenCard && (
+            <QueenHero name={queenCard.csName} closings={queenCard.closings} cr={queenCard.cr} avatarByKey={avatarByKey} />
+          )}
           {showHighlights && (
             <div>
               <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Sorotan</div>
@@ -209,6 +231,7 @@ export function DailyReportDashboard() {
                     delta={deltaFor(c)}
                     rewards={rewardsByCs.get(c.csName)}
                     avatarByKey={avatarByKey}
+                    isQueen={c.csName === queenName}
                   />
                 ))}
               </div>
@@ -304,6 +327,22 @@ function SlaSummary({ breaches, worstName, loading }: { breaches: number; worstN
     <div className="flex items-center gap-3 rounded-2xl border border-positive/20 bg-positive-soft/50 p-4">
       <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-positive-soft text-positive"><CheckCircle2 className="size-5" /></span>
       <div className="text-sm font-medium text-foreground">Semua chat dibalas dalam SLA (&lt;15m jam aktif).</div>
+    </div>
+  );
+}
+
+function QueenHero({ name, closings, cr, avatarByKey }: { name: string; closings: number; cr: number; avatarByKey: Map<string, string | null> }) {
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-amber-300/70 bg-gradient-to-r from-amber-50 to-yellow-50 p-4 shadow-sm ring-1 ring-amber-300/40">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
+        <Crown className="size-6" />
+      </span>
+      <CsAvatar name={name} size="md" src={avatarByKey.get(csKey(name)) ?? undefined} />
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">Queen CS · juara umum</div>
+        <div className="truncate text-base font-bold tracking-tight text-amber-900">{name}</div>
+        <div className="text-xs tabular-nums text-amber-700">{closings} closing · CR {Math.round(cr * 10) / 10}%</div>
+      </div>
     </div>
   );
 }
