@@ -1,17 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { verifySession, routeGuard } from '@/lib/auth-jwt';
 
-export function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
-  const session = req.cookies.get('auth_session')?.value;
-
-  if (pathname.startsWith('/panel') && session !== '1') {
-    return NextResponse.redirect(new URL('/login', req.url));
-  }
-
-  if (pathname === '/') {
-    return NextResponse.redirect(new URL(session === '1' ? '/panel' : '/login', req.url));
-  }
-
+export async function middleware(req: NextRequest) {
+  const session = await verifySession(req.cookies.get('auth_token')?.value);
+  const { redirect } = routeGuard(req.nextUrl.pathname, session);
+  if (redirect) return NextResponse.redirect(new URL(redirect, req.url));
   return NextResponse.next();
 }
 
