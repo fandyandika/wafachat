@@ -2,6 +2,16 @@
 
 Deferred items. Pull from here when needed.
 
+## Recently shipped (2026-06-24)
+- ✅ **Order Reconciler (gap-heal)** — n8n workflow `fFXsXmtn94tnocJu`, every 30 min + on-demand webhook `reconcile-orders`. Detects gaps in Berdu's per-day order sequence, backfills via `/order/detail` + `set_order` with the real `created_at`. Self-heals silent drops.
+- ✅ **Normalize node hardening** — order-sync now has `timeout: 10000` + 3 retries + visible `[order-sync] FAILED` logging (was a 300s hang that silently lost orders).
+- ✅ **Panel Team Auth** — per-user email+password login, admin/cs roles, JWT cookie, admin user-management in Settings → Tim. Replaced shared `PANEL_PASSWORD`. (spec/plan: `2026-06-24-panel-team-auth*`)
+- ✅ **Response time per CS** (#1 below), CS Management (photos/filters), SaaS redesign + gamification.
+
+## Hold — parked by owner (2026-06-24)
+- ⏸️ **Dashboard timezone filter (daily boundary)** — Dashboard "today" uses browser-local day; can mis-bucket orders at the midnight/4pm boundary. Laporan is immune (absolute UTC math). Owner chose to defer.
+- ⏸️ **Proactive alerts → Telegram/WA push** — see "Live alerts → Telegram" (#2). Parked for now.
+
 ## Hardening (optional, do when needed)
 
 ### HMAC verify on the KirimDev message webhook
@@ -25,13 +35,13 @@ Deferred items. Pull from here when needed.
 
 Pure monitoring, no AI, built on data/infra that already exists. Goal stays "monitoring first." Recommended order: #1 first (highest impact, data ready).
 
-### 1. ⚡ Response time per CS (speed-to-first-reply) — HIGHEST IMPACT
+### 1. ⚡ Response time per CS (speed-to-first-reply) — ✅ SHIPPED 2026-06-23
 - **Why:** in WA sales, speed-to-reply is the #1 *leading* indicator of closing (reply <5 min vs >1 hr can swing close rate 2-5×). Predicts closing, unlike the lagging closing-count.
 - **Data already there:** `messages` table has inbound (role `customer`) + outbound (role `cs`/`ai`) with `createdAt`. Per conversation: gap from a customer message → the next CS outbound = first-response time.
 - **Approach:** Convex query — per conversation, pair each inbound with the next outbound, take the gap; aggregate **median + p90 per CS** per range. Surface as a Dashboard KPI ("Avg respon: 4m") + a column in Performance per-CS table.
 - **Watch:** first response per conversation (not every message); restrict to business hours if noisy; exclude internal/CS phones (reuse `isInternalTestPhone`).
 
-### 2. 🔔 Live alerts → Telegram
+### 2. 🔔 Live alerts → Telegram — ⏸️ HOLD (parked by owner 2026-06-24)
 - **Why:** make the dashboard *proactive* — push when something's wrong instead of needing someone to watch it.
 - **Infra exists:** Telegram already wired (`WaFaChat · Telegram Setup` `Pu5qEcSpu7e7NV09`, `Telegram Callback` `PvMTP5Ex3kzvjNgG`).
 - **Alerts:** (a) **SLA breach** — an inbound lead with no CS reply in >X min during active hours; (b) a CS's CR drops sharply vs baseline; (c) leads spike with no closings (overload).
@@ -40,6 +50,36 @@ Pure monitoring, no AI, built on data/infra that already exists. Goal stays "mon
 ### 3. 🏆 Live leaderboard + pace-to-target
 - **Why:** gamify → motivate CS (visible ranking drives performance).
 - **Approach:** Performance page — real-time per-CS ranking (closing / CR / omzet / response-time today) + **pace vs daily target** (projected end-of-day from current rate). Targets configurable per CS. Reuses `getPerformance` (already per-CS).
+
+## Feature ideas — Laporan & SLA (proposed 2026-06-24)
+
+### 4. 🗓️ Period clarity in Laporan (Live vs Selesai at a glance)
+- **Why:** today the Live/Selesai status only shows per-CS card. Hard to tell at a glance whether the whole selected period is still accumulating or already sealed.
+- **What:** a single status indicator next to the date/calendar toggle: **🔴 LIVE — masih berjalan, tutup 16:00 WIB (sisa Xh)** for the current open-date window, or **✅ SELESAI — final** for a past sealed date. Complements (not replaces) the per-CS badges.
+- **Data:** reuses the existing 4pm-WIB open-date window logic; status is derived from the selected date vs the 16:00 seal. Low effort, high clarity.
+
+### 5. ⏱️ SLA-breach metric (chats that waited too long)
+- **Why:** median response-time shows the center; the actionable failure signal is *how many customers waited past SLA* (those are the lost-sale risks). The flip-side of #1.
+- **What:** count + % of first-responses exceeding an SLA threshold (default e.g. 15 min, configurable), shown (a) as an overall matrix tile in Laporan and (b) as a per-CS card line ("3 chat lewat SLA >15m", red if any).
+- **Data:** extends the existing response-time computation (`responseTimeMath` / `getResponseTimes`) — add a count-over-threshold; no new pipeline.
+
+## Growth / revenue ideas (proposed 2026-06-24)
+
+### 6. 💰 Follow-up otomatis order belum bayar (not_paid) — HIGH ROI
+- **Why:** many Berdu orders are `payment_status: not_paid` with no automated nudge → recoverable revenue leaking.
+- **What:** n8n scheduled workflow — find orders still `not_paid` at +1h / +1day → send a gentle WhatsApp reminder (approved template). Stop on payment. Reuses Berdu detail + KirimDev send.
+
+### 7. 🤖 AI draft reply (human-approved, ban-safe)
+- **Why:** revive the "AI" value without auto-reply ban risk (official API quality/tier).
+- **What:** AI drafts a reply from the knowledge-base + product docs; CS approves with one tap (Telegram inline / panel) before sending. Human-in-the-loop. (Related: re-enable AI Dashboard above.)
+
+### 8. 🔁 Repeat-buyer & upsell lens
+- **Why:** double-orders = loyal customers; books sell in series/bundles.
+- **What:** a "pembeli ulang" view + upsell candidate list (e.g. Quran Mapping → Buku Doa). Grow omzet from existing trust.
+
+### 9. 📈 Closing coaching insights
+- **Why:** turn analytics into action.
+- **What:** surface what drives higher closing (response speed, time-of-day, product) as concrete tips ("balas <5 min → closing 2× lebih tinggi").
 
 ## Notes / gotchas
 - **n8n write API on `n8n.miqra.dev`:** `n8n_update_partial_workflow` **`updateNode` WORKS** (confirmed 2026-06-22 — used for receiver `csName` map + order-pipeline `set_order`-before-gate fixes; saved, stayed active, zero downtime, no manual re-activate). The earlier "write API broken" note was wrong/transient. `create`/`delete`/`get`/`list`/`executions` also work. For `updateNode` jsCode, write regex escaping as `\\s+`/`\\+` (match the get-output JSON) so it round-trips. Read real webhook payloads via `n8n_executions get mode:full`.
