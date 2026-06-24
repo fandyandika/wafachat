@@ -72,3 +72,21 @@ test("getResponseTimes: csName filter", async () => {
   expect(r.cs[0].csName).toBe("CS B");
   expect(r.cs[0].firstReplyMedianMs).toBe(30000);
 });
+
+test("getResponseTimes counts SLA breaches (active-hours)", async () => {
+  const t = convexTest(schema);
+  const wib = (h: number, mi: number) => Date.UTC(2026, 5, 24, h, mi) - 7 * 60 * 60 * 1000;
+  await t.run(async (ctx) => {
+    const conv = await ctx.db.insert("conversations", {
+      orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Risma",
+      status: "active", aiEnabled: false, note: "", createdAt: wib(10, 0), updatedAt: wib(10, 0),
+    });
+    // breach: inbound 10:00, reply 10:20 (20 active min)
+    await ctx.db.insert("messages", { conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "inbound", role: "customer", messageType: "text", content: "hi", createdAt: wib(10, 0), source: "n8n" as const });
+    await ctx.db.insert("messages", { conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "outbound", role: "cs", messageType: "text", content: "hai", createdAt: wib(10, 20), source: "n8n" as const });
+  });
+  const res = await t.query(api.responseTime.getResponseTimes, { startAt: wib(0, 0), endAt: wib(23, 59) });
+  expect(res.overall.slaBreaches).toBe(1);
+  const risma = res.cs.find((c) => c.csName === "Risma");
+  expect(risma?.slaBreaches).toBe(1);
+});

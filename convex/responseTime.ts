@@ -2,7 +2,7 @@ import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { isInternalTestPhone, csKey } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
-import { median, percentile, pairResponseEvents, type RtMessage } from "./responseTimeMath";
+import { median, percentile, pairResponseEvents, isSlaBreach, type RtMessage } from "./responseTimeMath";
 
 export const getResponseTimes = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
@@ -31,15 +31,23 @@ export const getResponseTimes = query({
     const csByKey = new Map<string, string>();
     convOrder.forEach((key, i) => csByKey.set(key, (convDocs[i] as any)?.assignedCsName || "Unknown"));
 
-    const agg = new Map<string, { first: number[]; all: number[] }>();
+    const agg = new Map<string, { first: number[]; all: number[]; slaBreaches: number }>();
     const overallFirst: number[] = [];
+    let overallSlaBreaches = 0;
     for (const key of convOrder) {
-      const { firstReplyMs, allReplyMs } = pairResponseEvents(byConv.get(key)!);
+      const { firstReplyMs, allReplyMs, firstInboundAt, firstReplyAt } = pairResponseEvents(byConv.get(key)!);
       if (firstReplyMs === null && allReplyMs.length === 0) continue;
       const raw = csByKey.get(key) || "Unknown";
       let a = agg.get(raw);
-      if (!a) { a = { first: [], all: [] }; agg.set(raw, a); }
-      if (firstReplyMs !== null) { a.first.push(firstReplyMs); overallFirst.push(firstReplyMs); }
+      if (!a) { a = { first: [], all: [], slaBreaches: 0 }; agg.set(raw, a); }
+      if (firstReplyMs !== null) {
+        a.first.push(firstReplyMs);
+        overallFirst.push(firstReplyMs);
+        if (firstInboundAt !== null && firstReplyAt !== null && isSlaBreach(firstInboundAt, firstReplyAt)) {
+          a.slaBreaches++;
+          overallSlaBreaches++;
+        }
+      }
       a.all.push(...allReplyMs);
     }
 
@@ -51,6 +59,7 @@ export const getResponseTimes = query({
       firstReplyCount: a.first.length,
       ongoingMedianMs: median(a.all),
       ongoingCount: a.all.length,
+      slaBreaches: a.slaBreaches,
     }));
     if (args.csName) {
       const key = csKey(args.csName);
@@ -61,7 +70,7 @@ export const getResponseTimes = query({
     return {
       windowStart: args.startAt,
       windowEnd: args.endAt,
-      overall: { firstReplyMedianMs: median(overallFirst), firstReplyCount: overallFirst.length },
+      overall: { firstReplyMedianMs: median(overallFirst), firstReplyCount: overallFirst.length, slaBreaches: overallSlaBreaches },
       cs,
     };
   },
