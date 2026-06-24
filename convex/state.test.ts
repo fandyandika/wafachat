@@ -47,3 +47,29 @@ test("listConversations: includeClosed=false omits closed entirely", async () =>
   expect(phones).toContain("62811");
   expect(phones).not.toContain("62813");
 });
+
+test("listOrderCountersByPrefix returns sorted present counters for the date prefix only", async () => {
+  const t = convexTest(schema);
+  const now = Date.now();
+  await t.run(async (ctx) => {
+    const base = { customerPhone: "62811", customerName: "X", productName: "P", products: "P", productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "", assignedCsName: "Risma", source: "berdu" as const, aiEligible: false, updatedAt: now, createdAt: now };
+    await ctx.db.insert("orders", { ...base, orderId: "O-260624000009" });
+    await ctx.db.insert("orders", { ...base, orderId: "O-260624000010" });
+    await ctx.db.insert("orders", { ...base, orderId: "O-260624000012" }); // gap at 11
+    await ctx.db.insert("orders", { ...base, orderId: "O-260623000005" }); // different day -> excluded
+  });
+  const res = await t.query(api.state.listOrderCountersByPrefix, { datePrefix: "260624" });
+  expect(res.counters).toEqual([9, 10, 12]);
+  expect(res.min).toBe(9);
+  expect(res.max).toBe(12);
+  expect(res.count).toBe(3);
+});
+
+test("upsertOrderFromN8n honors explicit createdAt on insert (reconciler backfill keeps real order time)", async () => {
+  const t = convexTest(schema);
+  const backdated = Date.UTC(2026, 5, 23, 18, 10, 43); // real Berdu order time, not now
+  await t.mutation(api.state.upsertOrderFromN8n, { phone: "6285735647633", csName: "Risma", order_id: "O-260624000009", createdAt: backdated });
+  const order = await t.run(async (ctx) =>
+    ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-260624000009")).unique());
+  expect(order?.createdAt).toBe(backdated);
+});

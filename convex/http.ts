@@ -54,8 +54,16 @@ http.route({
         shippingDistrict: body.shippingDistrict ? String(body.shippingDistrict) : undefined,
         shippingCity: body.shippingCity ? String(body.shippingCity) : undefined,
         order_id: body.order_id ? String(body.order_id) : undefined,
+        createdAt: body.createdAt ? Number(body.createdAt) : undefined,
       });
       return jsonResponse({ ...result, _action: "set_order" });
+    }
+
+    if (action === "list_order_counters") {
+      const result = await ctx.runQuery(api.state.listOrderCountersByPrefix, {
+        datePrefix: String(body.datePrefix || ""),
+      });
+      return jsonResponse({ ...result, _action: "list_order_counters" });
     }
 
     if (action === "get_with_global") {
