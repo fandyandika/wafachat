@@ -27,7 +27,7 @@ const REWARD_ICON: Record<string, ComponentType<{ className?: string }>> = {
 };
 
 export function ReportCard({
-  card, label, isCurrent, resp, rank, avgCr, delta, rewards, avatarByKey,
+  card, label, isCurrent, resp, rank, avgCr, delta, rewards, avatarByKey, isQueen,
 }: {
   card: ReportCardData;
   label: { y: number; m: number; d: number; dow: number };
@@ -38,6 +38,7 @@ export function ReportCard({
   delta?: ReportDelta | null;
   rewards?: string[];
   avatarByKey?: Map<string, string | null>;
+  isQueen?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [productsExpanded, setProductsExpanded] = useState(false);
@@ -55,6 +56,7 @@ export function ReportCard({
     <Card className={cn(
       'transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30',
       rank === 1 && 'ring-1 ring-primary/20',
+      isQueen && 'ring-2 ring-amber-400/70',
     )}>
       <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -75,12 +77,25 @@ export function ReportCard({
           ) : (
             <Badge variant="secondary" className="shrink-0">Selesai</Badge>
           )}
+          {resp && resp.slaBreaches > 0 && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-semibold text-destructive"
+              title={`${resp.slaBreaches} chat lewat SLA (>15m)`}
+            >
+              <Clock className="size-3.5" /> {resp.slaBreaches}
+            </span>
+          )}
         </div>
         <Button size="icon-sm" variant="ghost" onClick={onCopy} aria-label="Copy teks WA" className="shrink-0 text-muted-foreground hover:text-foreground">
           {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
         </Button>
       </CardHeader>
       <CardContent className="space-y-4">
+        {isQueen && (
+          <div className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-100 to-yellow-100 px-2.5 py-1 text-xs font-bold text-amber-900 ring-1 ring-amber-300/60">
+            <Crown className="size-4 text-amber-500" /> Queen CS · juara umum
+          </div>
+        )}
         {/* Gamification: badge penghargaan untuk juara hari itu */}
         {rewards && rewards.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
@@ -154,17 +169,11 @@ export function ReportCard({
         </div>
 
         {resp && resp.firstReplyCount > 0 && (
-          <div className="space-y-1.5 border-t pt-3 text-sm">
-            <div className={cn('flex items-center justify-between gap-2', resp.firstReplyCount < 3 && 'opacity-50')}>
-              <span className="flex items-center gap-1.5 text-muted-foreground"><Zap className="size-3.5 text-primary" /> Balas chat baru</span>
-              <span className="font-medium tabular-nums text-foreground">
-                {formatDuration(resp.firstReplyMedianMs)} <span className="font-normal text-muted-foreground">· {resp.firstReplyCount} chat</span>
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 text-muted-foreground"><Clock className="size-3.5" /> Lewat SLA (&gt;15m)</span>
-              <span className={cn('font-medium tabular-nums', resp.slaBreaches > 0 ? 'text-destructive' : 'text-muted-foreground')}>{resp.slaBreaches} chat</span>
-            </div>
+          <div className={cn('flex items-center justify-between gap-2 border-t pt-3 text-sm', resp.firstReplyCount < 3 && 'opacity-50')}>
+            <span className="flex items-center gap-1.5 text-muted-foreground"><Zap className="size-3.5 text-primary" /> Balas chat baru</span>
+            <span className="font-medium tabular-nums text-foreground">
+              {formatDuration(resp.firstReplyMedianMs)} <span className="font-normal text-muted-foreground">· {resp.firstReplyCount} chat</span>
+            </span>
           </div>
         )}
 
