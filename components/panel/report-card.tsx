@@ -56,7 +56,7 @@ export function ReportCard({
     <Card className={cn(
       'transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30',
       rank === 1 && 'ring-1 ring-primary/20',
-      isQueen && 'ring-2 ring-gold/60',
+      isQueen && 'ring-2 ring-primary/50',
     )}>
       <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -92,7 +92,7 @@ export function ReportCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {isQueen && (
-          <div className="flex items-center gap-1.5 rounded-lg bg-gold-soft px-2.5 py-1 text-xs font-bold text-gold-foreground ring-1 ring-gold/40">
+          <div className="flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1 text-xs font-bold text-accent-foreground ring-1 ring-primary/30">
             <Crown className="size-4 text-gold" /> Queen CS · juara umum
           </div>
         )}

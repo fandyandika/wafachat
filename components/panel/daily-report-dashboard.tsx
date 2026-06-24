@@ -293,15 +293,15 @@ function PeriodStatusPill({ isCurrent, endAt, now }: { isCurrent: boolean; endAt
 
 function QueenHero({ name, closings, cr, avatarByKey }: { name: string; closings: number; cr: number; avatarByKey: Map<string, string | null> }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-gold/50 bg-gold-soft p-4 shadow-sm ring-1 ring-gold/25">
+    <div className="flex items-center gap-3 rounded-2xl border border-primary/30 bg-accent p-4 shadow-sm ring-1 ring-primary/20">
       <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-gold/15 text-gold">
         <Crown className="size-6" />
       </span>
       <CsAvatar name={name} size="md" src={avatarByKey.get(csKey(name)) ?? undefined} />
       <div className="min-w-0">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-gold-foreground">Queen CS · juara umum</div>
-        <div className="truncate text-base font-bold tracking-tight text-gold-foreground">{name}</div>
-        <div className="text-xs tabular-nums text-gold-foreground/70">{closings} closing · CR {Math.round(cr * 10) / 10}%</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-accent-foreground">Queen CS · juara umum</div>
+        <div className="truncate text-base font-bold tracking-tight text-accent-foreground">{name}</div>
+        <div className="text-xs tabular-nums text-accent-foreground/70">{closings} closing · CR {Math.round(cr * 10) / 10}%</div>
       </div>
     </div>
   );
