@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQuery } from 'convex/react';
 import { Upload, Trash2, Zap, MessageSquare, TrendingUp, Power } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
@@ -20,6 +20,65 @@ type CsRow = {
   reportingEnabled: boolean;
   isActive: boolean;
 };
+
+function TeamSection() {
+  const [users, setUsers] = useState<Array<{ email: string; name: string; role: 'admin' | 'cs'; isActive: boolean }>>([]);
+  const [form, setForm] = useState({ email: '', name: '', role: 'cs', password: '' });
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    const r = await fetch('/api/admin/users');
+    if (r.ok) setUsers((await r.json()).users);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function post(payload: Record<string, unknown>) {
+    setBusy(true); setErr(null);
+    const r = await fetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    setBusy(false);
+    if (!r.ok) { setErr((await r.json()).error || 'Gagal'); return false; }
+    await load();
+    return true;
+  }
+  async function addUser() {
+    if (!form.email || !form.name || !form.password) { setErr('Lengkapi semua field'); return; }
+    if (await post({ action: 'create', ...form })) setForm({ email: '', name: '', role: 'cs', password: '' });
+  }
+
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Tim</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        {err && <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{err}</div>}
+        <div className="space-y-2">
+          {users.map((u) => (
+            <div key={u.email} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-foreground">{u.name} <span className="text-xs text-muted-foreground">({u.role})</span></div>
+                <div className="truncate text-xs text-muted-foreground">{u.email}{!u.isActive && ' — nonaktif'}</div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => { const p = prompt(`Password baru untuk ${u.email}`); if (p) post({ action: 'reset', email: u.email, password: p }); }}>Reset</Button>
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => post({ action: 'setActive', email: u.email, isActive: !u.isActive })}>{u.isActive ? 'Nonaktifkan' : 'Aktifkan'}</Button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="grid gap-2 border-t border-border pt-4 sm:grid-cols-2">
+          <input className="rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Nama" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <input className="rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+          <select className="rounded-lg border border-input bg-background px-3 py-2 text-sm" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+            <option value="cs">CS</option>
+            <option value="admin">Admin</option>
+          </select>
+          <input className="rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Password awal" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <Button disabled={busy} onClick={addUser} className="sm:col-span-2">Tambah user</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export function SettingsDashboard() {
   const csList = useQuery(api.cs.listCs, {}) ?? [];
@@ -79,6 +138,8 @@ export function SettingsDashboard() {
 
   return (
     <div className="space-y-6">
+      <TeamSection />
+
       {err && (
         <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive">
           {err}
