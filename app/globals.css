@@ -43,6 +43,10 @@
     --lead-soft: oklch(0.95 0.03 252);
     --positive-soft: oklch(0.95 0.04 162);
     --negative-soft: oklch(0.95 0.04 27);
+    /* Achievement gold (gamification) — reserved for wins, tuned to the OKLCH system */
+    --gold: oklch(0.72 0.13 85);
+    --gold-soft: oklch(0.95 0.05 85);
+    --gold-foreground: oklch(0.42 0.09 75);
   }
   * {
     @apply border-border;

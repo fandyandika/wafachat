@@ -11,10 +11,9 @@ import { MetricCard, DeltaPill } from '@/components/ui/metric-card';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { AnimatedNumber } from '@/components/ui/animated-number';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
-import { formatRupiahShort, formatDuration } from '@/lib/format';
+import { formatRupiahShort } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/panel/report-card';
-import { crLabel } from '@/components/panel/report-text';
 import {
   JAK_MS, DATA_CUTOFF_MS, clampStartToCutoff, currentReportLabelDate, reportWindowForLabelDate, wibDateParts,
 } from '@/components/panel/report-window';
@@ -116,8 +115,6 @@ export function DailyReportDashboard() {
       fastestResp = { csName: c.csName, ms: r.firstReplyMedianMs };
     }
   }
-  const showHighlights = !csName && allCs.length > 0 && (topClosing?.closings ?? 0) > 0;
-
   const queen = !csName
     ? computeQueenCs(
         allCs.map((c) => {
@@ -198,16 +195,6 @@ export function DailyReportDashboard() {
           {queen && queenCard && (
             <QueenHero name={queenCard.csName} closings={queenCard.closings} cr={queenCard.cr} avatarByKey={avatarByKey} />
           )}
-          {showHighlights && (
-            <div>
-              <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Sorotan</div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                {topClosing && <HighlightCard title="Closing terbanyak" name={topClosing.csName} value={`${topClosing.closings} closing`} avatarByKey={avatarByKey} />}
-                {topCr && <HighlightCard title="CR tertinggi" name={topCr.csName} value={crLabel(topCr.cr, topCr.leads)} avatarByKey={avatarByKey} />}
-                {fastestResp && <HighlightCard title="Respon tercepat" name={fastestResp.csName} value={formatDuration(fastestResp.ms)} avatarByKey={avatarByKey} />}
-              </div>
-            </div>
-          )}
           {cards.length === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-card/50 p-10 text-center">
               <ClipboardList className="size-7 text-muted-foreground/60" />
@@ -242,32 +229,17 @@ export function DailyReportDashboard() {
   );
 }
 
-function HighlightCard({ title, name, value, avatarByKey }: { title: string; name: string; value: string; avatarByKey: Map<string, string | null> }) {
-  return (
-    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{title}</div>
-      <div className="mt-2 flex items-center gap-2.5">
-        <CsAvatar name={name} size="md" src={avatarByKey.get(csKey(name)) ?? undefined} />
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold tracking-tight">{name}</div>
-          <div className="text-xs tabular-nums text-muted-foreground">{value}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // Lean one-line summary: order-double + SLA status (detail lives in each CS card).
 function InfoStrip({ dup, sla, worstSla, loading }: { dup: number; sla: number; worstSla?: string; loading: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-border bg-card/40 px-3 py-2 text-xs">
       {dup > 0 ? (
-        <span className="inline-flex items-center gap-1.5 font-medium text-amber-700">
+        <span className="inline-flex items-center gap-1.5 font-medium text-muted-foreground">
           <Copy className="size-3.5 shrink-0" /> {dup} order double
           <Tooltip>
             <TooltipTrigger
               aria-label="Penjelasan order double"
-              className="inline-flex items-center justify-center rounded-full text-amber-600 transition-colors hover:text-amber-800 focus-visible:outline-none"
+              className="inline-flex items-center justify-center rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none"
             >
               <Info className="size-3.5" />
             </TooltipTrigger>
@@ -321,15 +293,15 @@ function PeriodStatusPill({ isCurrent, endAt, now }: { isCurrent: boolean; endAt
 
 function QueenHero({ name, closings, cr, avatarByKey }: { name: string; closings: number; cr: number; avatarByKey: Map<string, string | null> }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-amber-300/70 bg-gradient-to-r from-amber-50 to-yellow-50 p-4 shadow-sm ring-1 ring-amber-300/40">
-      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
+    <div className="flex items-center gap-3 rounded-2xl border border-gold/50 bg-gold-soft p-4 shadow-sm ring-1 ring-gold/25">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-gold/15 text-gold">
         <Crown className="size-6" />
       </span>
       <CsAvatar name={name} size="md" src={avatarByKey.get(csKey(name)) ?? undefined} />
       <div className="min-w-0">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-700">Queen CS · juara umum</div>
-        <div className="truncate text-base font-bold tracking-tight text-amber-900">{name}</div>
-        <div className="text-xs tabular-nums text-amber-700">{closings} closing · CR {Math.round(cr * 10) / 10}%</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-gold-foreground">Queen CS · juara umum</div>
+        <div className="truncate text-base font-bold tracking-tight text-gold-foreground">{name}</div>
+        <div className="text-xs tabular-nums text-gold-foreground/70">{closings} closing · CR {Math.round(cr * 10) / 10}%</div>
       </div>
     </div>
   );

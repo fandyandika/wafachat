@@ -56,7 +56,7 @@ export function ReportCard({
     <Card className={cn(
       'transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30',
       rank === 1 && 'ring-1 ring-primary/20',
-      isQueen && 'ring-2 ring-amber-400/70',
+      isQueen && 'ring-2 ring-gold/60',
     )}>
       <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
         <div className="flex min-w-0 items-center gap-2.5">
@@ -92,8 +92,8 @@ export function ReportCard({
       </CardHeader>
       <CardContent className="space-y-4">
         {isQueen && (
-          <div className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-100 to-yellow-100 px-2.5 py-1 text-xs font-bold text-amber-900 ring-1 ring-amber-300/60">
-            <Crown className="size-4 text-amber-500" /> Queen CS · juara umum
+          <div className="flex items-center gap-1.5 rounded-lg bg-gold-soft px-2.5 py-1 text-xs font-bold text-gold-foreground ring-1 ring-gold/40">
+            <Crown className="size-4 text-gold" /> Queen CS · juara umum
           </div>
         )}
         {/* Gamification: badge penghargaan untuk juara hari itu */}
@@ -104,9 +104,9 @@ export function ReportCard({
               return (
                 <span
                   key={r}
-                  className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-amber-100 to-yellow-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-300/60"
+                  className="inline-flex items-center gap-1 rounded-full bg-gold-soft/60 px-2.5 py-1 text-[11px] font-semibold text-gold-foreground ring-1 ring-gold/20"
                 >
-                  <Icon className="size-3.5 text-amber-500" /> {r}
+                  <Icon className="size-3.5 text-gold" /> {r}
                 </span>
               );
             })}
@@ -179,7 +179,7 @@ export function ReportCard({
 
         {/* Potensi mis-rep: double orders inflate the lead list */}
         {card.duplicates > 0 && (
-          <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+          <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
             <Copy className="size-3.5 shrink-0" />
             <span>{card.duplicates} order double — CR sudah dihitung dari leads unik</span>
           </div>
