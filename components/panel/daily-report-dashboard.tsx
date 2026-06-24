@@ -216,8 +216,7 @@ export function DailyReportDashboard() {
             </div>
           ) : (
             <div className="space-y-4">
-              <DoubleOrderBanner count={totalDuplicates} />
-              <SlaSummary breaches={slaBreaches} worstName={worstSla?.csName} loading={respData === undefined} />
+              <InfoStrip dup={totalDuplicates} sla={slaBreaches} worstSla={worstSla?.csName} loading={respData === undefined} />
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((c) => (
                   <ReportCard
@@ -258,15 +257,13 @@ function HighlightCard({ title, name, value, avatarByKey }: { title: string; nam
   );
 }
 
-function DoubleOrderBanner({ count }: { count: number }) {
-  if (count > 0) {
-    return (
-      <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
-          <Copy className="size-5" />
-        </span>
-        <div className="flex items-center gap-1.5 text-sm font-semibold text-amber-900">
-          <span>{count} order double terdeteksi</span>
+// Lean one-line summary: order-double + SLA status (detail lives in each CS card).
+function InfoStrip({ dup, sla, worstSla, loading }: { dup: number; sla: number; worstSla?: string; loading: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-border bg-card/40 px-3 py-2 text-xs">
+      {dup > 0 ? (
+        <span className="inline-flex items-center gap-1.5 font-medium text-amber-700">
+          <Copy className="size-3.5 shrink-0" /> {dup} order double
           <Tooltip>
             <TooltipTrigger
               aria-label="Penjelasan order double"
@@ -278,16 +275,28 @@ function DoubleOrderBanner({ count }: { count: number }) {
               Pelanggan dengan ≥2 order di periode ini — calon mis-rep. CR sudah dihitung dari leads unik, jadi angkanya tetap akurat.
             </TooltipContent>
           </Tooltip>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-center gap-3 rounded-2xl border border-positive/20 bg-positive-soft/50 p-4">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-positive-soft text-positive">
-        <CheckCircle2 className="size-5" />
-      </span>
-      <div className="text-sm font-medium text-foreground">Tidak ada order double — semua leads unik.</div>
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+          <CheckCircle2 className="size-3.5 shrink-0 text-positive" /> Tidak ada order double
+        </span>
+      )}
+      {!loading && (
+        <>
+          <span className="hidden h-3 w-px bg-border sm:block" />
+          {sla > 0 ? (
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+              <Clock className="size-3.5 shrink-0 text-destructive" />
+              <span className="font-semibold text-destructive">{sla}</span> chat lewat SLA
+              <span className="text-muted-foreground/80">(&gt;15m{worstSla ? ` · terbanyak ${worstSla}` : ''})</span>
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+              <Clock className="size-3.5 shrink-0 text-positive" /> Semua chat dalam SLA
+            </span>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -307,27 +316,6 @@ function PeriodStatusPill({ isCurrent, endAt, now }: { isCurrent: boolean; endAt
     <span className="inline-flex items-center gap-1.5 rounded-full bg-positive-soft px-2.5 py-1 text-xs font-medium text-positive">
       <span className="size-1.5 animate-pulse rounded-full bg-positive" /> Live · tutup 16:00 WIB · sisa {h}j {m}m
     </span>
-  );
-}
-
-function SlaSummary({ breaches, worstName, loading }: { breaches: number; worstName?: string; loading: boolean }) {
-  if (loading) return null;
-  if (breaches > 0) {
-    return (
-      <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700"><Clock className="size-5" /></span>
-        <div className="text-sm font-semibold text-amber-900">
-          {breaches} chat lewat SLA{' '}
-          <span className="font-normal text-amber-700">(&gt;15m, jam aktif 05:30–18:00){worstName ? ` · terbanyak: ${worstName}` : ''}</span>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-center gap-3 rounded-2xl border border-positive/20 bg-positive-soft/50 p-4">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-positive-soft text-positive"><CheckCircle2 className="size-5" /></span>
-      <div className="text-sm font-medium text-foreground">Semua chat dibalas dalam SLA (&lt;15m jam aktif).</div>
-    </div>
   );
 }
 
