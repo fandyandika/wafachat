@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info, Clock } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { csKey } from '@/lib/cs-key';
 import { Button } from '@/components/ui/button';
@@ -68,8 +68,13 @@ export function DailyReportDashboard() {
   // cs is sorted by firstReplyCount desc; keep the FIRST (dominant) row per display name —
   // conversation.assignedCsName has mixed forms ("Aisyah"/"CS Aisyah") that normalize equal,
   // so a tiny straggler row must not overwrite the real one.
-  const respByCs = new Map<string, { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number }>();
+  const respByCs = new Map<string, { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number; slaBreaches: number }>();
   for (const r of respData?.cs ?? []) if (!respByCs.has(r.csName)) respByCs.set(r.csName, r);
+
+  const slaBreaches = respData?.overall?.slaBreaches ?? 0;
+  const worstSla = (respData?.cs ?? [])
+    .filter((c) => c.slaBreaches > 0)
+    .sort((a, b) => b.slaBreaches - a.slaBreaches)[0];
 
   // Open-date label = the day the window OPENS (= rawWindow.startAt's WIB date), not endAt (next day).
   const label = wibDateParts(rawWindow.startAt);
@@ -157,6 +162,7 @@ export function DailyReportDashboard() {
           <ChevronRight className="size-4" />
         </Button>
         <div className="ml-1 text-base font-semibold tracking-tight">Laporan {titleDate}</div>
+        <PeriodStatusPill isCurrent={isCurrent} endAt={endAt} now={now} />
       </div>
 
       <div className="text-xs text-muted-foreground">
@@ -189,6 +195,7 @@ export function DailyReportDashboard() {
           ) : (
             <div className="space-y-4">
               <DoubleOrderBanner count={totalDuplicates} />
+              <SlaSummary breaches={slaBreaches} worstName={worstSla?.csName} loading={respData === undefined} />
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((c) => (
                   <ReportCard
@@ -258,6 +265,45 @@ function DoubleOrderBanner({ count }: { count: number }) {
         <CheckCircle2 className="size-5" />
       </span>
       <div className="text-sm font-medium text-foreground">Tidak ada order double — semua leads unik.</div>
+    </div>
+  );
+}
+
+function PeriodStatusPill({ isCurrent, endAt, now }: { isCurrent: boolean; endAt: number; now: number }) {
+  if (!isCurrent) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
+        <CheckCircle2 className="size-3.5" /> Selesai · final
+      </span>
+    );
+  }
+  const rem = Math.max(0, endAt - now);
+  const h = Math.floor(rem / 3_600_000);
+  const m = Math.floor((rem % 3_600_000) / 60_000);
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-positive-soft px-2.5 py-1 text-xs font-medium text-positive">
+      <span className="size-1.5 animate-pulse rounded-full bg-positive" /> Live · tutup 16:00 WIB · sisa {h}j {m}m
+    </span>
+  );
+}
+
+function SlaSummary({ breaches, worstName, loading }: { breaches: number; worstName?: string; loading: boolean }) {
+  if (loading) return null;
+  if (breaches > 0) {
+    return (
+      <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700"><Clock className="size-5" /></span>
+        <div className="text-sm font-semibold text-amber-900">
+          {breaches} chat lewat SLA{' '}
+          <span className="font-normal text-amber-700">(&gt;15m, jam aktif 05:30–18:00){worstName ? ` · terbanyak: ${worstName}` : ''}</span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-positive/20 bg-positive-soft/50 p-4">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-positive-soft text-positive"><CheckCircle2 className="size-5" /></span>
+      <div className="text-sm font-medium text-foreground">Semua chat dibalas dalam SLA (&lt;15m jam aktif).</div>
     </div>
   );
 }
