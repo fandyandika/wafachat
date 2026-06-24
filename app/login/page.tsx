@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { Bot } from 'lucide-react';
 
 export default function LoginPage() {
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -16,12 +17,12 @@ export default function LoginPage() {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ email, password }),
     });
     if (res.ok) {
       router.push('/panel');
     } else {
-      setError('Password salah');
+      setError('Email atau password salah');
       setLoading(false);
     }
   }
@@ -42,6 +43,20 @@ export default function LoginPage() {
           onSubmit={handleSubmit}
           className="bg-card border border-border rounded-2xl p-7 space-y-5 shadow-sm"
         >
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+              Email
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
+              placeholder="nama@email.com"
+              autoComplete="email"
+              required
+            />
+          </div>
           <div>
             <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
               Password
