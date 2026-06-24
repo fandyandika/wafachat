@@ -1,9 +1,9 @@
 'use client';
 
-import { Suspense, useState } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, LayoutDashboard, BarChart3, ClipboardList, PanelLeft, PanelLeftClose, Settings } from 'lucide-react';
+import { Bot, LayoutDashboard, BarChart3, ClipboardList, PanelLeft, PanelLeftClose, Settings, LogOut } from 'lucide-react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
@@ -33,6 +33,15 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const title = NAV.find((n) => n.href === pathname)?.label ?? 'Dashboard';
   const [navHidden, setNavHidden] = useState(false);
+  const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs' } | null>(null);
+  useEffect(() => {
+    fetch('/api/me').then((r) => (r.ok ? r.json() : null)).then(setMe).catch(() => setMe(null));
+  }, []);
+  const navItems = NAV.filter((n) => n.href !== '/panel/settings' || me?.role === 'admin');
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    router.push('/login');
+  }
 
   const setParam = (key: string, value: string | undefined) => {
     const next = new URLSearchParams(sp.toString());
@@ -58,7 +67,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <nav className="flex-1 space-y-1 px-4">
-            {NAV.map((item) => {
+            {navItems.map((item) => {
               const active = pathname === item.href;
               return (
                 <Link
@@ -122,6 +131,22 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                     ))}
                   </SelectContent>
                 </Select>
+                {me && (
+                  <div className="flex items-center gap-2 border-l border-border pl-3">
+                    <div className="hidden text-right sm:block">
+                      <div className="text-sm font-medium leading-none text-foreground">{me.name}</div>
+                      <div className="mt-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">{me.role}</div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={logout}
+                      className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:scale-95"
+                      aria-label="Keluar"
+                    >
+                      <LogOut className="size-4" />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </header>
@@ -132,7 +157,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
       {/* Mobile bottom nav — thumb-reachable, app-like. Replaces the badge row. Hidden on md+. */}
       <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background/90 backdrop-blur md:hidden">
         <div className="mx-auto flex max-w-md items-stretch justify-around px-2 pb-[env(safe-area-inset-bottom)]">
-          {NAV.map((item) => {
+          {navItems.map((item) => {
             const active = pathname === item.href;
             return (
               <Link
