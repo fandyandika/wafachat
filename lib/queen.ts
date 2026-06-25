@@ -1,13 +1,13 @@
-// Pure "Queen CS" scorer — the overall best CS for a period. PLACING SCORE: each metric is
-// scored by RANK (0..100, 1st in field = 100, last = 0), not raw magnitude — so an outlier
-// (e.g. one ultra-fast CS) can't distort, and a consistent all-rounder competes fairly.
-// Weighted: CR (skill, volume-independent) heaviest, closing count (output) next, response
-// speed (behaviour, already partly reflected in CR) lightest. No framework imports -> vitest.
+// Pure "Queen CS" scorer — the overall best CS for a period. ABSOLUTE SCORECARD: each metric
+// is scored against a FIXED target (0..100), not against teammates. So a decent value earns
+// real points (a 56% CR isn't crushed to 0 just for being lowest in the team), the score is
+// stable/transparent (a CS knows the target to chase), and CR stays decisive via a tuned band.
+// No framework imports -> runs plain in vitest.
 
 export type QueenInput = {
   csName: string;
   closings: number;
-  cr: number;
+  cr: number; // closing-rate percent, 0..100
   leads: number;
   respMedianMs: number | null;
   respCount: number;
@@ -15,28 +15,16 @@ export type QueenInput = {
 
 export const QUEEN_WEIGHTS = { closing: 0.35, cr: 0.5, speed: 0.15 };
 export const QUEEN_MIN_LEADS = 10; // eligibility: enough workload to judge "overall best"
-export const QUEEN_MIN_RESP = 5; //  enough first-replies for a fair speed placing
+export const QUEEN_MIN_RESP = 5; //  enough first-replies for a fair speed score
+// Fixed absolute targets (score vs these, NOT vs teammates) — tunable.
+export const QUEEN_TARGETS = {
+  crFloor: 40, // CR%: <=40 -> 0 pts
+  crCeil: 80, //  CR%: >=80 -> 100 pts
+  speedCeilMin: 30, // active-hours median minutes: 0 -> 100 pts, >=30 -> 0 pts
+  closingsTarget: 40, // closings: >=40 -> 100 pts
+};
 
-// Placing 0..100 for one metric across the field: best = 100, worst = 0, ties share the average.
-function placings(items: { csName: string; value: number }[], higherIsBetter: boolean): Map<string, number> {
-  const N = items.length;
-  const sorted = [...items].sort((a, b) => (higherIsBetter ? b.value - a.value : a.value - b.value));
-  const rankByCs = new Map<string, number>(); // 1-based average rank
-  let i = 0;
-  while (i < sorted.length) {
-    let j = i;
-    while (j + 1 < sorted.length && sorted[j + 1].value === sorted[i].value) j++;
-    const avgRank = (i + 1 + (j + 1)) / 2; // average of the tied 1-based ranks
-    for (let k = i; k <= j; k++) rankByCs.set(sorted[k].csName, avgRank);
-    i = j + 1;
-  }
-  const out = new Map<string, number>();
-  for (const it of items) {
-    const r = rankByCs.get(it.csName)!;
-    out.set(it.csName, N > 1 ? (100 * (N - r)) / (N - 1) : 100);
-  }
-  return out;
-}
+const clamp100 = (x: number) => Math.max(0, Math.min(100, x));
 
 export function computeQueenCs(
   rows: QueenInput[],
@@ -46,26 +34,17 @@ export function computeQueenCs(
   const qualified = rows.filter((r) => r.leads >= minLeads);
   if (qualified.length < 2) return null;
 
-  const closeP = placings(qualified.map((r) => ({ csName: r.csName, value: r.closings })), true);
-  const crP = placings(qualified.map((r) => ({ csName: r.csName, value: r.cr })), true);
-  // No/low speed data -> treated as slowest (worst placing). At >=10 leads this rarely binds.
-  const speedP = placings(
-    qualified.map((r) => ({
-      csName: r.csName,
-      value: r.respCount >= minRespCount && r.respMedianMs != null ? r.respMedianMs : Number.MAX_SAFE_INTEGER,
-    })),
-    false,
-  );
-
-  const scored = qualified.map((r) => ({
-    csName: r.csName,
-    closings: r.closings,
-    cr: r.cr,
-    score:
-      QUEEN_WEIGHTS.closing * closeP.get(r.csName)! +
-      QUEEN_WEIGHTS.cr * crP.get(r.csName)! +
-      QUEEN_WEIGHTS.speed * speedP.get(r.csName)!,
-  }));
+  const T = QUEEN_TARGETS;
+  const scored = qualified.map((r) => {
+    const crPts = clamp100(((r.cr - T.crFloor) / (T.crCeil - T.crFloor)) * 100);
+    const closePts = clamp100((r.closings / T.closingsTarget) * 100);
+    // No/low speed sample -> 0 speed points (can't credit unmeasured responsiveness).
+    const hasSpeed = r.respCount >= minRespCount && r.respMedianMs != null;
+    const speedMin = hasSpeed ? (r.respMedianMs as number) / 60000 : T.speedCeilMin;
+    const speedPts = clamp100(((T.speedCeilMin - speedMin) / T.speedCeilMin) * 100);
+    const score = QUEEN_WEIGHTS.closing * closePts + QUEEN_WEIGHTS.cr * crPts + QUEEN_WEIGHTS.speed * speedPts;
+    return { csName: r.csName, cr: r.cr, closings: r.closings, score };
+  });
 
   scored.sort((a, b) => b.score - a.score || b.cr - a.cr || b.closings - a.closings);
   return { csName: scored[0].csName, score: scored[0].score };
