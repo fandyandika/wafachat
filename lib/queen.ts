@@ -11,7 +11,9 @@ export type QueenInput = {
   respCount: number;
 };
 
-export const QUEEN_WEIGHTS = { closing: 0.4, cr: 0.4, speed: 0.2 };
+// CR (kualitas konversi) bobot tertinggi, closing (volume) kedua, speed cuma
+// tiebreaker tipis — kecepatan sudah ke-hitung lewat CR, jadi jangan double-count.
+export const QUEEN_WEIGHTS = { closing: 0.4, cr: 0.45, speed: 0.15 };
 
 export function computeQueenCs(
   rows: QueenInput[],

@@ -9,12 +9,22 @@ test("crowns the CS dominating closings + CR", () => {
   expect(q?.csName).toBe("Risma");
 });
 
-test("a much faster CS with weak closings/CR does not overtake (speed only 20%)", () => {
+test("a much faster CS with weak closings/CR does not overtake (speed only 15%)", () => {
   const q = computeQueenCs([
     row("Risma", 10, 50, 20, 120000, 10), // dominates closings+CR, slow
     row("Aisyah", 2, 10, 15, 10000, 10),  // fastest by far, weak results
   ]);
   expect(q?.csName).toBe("Risma");
+});
+
+test("results-first: fastest CS with lower CR does NOT overtake the closing+CR leader", () => {
+  // Mirrors the real prod case: Nabila (fastest, CR 47%) must NOT beat Lila (most
+  // closings, CR 62%) under 40/45/15. Guards against speed-weight regressions.
+  const q = computeQueenCs([
+    row("Lila", 29, 62, 47, 1_800_000, 50),  // most closings + strong CR, slow
+    row("Nabila", 23, 47, 49, 100_000, 41),  // fastest, but lower CR + fewer closings
+  ]);
+  expect(q?.csName).toBe("Lila");
 });
 
 test("returns null when fewer than 2 CS qualify", () => {
