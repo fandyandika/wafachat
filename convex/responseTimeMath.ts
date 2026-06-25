@@ -59,7 +59,10 @@ export function pairResponseEvents(msgs: RtMessage[]): { firstReplyMs: number | 
     }
     const isReply = m.messageType !== "template" && m.role !== "system";
     if (isReply && pendingInboundAt !== null) {
-      const gap = m.createdAt - pendingInboundAt;
+      // Active-hours elapsed (same 05:30-18:00 WIB clock as the SLA), stored as ms so
+      // formatDuration still works. After-hours/overnight waits don't unfairly inflate a
+      // CS's response median — keeps the speed metric consistent with the SLA breach count.
+      const gap = Math.round(businessMinutesBetween(pendingInboundAt, m.createdAt) * 60_000);
       allReplyMs.push(gap);
       if (firstReplyMs === null) {
         firstReplyMs = gap;

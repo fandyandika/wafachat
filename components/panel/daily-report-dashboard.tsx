@@ -69,7 +69,7 @@ export function DailyReportDashboard() {
   // conversation.assignedCsName has mixed forms ("Aisyah"/"CS Aisyah") that normalize equal,
   // so a tiny straggler row must not overwrite the real one.
   const respByCs = new Map<string, { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number; slaBreaches: number }>();
-  for (const r of respData?.cs ?? []) if (!respByCs.has(r.csName)) respByCs.set(r.csName, r);
+  for (const r of respData?.cs ?? []) if (!respByCs.has(csKey(r.csName))) respByCs.set(csKey(r.csName), r);
 
   const slaBreaches = respData?.overall?.slaBreaches ?? 0;
   const worstSla = (respData?.cs ?? [])
@@ -110,7 +110,7 @@ export function DailyReportDashboard() {
     .reduce<ReportCardData | null>((best, c) => (!best || c.cr > best.cr ? c : best), null);
   let fastestResp: { csName: string; ms: number } | null = null;
   for (const c of allCs) {
-    const r = respByCs.get(c.csName);
+    const r = respByCs.get(csKey(c.csName));
     if (r && r.firstReplyCount >= 3 && r.firstReplyMedianMs != null && (!fastestResp || r.firstReplyMedianMs < fastestResp.ms)) {
       fastestResp = { csName: c.csName, ms: r.firstReplyMedianMs };
     }
@@ -118,7 +118,7 @@ export function DailyReportDashboard() {
   const queen = !csName
     ? computeQueenCs(
         allCs.map((c) => {
-          const r = respByCs.get(c.csName);
+          const r = respByCs.get(csKey(c.csName));
           return {
             csName: c.csName,
             closings: c.closings,
@@ -211,7 +211,7 @@ export function DailyReportDashboard() {
                     card={c}
                     label={label}
                     isCurrent={isCurrent}
-                    resp={respByCs.get(c.csName)}
+                    resp={respByCs.get(csKey(c.csName))}
                     rank={rankByCs.get(c.csName)}
                     avgCr={avgCr}
                     delta={deltaFor(c)}

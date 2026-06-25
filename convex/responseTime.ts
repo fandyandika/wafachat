@@ -31,15 +31,18 @@ export const getResponseTimes = query({
     const csByKey = new Map<string, string>();
     convOrder.forEach((key, i) => csByKey.set(key, (convDocs[i] as any)?.assignedCsName || "Unknown"));
 
-    const agg = new Map<string, { first: number[]; all: number[]; slaBreaches: number }>();
+    // Aggregate by csKey so name-forms ("Risma" / "CS Risma") merge into one CS.
+    const agg = new Map<string, { rawCounts: Map<string, number>; first: number[]; all: number[]; slaBreaches: number }>();
     const overallFirst: number[] = [];
     let overallSlaBreaches = 0;
     for (const key of convOrder) {
       const { firstReplyMs, allReplyMs, firstInboundAt, firstReplyAt } = pairResponseEvents(byConv.get(key)!);
       if (firstReplyMs === null && allReplyMs.length === 0) continue;
       const raw = csByKey.get(key) || "Unknown";
-      let a = agg.get(raw);
-      if (!a) { a = { first: [], all: [], slaBreaches: 0 }; agg.set(raw, a); }
+      const ck = csKey(raw);
+      let a = agg.get(ck);
+      if (!a) { a = { rawCounts: new Map(), first: [], all: [], slaBreaches: 0 }; agg.set(ck, a); }
+      a.rawCounts.set(raw, (a.rawCounts.get(raw) ?? 0) + 1);
       if (firstReplyMs !== null) {
         a.first.push(firstReplyMs);
         overallFirst.push(firstReplyMs);
@@ -51,16 +54,20 @@ export const getResponseTimes = query({
       a.all.push(...allReplyMs);
     }
 
-    let cs = Array.from(agg.entries()).map(([raw, a]) => ({
-      csName: normalizeCsName(raw),
-      csNameRaw: raw,
-      firstReplyMedianMs: median(a.first),
-      firstReplyP90Ms: percentile(a.first, 0.9),
-      firstReplyCount: a.first.length,
-      ongoingMedianMs: median(a.all),
-      ongoingCount: a.all.length,
-      slaBreaches: a.slaBreaches,
-    }));
+    let cs = Array.from(agg.values()).map((a) => {
+      // Display under the dominant raw name-form for this CS.
+      const raw = Array.from(a.rawCounts.entries()).sort((x, y) => y[1] - x[1])[0][0];
+      return {
+        csName: normalizeCsName(raw),
+        csNameRaw: raw,
+        firstReplyMedianMs: median(a.first),
+        firstReplyP90Ms: percentile(a.first, 0.9),
+        firstReplyCount: a.first.length,
+        ongoingMedianMs: median(a.all),
+        ongoingCount: a.all.length,
+        slaBreaches: a.slaBreaches,
+      };
+    });
     if (args.csName) {
       const key = csKey(args.csName);
       cs = cs.filter((c) => csKey(c.csNameRaw) === key);

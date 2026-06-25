@@ -3,7 +3,8 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
-const t0 = 1_750_000_000_000;
+// 10:00 WIB (inside 05:30-18:00) so the active-hours gap equals the wall-clock gap below.
+const t0 = Date.UTC(2026, 5, 24, 3, 0, 0);
 const convBase = {
   orderId: "O-1", customerName: "A", status: "active" as const, aiEnabled: false, note: "",
   createdAt: t0, updatedAt: t0,

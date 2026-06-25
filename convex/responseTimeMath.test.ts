@@ -95,3 +95,14 @@ test("pairResponseEvents returns first reply timestamps", () => {
   expect(r2.firstInboundAt).toBeNull();
   expect(r2.firstReplyAt).toBeNull();
 });
+
+test("pairResponseEvents: gap is ACTIVE-hours ms, not wall-clock (after-hours wait excluded)", () => {
+  // inbound 17:55, reply 06:00 next day -> 5 (17:55-18:00) + 30 (05:30-06:00) = 35 active min,
+  // NOT the ~12h wall-clock. Keeps the response median on the same clock as the SLA.
+  const r = pairResponseEvents([
+    { direction: "inbound", messageType: "text", role: "customer", createdAt: wib(2026, 5, 24, 17, 55) },
+    { direction: "outbound", messageType: "text", role: "cs", createdAt: wib(2026, 5, 25, 6, 0) },
+  ]);
+  expect(r.firstReplyMs).toBe(35 * 60_000);
+  expect(r.allReplyMs).toEqual([35 * 60_000]);
+});
