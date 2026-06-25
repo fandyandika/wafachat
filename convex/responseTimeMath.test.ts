@@ -106,3 +106,13 @@ test("pairResponseEvents: gap is ACTIVE-hours ms, not wall-clock (after-hours wa
   expect(r.firstReplyMs).toBe(35 * 60_000);
   expect(r.allReplyMs).toEqual([35 * 60_000]);
 });
+
+test("pairResponseEvents: a chat ENTIRELY off-hours falls back to wall-clock (no false 'instant')", () => {
+  // inbound 20:00, reply 20:05 -> both outside 05:30-18:00 -> 0 active min -> wall-clock 5 min,
+  // so an evening-shift CS isn't credited as instant (which would game the speed ranking).
+  const r = pairResponseEvents([
+    { direction: "inbound", messageType: "text", role: "customer", createdAt: wib(2026, 5, 24, 20, 0) },
+    { direction: "outbound", messageType: "text", role: "cs", createdAt: wib(2026, 5, 24, 20, 5) },
+  ]);
+  expect(r.firstReplyMs).toBe(5 * 60_000);
+});
