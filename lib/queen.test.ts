@@ -9,7 +9,7 @@ test("crowns the CS dominating closings + CR", () => {
   expect(q?.csName).toBe("Risma");
 });
 
-test("a much faster CS with weak closings/CR does not overtake (speed only 15%)", () => {
+test("a much faster CS with weak closings/CR does not overtake (speed only 10%)", () => {
   const q = computeQueenCs([
     row("Risma", 10, 50, 20, 120000, 10), // dominates closings+CR, slow
     row("Aisyah", 2, 10, 15, 10000, 10),  // fastest by far, weak results
