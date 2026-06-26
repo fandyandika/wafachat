@@ -67,3 +67,21 @@ test("getFollowUpCandidates: csName scope filters to that CS", async () => {
   const r = await t.query(api.followUp.getFollowUpCandidates, { csName: "Nabila", nowOverride: now });
   expect(r.stage1.map((c) => c.orderId)).toEqual(["O-3"]);
 });
+
+test("getFollowUpCandidates: stage-2 (H+2) after stage-1 sent and 20h elapsed", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    const conv = await ctx.db.insert("conversations", {
+      ...convBase, orderId: "O-5", customerPhone: "62815",
+      followUpStage: 1, followUpStageAt: now - 26 * HOUR, // H+1 sent 26h ago
+    });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-5", customerPhone: "62815" });
+    // Last inbound: 30h ago (before H+1 stamp, so still silent since H+1).
+    await ctx.db.insert("messages", msg(conv, "O-5", "62815", "inbound", now - 30 * HOUR));
+    // Later outbound (after H+1 stamp): last message is outbound → ghosted.
+    await ctx.db.insert("messages", msg(conv, "O-5", "62815", "outbound", now - 25 * HOUR));
+  });
+  const r = await t.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  expect(r.stage2.map((c) => c.orderId)).toContain("O-5");
+  expect(r.stage1.length).toBe(0);
+});
