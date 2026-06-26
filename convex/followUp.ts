@@ -80,14 +80,14 @@ export const candidacyFor = internalQuery({
     if (!c) return null;
     const now = args.nowOverride ?? Date.now();
     const recap = await ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", c.customerPhone)).first();
-    const msgs = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").take(30);
-    const lastInbound = msgs.find((m) => m.direction === "inbound");
+    const lastMsg = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first();
+    const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first();
     const order = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", c.orderId)).first();
     const normName = normalizeCsName(c.assignedCsName);
     const cfg = await ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", normName)).first();
     const eligible = eligibleStage({
       lastInboundAt: lastInbound?.createdAt ?? null,
-      lastMessageOutbound: msgs.length > 0 && msgs[0].direction === "outbound",
+      lastMessageOutbound: lastMsg != null && lastMsg.direction === "outbound",
       isClosed: c.status === "closed" || recap != null,
       followUpStage: c.followUpStage ?? null, followUpStageAt: c.followUpStageAt ?? null, now,
     });
