@@ -62,6 +62,9 @@ export default defineSchema({
     orderAutomationEnabled: v.boolean(),
     aiAssistantEnabled: v.boolean(),
     reportingEnabled: v.boolean(),
+    autoFollowUpEnabled: v.optional(v.boolean()), // auto-send H+1/H+2 for this CS (default off)
+    autoSentDay: v.optional(v.number()),          // WIB day-number of the last auto-send (daily-cap reset key)
+    autoSentCount: v.optional(v.number()),        // auto-sends counted on autoSentDay (enforces the daily cap)
     isActive: v.boolean(),
     avatarStorageId: v.optional(v.id("_storage")),
     createdAt: v.number(),

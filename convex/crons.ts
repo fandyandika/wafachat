@@ -12,4 +12,12 @@ crons.daily(
   {},
 );
 
+// Hourly: auto-send follow-ups for enabled CS during business hours (08:00–14:00 WIB).
+crons.hourly(
+  "auto follow-up sweep",
+  { minuteUTC: 0 },
+  internal.autoFollowUp.autoFollowUpSweep,
+  {},
+);
+
 export default crons;

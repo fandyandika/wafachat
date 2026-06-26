@@ -18,6 +18,7 @@ type CsRow = {
   orderAutomationEnabled: boolean;
   aiAssistantEnabled: boolean;
   reportingEnabled: boolean;
+  autoFollowUpEnabled?: boolean;
   isActive: boolean;
 };
 
@@ -131,6 +132,7 @@ export function SettingsDashboard() {
       orderAutomationEnabled: c.orderAutomationEnabled,
       aiAssistantEnabled: c.aiAssistantEnabled,
       reportingEnabled: c.reportingEnabled,
+      autoFollowUpEnabled: c.autoFollowUpEnabled ?? undefined,
       isActive: c.isActive,
       [field]: value,
     });
@@ -239,6 +241,22 @@ export function SettingsDashboard() {
                   <Switch
                     checked={c.reportingEnabled}
                     onCheckedChange={(value) => onToggle(c, 'reportingEnabled', value)}
+                    disabled={busy === c.csName}
+                  />
+                </div>
+
+                {/* Auto Follow-up */}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0 flex-1">
+                      <span className="text-sm font-medium text-foreground truncate block">Auto Follow-up</span>
+                      <span className="text-xs text-muted-foreground truncate block">Kirim H+1/H+2 otomatis 08–14 WIB</span>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={c.autoFollowUpEnabled ?? false}
+                    onCheckedChange={(value) => onToggle(c, 'autoFollowUpEnabled', value)}
                     disabled={busy === c.csName}
                   />
                 </div>

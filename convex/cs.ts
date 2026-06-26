@@ -7,7 +7,7 @@ const NINETY_DAYS = 90 * 24 * 60 * 60 * 1000;
 type CsRow = {
   csName: string; normalizedName: string; key: string; avatarUrl: string | null;
   isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
-  reportingEnabled: boolean; csPhone?: string;
+  reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string;
 };
 
 export const listCs = query({
@@ -42,6 +42,7 @@ export const listCs = query({
         orderAutomationEnabled: cfg?.orderAutomationEnabled ?? false,
         aiAssistantEnabled: cfg?.aiAssistantEnabled ?? false,
         reportingEnabled: cfg?.reportingEnabled ?? true,
+        autoFollowUpEnabled: cfg?.autoFollowUpEnabled,
         csPhone: cfg?.csPhone,
       });
     }

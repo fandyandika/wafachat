@@ -10,6 +10,7 @@ export type CsFeatureConfig = {
   orderAutomationEnabled: boolean;
   aiAssistantEnabled: boolean;
   reportingEnabled: boolean;
+  autoFollowUpEnabled?: boolean;
   isActive: boolean;
 };
 
@@ -74,6 +75,7 @@ export async function getCsFeatureConfig(ctx: { db: any }, csName: string): Prom
       orderAutomationEnabled: stored.orderAutomationEnabled,
       aiAssistantEnabled: stored.aiAssistantEnabled,
       reportingEnabled: stored.reportingEnabled,
+      autoFollowUpEnabled: stored.autoFollowUpEnabled ?? false,
       isActive: stored.isActive,
     };
   }
@@ -98,6 +100,7 @@ export const list = query({
             orderAutomationEnabled: storedConfig.orderAutomationEnabled,
             aiAssistantEnabled: storedConfig.aiAssistantEnabled,
             reportingEnabled: storedConfig.reportingEnabled,
+            autoFollowUpEnabled: storedConfig.autoFollowUpEnabled ?? false,
             isActive: storedConfig.isActive,
           }
         : config;
@@ -113,6 +116,7 @@ export const list = query({
         orderAutomationEnabled: config.orderAutomationEnabled,
         aiAssistantEnabled: config.aiAssistantEnabled,
         reportingEnabled: config.reportingEnabled,
+        autoFollowUpEnabled: config.autoFollowUpEnabled ?? false,
         isActive: config.isActive,
       }));
 
@@ -129,6 +133,7 @@ export const upsert = mutation({
     orderAutomationEnabled: v.boolean(),
     aiAssistantEnabled: v.boolean(),
     reportingEnabled: v.boolean(),
+    autoFollowUpEnabled: v.optional(v.boolean()),
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {

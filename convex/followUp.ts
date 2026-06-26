@@ -1,4 +1,4 @@
-import { query, action, internalMutation, internalQuery } from "./_generated/server";
+import { query, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { csKey, isInternalTestPhone, normalizeCsName } from "./lib";
 import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
@@ -160,13 +160,10 @@ export const stampFollowUp = internalMutation({
   },
 });
 
-export const sendFollowUp = action({
-  args: { conversationId: v.id("conversations"), stage: v.number(), authSecret: v.string(),
+export const performFollowUpSend = internalAction({
+  args: { conversationId: v.id("conversations"), stage: v.number(),
           nowOverride: v.optional(v.number()) },
   handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
     const now = args.nowOverride ?? Date.now();
     const d = await ctx.runQuery(internal.followUp.candidacyFor, { conversationId: args.conversationId, nowOverride: now });
     if (!d) return { ok: false, error: "Percakapan tidak ditemukan." };
@@ -208,5 +205,18 @@ export const sendFollowUp = action({
       content: `[follow-up ${cfg.label}] ${cfg.templateName}`,
     });
     return { ok: true };
+  },
+});
+
+export const sendFollowUp = action({
+  args: { conversationId: v.id("conversations"), stage: v.number(), authSecret: v.string(),
+          nowOverride: v.optional(v.number()) },
+  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
+    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
+      return { ok: false, error: "unauthorized" };
+    }
+    return await ctx.runAction(internal.followUp.performFollowUpSend, {
+      conversationId: args.conversationId, stage: args.stage, nowOverride: args.nowOverride
+    });
   },
 });
