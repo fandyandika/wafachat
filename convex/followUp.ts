@@ -11,50 +11,69 @@ export const getFollowUpCandidates = query({
     const now = args.nowOverride ?? Date.now();
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
 
-    // Open conversations only (active + handover), never closed.
-    const open = (await ctx.db.query("conversations").collect())
-      .filter((c) => c.status !== "closed")
+    const DAY = 86_400_000;
+    // Recency bound: every message bumps conversation.updatedAt (messages.ts), so updatedAt >= lastInboundAt.
+    // A candidate's last inbound is within 5 days (followUpMath ceiling), so a 6-day window can't drop one —
+    // and it keeps this derive-on-read query well under Convex's 4096-reads-per-call limit at scale.
+    const since = now - 6 * DAY;
+    const recent = (
+      await Promise.all(
+        (["active", "handover"] as const).map((s) =>
+          ctx.db.query("conversations").withIndex("by_status_updatedAt", (q) => q.eq("status", s).gte("updatedAt", since)).collect(),
+        ),
+      )
+    ).flat();
+    const open = recent
       .filter((c) => !isInternalTestPhone(c.customerPhone))
       .filter((c) => (csKeyMemo ? csKey(c.assignedCsName) === csKeyMemo : true));
 
-    // Closed-by-recap set (one phone lookup per conversation, parallel).
-    const recaps = await Promise.all(
-      open.map((c) => ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", c.customerPhone)).first()),
-    );
-    // Latest message per conversation (for direction check: is it outbound/ghosted?).
+    // Latest message per conversation -> keep only GHOSTED ones (last message outbound), which bounds the heavier lookups.
     const lastMsgs = await Promise.all(
       open.map((c) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first()),
     );
-    // Latest inbound message per conversation (for lastInboundAt timestamp).
-    const lastInbounds = await Promise.all(
-      open.map((c) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first()),
+    const ghosted = open
+      .map((c, i) => ({ c, lastMsg: lastMsgs[i] }))
+      .filter((x) => x.lastMsg != null && x.lastMsg.direction === "outbound");
+
+    // For ghosted only: closed-by-recap + the latest inbound timestamp.
+    const recaps = await Promise.all(
+      ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", x.c.customerPhone)).first()),
     );
-    const orders = await Promise.all(
-      open.map((c) => ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", c.orderId)).first()),
+    const lastInbounds = await Promise.all(
+      ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", x.c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first()),
     );
 
-    type Candidate = { conversationId: typeof open[number]["_id"]; customerName: string; customerPhone: string;
+    type Row = typeof open[number];
+    type Candidate = { conversationId: Row["_id"]; customerName: string; customerPhone: string;
       productName: string; orderId: string; csName: string; lastInboundAt: number };
-    const stage1: Candidate[] = [];
-    const stage2: Candidate[] = [];
-    open.forEach((c, i) => {
-      const lastMsg = lastMsgs[i];
+    const eligible: Array<{ c: Row; stage: number; lastInboundAt: number }> = [];
+    ghosted.forEach((x, i) => {
       const lastInbound = lastInbounds[i];
       const stage = eligibleStage({
         lastInboundAt: lastInbound?.createdAt ?? null,
-        lastMessageOutbound: lastMsg != null && lastMsg.direction === "outbound",
-        isClosed: c.status === "closed" || recaps[i] != null,
-        followUpStage: c.followUpStage ?? null,
-        followUpStageAt: c.followUpStageAt ?? null,
+        lastMessageOutbound: true, // already filtered to ghosted
+        isClosed: x.c.status === "closed" || recaps[i] != null,
+        followUpStage: x.c.followUpStage ?? null,
+        followUpStageAt: x.c.followUpStageAt ?? null,
         now,
       });
       if (stage == null || lastInbound == null) return;
+      eligible.push({ c: x.c, stage, lastInboundAt: lastInbound.createdAt });
+    });
+
+    // Product name only for the final candidates.
+    const orders = await Promise.all(
+      eligible.map((e) => ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", e.c.orderId)).first()),
+    );
+    const stage1: Candidate[] = [];
+    const stage2: Candidate[] = [];
+    eligible.forEach((e, i) => {
       const card: Candidate = {
-        conversationId: c._id, customerName: c.customerName, customerPhone: c.customerPhone,
-        productName: orders[i]?.productName ?? "—", orderId: c.orderId,
-        csName: c.assignedCsName, lastInboundAt: lastInbound.createdAt,
+        conversationId: e.c._id, customerName: e.c.customerName, customerPhone: e.c.customerPhone,
+        productName: orders[i]?.productName ?? "—", orderId: e.c.orderId,
+        csName: e.c.assignedCsName, lastInboundAt: e.lastInboundAt,
       };
-      (stage === 1 ? stage1 : stage2).push(card);
+      (e.stage === 1 ? stage1 : stage2).push(card);
     });
     stage1.sort((a, b) => a.lastInboundAt - b.lastInboundAt);
     stage2.sort((a, b) => a.lastInboundAt - b.lastInboundAt);

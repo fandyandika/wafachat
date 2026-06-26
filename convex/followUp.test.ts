@@ -21,6 +21,20 @@ const msg = (conversationId: any, orderId: string, phone: string, direction: "in
   ({ conversationId, orderId, customerPhone: phone, role: direction === "inbound" ? "customer" as const : "cs" as const,
      direction, content: "x", messageType: "text" as const, source: "n8n" as const, createdAt });
 
+test("getFollowUpCandidates: stale conversation (updated >6d ago) excluded by recency bound", async () => {
+  const t = convexTest(schema);
+  const DAY = 24 * HOUR;
+  await t.run(async (ctx) => {
+    const conv = await ctx.db.insert("conversations", { ...convBase, orderId: "O-OLD", customerPhone: "628990", updatedAt: now - 8 * DAY });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-OLD", customerPhone: "628990" });
+    await ctx.db.insert("messages", msg(conv, "O-OLD", "628990", "inbound", now - 8 * DAY));
+    await ctx.db.insert("messages", msg(conv, "O-OLD", "628990", "outbound", now - 8 * DAY + HOUR));
+  });
+  const r = await t.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  expect(r.stage1.find((c) => c.orderId === "O-OLD")).toBeUndefined();
+  expect(r.stage2.find((c) => c.orderId === "O-OLD")).toBeUndefined();
+});
+
 test("getFollowUpCandidates: ghosted >24h, not closed -> stage1", async () => {
   const t = convexTest(schema);
   await t.run(async (ctx) => {
