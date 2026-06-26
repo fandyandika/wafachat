@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
 
 const HOUR = 3_600_000;
 const now = Date.UTC(2026, 5, 26, 5, 0, 0); // fixed reference
@@ -84,4 +85,69 @@ test("getFollowUpCandidates: stage-2 (H+2) after stage-1 sent and 20h elapsed", 
   const r = await t.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
   expect(r.stage2.map((c) => c.orderId)).toContain("O-5");
   expect(r.stage1.length).toBe(0);
+});
+
+import { vi } from "vitest";
+
+const csCfg = (csName: string) => ({
+  normalizedName: csName.toLowerCase().replace(/[^a-z]/g, ""), csName, providerNumberId: "PHONE123",
+  orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+  isActive: true, createdAt: now, updatedAt: now,
+});
+
+test("sendFollowUp: success stamps stage + inserts template message", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-9", customerPhone: "62899" });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-9", customerPhone: "62899" });
+    await ctx.db.insert("messages", msg(convId, "O-9", "62899", "inbound", now - 30 * HOUR));
+    await ctx.db.insert("messages", msg(convId, "O-9", "62899", "outbound", now - 29 * HOUR));
+    await ctx.db.insert("csConfigs", csCfg("Nabila"));
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret"; process.env.KIRIMDEV_API_KEY = "k_test";
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "wamid.1" }), { status: 200 }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  const res = await t.action(api.followUp.sendFollowUp, { conversationId: convId, stage: 1, authSecret: "s3cret", nowOverride: now });
+  expect(res.ok).toBe(true);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  await t.run(async (ctx) => {
+    const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
+    expect(c!.followUpStage).toBe(1);
+    const msgs = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", convId)).collect();
+    expect(msgs.some((m) => m.messageType === "template" && m.direction === "outbound")).toBe(true);
+  });
+  vi.unstubAllGlobals();
+});
+
+test("sendFollowUp: wrong secret -> not ok, no send", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => { convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-10", customerPhone: "62810" }); });
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const res = await t.action(api.followUp.sendFollowUp, { conversationId: convId, stage: 1, authSecret: "WRONG", nowOverride: now });
+  expect(res.ok).toBe(false);
+  expect(fetchMock).not.toHaveBeenCalled();
+  vi.unstubAllGlobals();
+});
+
+test("sendFollowUp: KirimDev error code -> not ok, not stamped", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-11", customerPhone: "62811b" });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-11", customerPhone: "62811b" });
+    await ctx.db.insert("messages", msg(convId, "O-11", "62811b", "inbound", now - 30 * HOUR));
+    await ctx.db.insert("messages", msg(convId, "O-11", "62811b", "outbound", now - 29 * HOUR));
+    await ctx.db.insert("csConfigs", csCfg("Nabila"));
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret"; process.env.KIRIMDEV_API_KEY = "k_test";
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "template_paused" } }), { status: 400 })));
+  const res = await t.action(api.followUp.sendFollowUp, { conversationId: convId, stage: 1, authSecret: "s3cret", nowOverride: now });
+  expect(res.ok).toBe(false);
+  await t.run(async (ctx) => { expect(((await ctx.db.get(convId)) as Doc<"conversations"> | undefined)!.followUpStage).toBeUndefined(); });
+  vi.unstubAllGlobals();
 });
