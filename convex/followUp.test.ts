@@ -148,6 +148,30 @@ test("sendFollowUp: KirimDev error code -> not ok, not stamped", async () => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "template_paused" } }), { status: 400 })));
   const res = await t.action(api.followUp.sendFollowUp, { conversationId: convId, stage: 1, authSecret: "s3cret", nowOverride: now });
   expect(res.ok).toBe(false);
-  await t.run(async (ctx) => { expect(((await ctx.db.get(convId)) as Doc<"conversations"> | undefined)!.followUpStage).toBeUndefined(); });
+  await t.run(async (ctx) => {
+    expect(((await ctx.db.get(convId)) as Doc<"conversations"> | undefined)!.followUpStage).toBeUndefined();
+    const msgs = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", convId)).collect();
+    expect(msgs.filter((m) => m.messageType === "template").length).toBe(0);
+  });
+  vi.unstubAllGlobals();
+});
+
+test("sendFollowUp: missing KIRIMDEV_API_KEY -> not ok, fetch not called", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-12", customerPhone: "62812b" });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-12", customerPhone: "62812b" });
+    await ctx.db.insert("messages", msg(convId, "O-12", "62812b", "inbound", now - 30 * HOUR));
+    await ctx.db.insert("messages", msg(convId, "O-12", "62812b", "outbound", now - 29 * HOUR));
+    await ctx.db.insert("csConfigs", csCfg("Nabila"));
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+  delete process.env.KIRIMDEV_API_KEY;
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  const res = await t.action(api.followUp.sendFollowUp, { conversationId: convId, stage: 1, authSecret: "s3cret", nowOverride: now });
+  expect(res.ok).toBe(false);
+  expect(fetchMock).not.toHaveBeenCalled();
   vi.unstubAllGlobals();
 });

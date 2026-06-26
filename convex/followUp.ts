@@ -83,7 +83,7 @@ export const candidacyFor = internalQuery({
     const msgs = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").take(30);
     const lastInbound = msgs.find((m) => m.direction === "inbound");
     const order = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", c.orderId)).first();
-    const normName = normalizeCsName(c.assignedCsName).toLowerCase().replace(/[^a-z]/g, "");
+    const normName = normalizeCsName(c.assignedCsName);
     const cfg = await ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", normName)).first();
     const eligible = eligibleStage({
       lastInboundAt: lastInbound?.createdAt ?? null,
@@ -123,6 +123,7 @@ export const sendFollowUp = action({
       return { ok: false, error: "Sudah tidak eligible (mungkin sudah dibalas / closing / sudah di-follow-up)." };
     }
     if (!d.phoneNumberId) return { ok: false, error: "Nomor WABA CS belum dikonfigurasi." };
+    if (!process.env.KIRIMDEV_API_KEY) return { ok: false, error: "KIRIMDEV_API_KEY belum dikonfigurasi." };
     const cfg = FOLLOWUP_STAGES.find((s) => s.stage === args.stage)!;
     const base = process.env.KIRIMDEV_BASE_URL || "https://api.kirimdev.com/v1";
     // Positional params — FINALISE order once the real template is known: {{1}}=name, {{2}}=product, {{3}}=orderId.
