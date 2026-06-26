@@ -43,6 +43,8 @@ export default defineSchema({
     aiEnabled: v.boolean(),
     note: v.string(),
     lastMessageAt: v.optional(v.number()),
+    followUpStage: v.optional(v.number()),   // 1 = H+1 sent, 2 = H+2 sent
+    followUpStageAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
