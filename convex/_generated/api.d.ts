@@ -14,6 +14,7 @@ import type * as closingRules from "../closingRules.js";
 import type * as cs from "../cs.js";
 import type * as csConfigs from "../csConfigs.js";
 import type * as events from "../events.js";
+import type * as followUp from "../followUp.js";
 import type * as followUpMath from "../followUpMath.js";
 import type * as http from "../http.js";
 import type * as lib from "../lib.js";
@@ -39,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   cs: typeof cs;
   csConfigs: typeof csConfigs;
   events: typeof events;
+  followUp: typeof followUp;
   followUpMath: typeof followUpMath;
   http: typeof http;
   lib: typeof lib;
