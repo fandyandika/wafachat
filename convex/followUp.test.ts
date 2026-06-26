@@ -83,22 +83,51 @@ test("getFollowUpCandidates: csName scope filters to that CS", async () => {
   expect(r.stage1.map((c) => c.orderId)).toEqual(["O-3"]);
 });
 
-test("getFollowUpCandidates: stage-2 (H+2) after stage-1 sent and 20h elapsed", async () => {
+test("getFollowUpCandidates: stage-2 (H+2) after a post-window touch (manual or API) + 20h elapsed", async () => {
   const t = convexTest(schema);
   await t.run(async (ctx) => {
-    const conv = await ctx.db.insert("conversations", {
-      ...convBase, orderId: "O-5", customerPhone: "62815",
-      followUpStage: 1, followUpStageAt: now - 26 * HOUR, // H+1 sent 26h ago
-    });
+    const conv = await ctx.db.insert("conversations", { ...convBase, orderId: "O-5", customerPhone: "62815" });
     await ctx.db.insert("orders", { ...orderBase, orderId: "O-5", customerPhone: "62815" });
-    // Last inbound: 30h ago (before H+1 stamp, so still silent since H+1).
-    await ctx.db.insert("messages", msg(conv, "O-5", "62815", "inbound", now - 30 * HOUR));
-    // Later outbound (after H+1 stamp): last message is outbound → ghosted.
+    // Last inbound 50h ago → 24h window closes 26h ago.
+    await ctx.db.insert("messages", msg(conv, "O-5", "62815", "inbound", now - 50 * HOUR));
+    await ctx.db.insert("messages", msg(conv, "O-5", "62815", "outbound", now - 49 * HOUR)); // in-window reply, NOT a touch
+    // H+1 follow-up touch (post-window outbound, e.g. sent by hand via WABA) 25h ago → ≥20h elapsed, still silent.
     await ctx.db.insert("messages", msg(conv, "O-5", "62815", "outbound", now - 25 * HOUR));
   });
   const r = await t.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
   expect(r.stage2.map((c) => c.orderId)).toContain("O-5");
   expect(r.stage1.length).toBe(0);
+});
+
+test("getFollowUpCandidates: ANTI-DOUBLE — a fresh manual-via-WABA touch drops the lead from H+1", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    const conv = await ctx.db.insert("conversations", { ...convBase, orderId: "O-6", customerPhone: "62816" });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-6", customerPhone: "62816" });
+    await ctx.db.insert("messages", msg(conv, "O-6", "62816", "inbound", now - 30 * HOUR));     // window closes 6h ago
+    await ctx.db.insert("messages", msg(conv, "O-6", "62816", "outbound", now - 29 * HOUR));    // in-window reply
+    // CS already followed up by hand (post-window outbound) 2h ago → touchCount 1, too soon for H+2.
+    await ctx.db.insert("messages", msg(conv, "O-6", "62816", "outbound", now - 2 * HOUR));
+  });
+  const r = await t.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  expect(r.stage1.find((c) => c.orderId === "O-6")).toBeUndefined(); // not re-offered for H+1
+  expect(r.stage2.find((c) => c.orderId === "O-6")).toBeUndefined(); // not yet due for H+2
+});
+
+test("getFollowUpCandidates: dedupe — one customer with two ghosted orders yields one candidate", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    for (const [oid, h] of [["O-7a", 30], ["O-7b", 40]] as const) {
+      const conv = await ctx.db.insert("conversations", { ...convBase, orderId: oid, customerPhone: "62817" });
+      await ctx.db.insert("orders", { ...orderBase, orderId: oid, customerPhone: "62817" });
+      await ctx.db.insert("messages", msg(conv, oid, "62817", "inbound", now - h * HOUR));
+      await ctx.db.insert("messages", msg(conv, oid, "62817", "outbound", now - (h - 1) * HOUR));
+    }
+  });
+  const r = await t.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  const forPhone = [...r.stage1, ...r.stage2].filter((c) => c.customerPhone === "62817");
+  expect(forPhone.length).toBe(1);
+  expect(forPhone[0].orderId).toBe("O-7a"); // keeps the most recently active order (30h > 40h ago)
 });
 
 import { vi } from "vitest";

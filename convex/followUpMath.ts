@@ -9,7 +9,7 @@ export type FollowUpStageConfig = {
   language: string;
   minHoursSinceLastInbound?: number;
   maxHoursSinceLastInbound?: number;
-  requiresPrevStage?: number; // stage number that must already be sent (H+2 needs H+1)
+  requiresPrevStage?: number; // number of prior follow-up touches required (H+2 needs 1; H+1 omits = 0)
   minHoursSincePrevStage?: number;
 };
 
@@ -27,8 +27,12 @@ export type CandidacyInput = {
   lastInboundAt: number | null;   // customer's most recent inbound message
   lastMessageOutbound: boolean;   // most recent message in the thread is outbound (ghosted)
   isClosed: boolean;              // shippingRecap exists OR conversation.status === "closed"
-  followUpStage: number | null;   // highest stage already sent (null/0 = none)
-  followUpStageAt: number | null; // when that stage was sent
+  // Follow-up "touches" = our outbound messages sent AFTER the 24h window closed (relative to the
+  // current lastInbound). Both manual-via-WABA follow-ups and API sends land here, so the funnel
+  // counts them identically — a conversation a CS already followed up by hand drops out on its own.
+  // A new customer reply resets lastInbound, which reopens the window and zeroes the touch count.
+  touchCount: number;             // number of follow-up touches since the window closed (0 = none yet)
+  lastTouchAt: number | null;     // timestamp of the most recent touch (null when touchCount === 0)
   now: number;
 };
 
@@ -38,16 +42,15 @@ export function eligibleStage(input: CandidacyInput, stages: FollowUpStageConfig
   if (!input.lastMessageOutbound) return null;   // customer spoke last -> not ghosted
   if (input.lastInboundAt == null) return null;  // never chatted us
   const sinceInbound = input.now - input.lastInboundAt;
-  const curStage = input.followUpStage ?? 0;
   for (const s of stages) {
-    if (curStage !== (s.requiresPrevStage ?? 0)) continue; // must be exactly at the prior stage
+    const requiredTouches = s.requiresPrevStage ?? 0; // H+1 needs 0 prior touches, H+2 needs 1
+    if (input.touchCount !== requiredTouches) continue; // exactly N prior touches (manual or API)
     // Time windows are inclusive: at exactly the min/max boundary the gate passes.
     if (s.minHoursSinceLastInbound != null && sinceInbound < s.minHoursSinceLastInbound * HOUR) continue;
     if (s.maxHoursSinceLastInbound != null && sinceInbound > s.maxHoursSinceLastInbound * HOUR) continue;
-    if (s.requiresPrevStage != null) {
-      if (input.followUpStageAt == null) continue;
-      if (s.minHoursSincePrevStage != null && input.now - input.followUpStageAt < s.minHoursSincePrevStage * HOUR) continue;
-      if (input.lastInboundAt >= input.followUpStageAt) continue; // replied after the prior follow-up
+    if (requiredTouches > 0) {
+      if (input.lastTouchAt == null) continue; // defensive: touchCount>0 implies a timestamp
+      if (s.minHoursSincePrevStage != null && input.now - input.lastTouchAt < s.minHoursSincePrevStage * HOUR) continue;
     }
     return s.stage;
   }

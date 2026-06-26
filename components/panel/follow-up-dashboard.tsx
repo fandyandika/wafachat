@@ -44,11 +44,10 @@ export function FollowUpDashboard() {
   }, []);
 
   const { cs } = usePanelFilters();
-  // Per-CS scope: CS users see their own; admin picks a CS via the header filter.
-  // (Unscoped "all CS" exceeds Convex's read limit at current data volume — backend optimization is a follow-up.)
+  // CS users see their own; admin sees all CS by default, or narrows via the header filter.
+  // (The active pool is bounded by the lifecycle sweep, so the unscoped query stays under the read limit.)
   const csName = me?.role === 'cs' ? me.name : (cs && cs !== 'all' ? cs : undefined);
-  const needsCsPick = me?.role === 'admin' && !csName;
-  const data = useQuery(api.followUp.getFollowUpCandidates, me && !needsCsPick ? { csName } : 'skip');
+  const data = useQuery(api.followUp.getFollowUpCandidates, me ? { csName } : 'skip');
 
   const isLoading = data === undefined;
   const candidates = activeTab === 'stage1' ? (data?.stage1 ?? []) : (data?.stage2 ?? []);
@@ -138,14 +137,7 @@ export function FollowUpDashboard() {
         </button>
       </div>
 
-      {needsCsPick ? (
-        <div className="rounded-lg border border-border bg-card/50 p-8 text-center">
-          <div className="text-sm text-muted-foreground">
-            Pilih CS di filter atas untuk lihat daftar follow-up.
-            <span className="mt-1 block text-xs">(Tampilan semua-CS sekaligus sedang dioptimasi.)</span>
-          </div>
-        </div>
-      ) : isLoading ? (
+      {isLoading ? (
         <div className="space-y-3">
           <Skeleton className="h-10 w-full" />
           <Skeleton className="h-10 w-full" />

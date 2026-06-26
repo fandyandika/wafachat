@@ -4,6 +4,25 @@ import { csKey, isInternalTestPhone, normalizeCsName } from "./lib";
 import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
 import { internal } from "./_generated/api";
 
+const HOUR = 3_600_000;
+const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
+
+// Count follow-up touches (outbound messages after the 24h window closed, relative to lastInbound).
+// Manual-via-WABA follow-ups and API sends both land here, so the funnel can't double-send a lead a
+// CS already touched by hand. Reads only the post-window tail, so it stays cheap.
+async function touchInfo(ctx: any, conversationId: any, lastInboundAt: number | null) {
+  if (lastInboundAt == null) return { count: 0, lastAt: null as number | null };
+  const windowClose = lastInboundAt + WINDOW_HOURS * HOUR;
+  const touches = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversationId).gt("createdAt", windowClose))
+    .filter((q: any) => q.eq(q.field("direction"), "outbound"))
+    .collect();
+  let lastAt: number | null = null;
+  for (const t of touches) if (lastAt == null || t.createdAt > lastAt) lastAt = t.createdAt;
+  return { count: touches.length, lastAt };
+}
+
 // nowOverride is test-only (Date.now() is unavailable in some runtimes); prod passes nothing.
 export const getFollowUpCandidates = query({
   args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
@@ -35,12 +54,15 @@ export const getFollowUpCandidates = query({
       .map((c, i) => ({ c, lastMsg: lastMsgs[i] }))
       .filter((x) => x.lastMsg != null && x.lastMsg.direction === "outbound");
 
-    // For ghosted only: closed-by-recap + the latest inbound timestamp.
+    // For ghosted only: closed-by-recap, the latest inbound, and the follow-up touches since.
     const recaps = await Promise.all(
       ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", x.c.orderId)).first()),
     );
     const lastInbounds = await Promise.all(
       ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", x.c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first()),
+    );
+    const touches = await Promise.all(
+      ghosted.map((x, i) => touchInfo(ctx, x.c._id, lastInbounds[i]?.createdAt ?? null)),
     );
 
     type Row = typeof open[number];
@@ -53,21 +75,30 @@ export const getFollowUpCandidates = query({
         lastInboundAt: lastInbound?.createdAt ?? null,
         lastMessageOutbound: true, // already filtered to ghosted
         isClosed: x.c.status === "closed" || recaps[i] != null,
-        followUpStage: x.c.followUpStage ?? null,
-        followUpStageAt: x.c.followUpStageAt ?? null,
+        touchCount: touches[i].count,
+        lastTouchAt: touches[i].lastAt,
         now,
       });
       if (stage == null || lastInbound == null) return;
       eligible.push({ c: x.c, stage, lastInboundAt: lastInbound.createdAt });
     });
 
+    // Dedupe per customer: one follow-up per phone (a customer with several ghosted orders shouldn't
+    // get several templates). Keep the most recently active order as the representative.
+    const byPhone = new Map<string, typeof eligible[number]>();
+    for (const e of eligible) {
+      const prev = byPhone.get(e.c.customerPhone);
+      if (!prev || e.lastInboundAt > prev.lastInboundAt) byPhone.set(e.c.customerPhone, e);
+    }
+    const deduped = [...byPhone.values()];
+
     // Product name only for the final candidates.
     const orders = await Promise.all(
-      eligible.map((e) => ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", e.c.orderId)).first()),
+      deduped.map((e) => ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", e.c.orderId)).first()),
     );
     const stage1: Candidate[] = [];
     const stage2: Candidate[] = [];
-    eligible.forEach((e, i) => {
+    deduped.forEach((e, i) => {
       const card: Candidate = {
         conversationId: e.c._id, customerName: e.c.customerName, customerPhone: e.c.customerPhone,
         productName: orders[i]?.productName ?? "—", orderId: e.c.orderId,
@@ -104,11 +135,12 @@ export const candidacyFor = internalQuery({
     const order = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", c.orderId)).first();
     const normName = normalizeCsName(c.assignedCsName);
     const cfg = await ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", normName)).first();
+    const touch = await touchInfo(ctx, c._id, lastInbound?.createdAt ?? null);
     const eligible = eligibleStage({
       lastInboundAt: lastInbound?.createdAt ?? null,
       lastMessageOutbound: lastMsg != null && lastMsg.direction === "outbound",
       isClosed: c.status === "closed" || recap != null,
-      followUpStage: c.followUpStage ?? null, followUpStageAt: c.followUpStageAt ?? null, now,
+      touchCount: touch.count, lastTouchAt: touch.lastAt, now,
     });
     return { eligible, phoneNumberId: cfg?.providerNumberId ?? null, customerName: c.customerName,
              customerPhone: c.customerPhone, orderId: c.orderId, productName: order?.productName ?? "—" };
