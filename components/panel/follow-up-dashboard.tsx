@@ -25,7 +25,7 @@ const formatRelativeTime = (ms: number): string => {
   if (diffH < 1) return '<1h lalu';
   if (diffH < 24) return `${diffH}h lalu`;
   const diffD = Math.round(diffH / 24);
-  return `${diffD}h lalu`;
+  return `${diffD}d lalu`;
 };
 
 export function FollowUpDashboard() {
@@ -99,6 +99,7 @@ export function FollowUpDashboard() {
       const stage = activeTab === 'stage1' ? 1 : 2;
       await send(id, stage);
     }
+    setSelected(new Set());
   }
 
   const stage1Count = data?.stage1.length ?? 0;
