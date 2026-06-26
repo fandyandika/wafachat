@@ -37,7 +37,7 @@ export const getFollowUpCandidates = query({
 
     // For ghosted only: closed-by-recap + the latest inbound timestamp.
     const recaps = await Promise.all(
-      ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", x.c.customerPhone)).first()),
+      ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", x.c.orderId)).first()),
     );
     const lastInbounds = await Promise.all(
       ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", x.c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first()),
@@ -98,7 +98,7 @@ export const candidacyFor = internalQuery({
     const c = await ctx.db.get(args.conversationId);
     if (!c) return null;
     const now = args.nowOverride ?? Date.now();
-    const recap = await ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", c.customerPhone)).first();
+    const recap = await ctx.db.query("shippingRecaps").withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", c.orderId)).first();
     const lastMsg = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first();
     const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first();
     const order = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", c.orderId)).first();

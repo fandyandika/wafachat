@@ -11,6 +11,8 @@
 import type * as analytics from "../analytics.js";
 import type * as auth from "../auth.js";
 import type * as closingRules from "../closingRules.js";
+import type * as conversationLifecycle from "../conversationLifecycle.js";
+import type * as crons from "../crons.js";
 import type * as cs from "../cs.js";
 import type * as csConfigs from "../csConfigs.js";
 import type * as events from "../events.js";
@@ -37,6 +39,8 @@ declare const fullApi: ApiFromModules<{
   analytics: typeof analytics;
   auth: typeof auth;
   closingRules: typeof closingRules;
+  conversationLifecycle: typeof conversationLifecycle;
+  crons: typeof crons;
   cs: typeof cs;
   csConfigs: typeof csConfigs;
   events: typeof events;

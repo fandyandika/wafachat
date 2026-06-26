@@ -56,7 +56,7 @@ test("getFollowUpCandidates: closed (shippingRecap) excluded", async () => {
     await ctx.db.insert("messages", msg(conv, "O-2", "62812", "inbound", now - 30 * HOUR));
     await ctx.db.insert("messages", msg(conv, "O-2", "62812", "outbound", now - 29 * HOUR));
     await ctx.db.insert("shippingRecaps", {
-      customerPhone: "62812", customerName: "Budi", csName: "Nabila", closedAt: now - 20 * HOUR,
+      orderIdBerdu: "O-2", customerPhone: "62812", customerName: "Budi", csName: "Nabila", closedAt: now - 20 * HOUR,
       recipientName: "Budi", recipientPhone: "62812", recipientAddress: "", recipientDistrict: "",
       recipientCity: "", packageContent: "Quran Mapping", paymentMethod: "cod" as const,
       status: "ready" as const, flags: [], sourceMessageText: "", version: 1,
