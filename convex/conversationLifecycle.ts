@@ -7,7 +7,7 @@
 // reactivates a closed conversation (state.upsertOrderFromN8n), so closing here is safe. We use a
 // DIRECT patch (no dailyStats bookkeeping) so the cleanup doesn't spike the "closed today" metric.
 
-import { internalAction, internalMutation } from "./_generated/server";
+import { action, internalAction, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 
@@ -86,4 +86,12 @@ async function sweep(ctx: { runMutation: any }, dryRun: boolean): Promise<SweepR
 export const cronArchiveSweep = internalAction({
   args: { dryRun: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<SweepResult> => sweep(ctx, args.dryRun ?? false),
+});
+
+// PUBLIC but READ-ONLY (always dryRun) — counts how many WON/STALE conversations the cron would
+// close, without writing. Safe to expose (no mutation, no data beyond counts). Used for the
+// pre-backfill preview via `npx convex run conversationLifecycle:archiveDryRun --prod`.
+export const archiveDryRun = action({
+  args: {},
+  handler: async (ctx): Promise<SweepResult> => sweep(ctx, true),
 });
