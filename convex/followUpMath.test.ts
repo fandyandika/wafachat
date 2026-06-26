@@ -42,6 +42,15 @@ test("got H+1 but replied after it -> null (left the funnel)", () => {
   }))).toBeNull();
 });
 
+test("got H+1, customer replied after it then went quiet again -> null (left funnel)", () => {
+  // lastMessageOutbound stays true so we reach the reply-detection guard (not the earlier ghost guard);
+  // lastInboundAt (30h) >= followUpStageAt (26h) means they responded after H+1 -> drop from the funnel.
+  expect(eligibleStage(base({
+    lastInboundAt: 30 * HOUR, lastMessageOutbound: true,
+    followUpStage: 1, followUpStageAt: 26 * HOUR, now: 52 * HOUR,
+  }))).toBeNull();
+});
+
 test("got H+1 but only 10h passed -> null (too soon for H+2)", () => {
   expect(eligibleStage(base({
     lastInboundAt: 0, followUpStage: 1, followUpStageAt: 40 * HOUR, now: 50 * HOUR,

@@ -41,6 +41,7 @@ export function eligibleStage(input: CandidacyInput, stages: FollowUpStageConfig
   const curStage = input.followUpStage ?? 0;
   for (const s of stages) {
     if (curStage !== (s.requiresPrevStage ?? 0)) continue; // must be exactly at the prior stage
+    // Time windows are inclusive: at exactly the min/max boundary the gate passes.
     if (s.minHoursSinceLastInbound != null && sinceInbound < s.minHoursSinceLastInbound * HOUR) continue;
     if (s.maxHoursSinceLastInbound != null && sinceInbound > s.maxHoursSinceLastInbound * HOUR) continue;
     if (s.requiresPrevStage != null) {
