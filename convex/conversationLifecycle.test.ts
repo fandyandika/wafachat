@@ -134,3 +134,19 @@ test("resolveBatch: real-order lead NOT closed by an OLD recap on the same phone
     expect((await ctx.db.get(cId))!.status).toBe("active");
   });
 });
+
+test("resolveBatch: outbound 'PESANAN COD DIPROSES' -> closedMarker (COD won leaves funnel, not a closing)", async () => {
+  const t = convexTest(schema);
+  let cId: Id<"conversations">;
+  await t.run(async (ctx) => {
+    cId = await ctx.db.insert("conversations", conv("O-COD", "62823"));
+    await ctx.db.insert("orders", order("O-COD", "62823"));
+    await ctx.db.insert("messages", inbound(cId, "O-COD", "62823", now - 2 * HOUR)); // fresh -> not stale
+    await ctx.db.insert("messages", outbound(cId, "O-COD", "62823", now - HOUR, "*PESANAN COD DIPROSES* ya kak 🙏"));
+  });
+  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
+  expect(r.closedMarker).toBe(1);
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(cId))!.status).toBe("closed");
+  });
+});

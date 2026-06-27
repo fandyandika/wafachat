@@ -16,9 +16,11 @@ export const ARCHIVE_AFTER_MS = 5 * 24 * 60 * 60 * 1000;
 const BATCH = 25; // small: each non-closed row also scans its recent messages for "done" markers
 
 // "Done" markers in the chat → the lead already bought / is post-sale, so it leaves the funnel.
-// A shopee link/word can appear in either direction; the post-purchase CS messages are outbound only.
+// A shopee link/word can appear in either direction; the post-sale CS messages are outbound only.
+// NB: "cod diproses" = a COD order was confirmed (a won lead) — it leaves the funnel but is NOT a
+// "closing" (CR stays locked to the PEMESANAN BERHASIL recap), exactly as requested.
 const MARKER_ANY = ["shopee", "shp.ee"];
-const MARKER_OUT = ["aksesbonus", "review", "testi", "feedback"];
+const MARKER_OUT = ["aksesbonus", "review", "testi", "feedback", "cod diproses"];
 
 async function hasDoneMarker(ctx: { db: any }, conversationId: any): Promise<boolean> {
   const msgs = await ctx.db
