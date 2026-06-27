@@ -53,6 +53,7 @@ export const autoFollowUpSweep = internalAction({
       const queue = [
         ...cands.stage1.map((c) => ({ id: c.conversationId, stage: 1 })),
         ...cands.stage2.map((c) => ({ id: c.conversationId, stage: 2 })),
+        ...cands.stage3.map((c) => ({ id: c.conversationId, stage: 3 })),
       ].slice(0, remaining);
       for (const item of queue) {
         const r = await ctx.runAction(internal.followUp.performFollowUpSend, { conversationId: item.id, stage: item.stage, nowOverride: now });

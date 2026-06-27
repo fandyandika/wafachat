@@ -11,16 +11,15 @@ const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbou
 // Manual-via-WABA follow-ups and API sends both land here, so the funnel can't double-send a lead a
 // CS already touched by hand. Reads only the post-window tail, so it stays cheap.
 async function touchInfo(ctx: any, conversationId: any, lastInboundAt: number | null) {
-  if (lastInboundAt == null) return { count: 0, lastAt: null as number | null };
+  if (lastInboundAt == null) return { count: 0, lastAt: null as number | null, ats: [] as number[] };
   const windowClose = lastInboundAt + WINDOW_HOURS * HOUR;
   const touches = await ctx.db
     .query("messages")
     .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversationId).gt("createdAt", windowClose))
     .filter((q: any) => q.eq(q.field("direction"), "outbound"))
     .collect();
-  let lastAt: number | null = null;
-  for (const t of touches) if (lastAt == null || t.createdAt > lastAt) lastAt = t.createdAt;
-  return { count: touches.length, lastAt };
+  const ats = (touches.map((t: any) => t.createdAt) as number[]).sort((a, b) => a - b);
+  return { count: ats.length, lastAt: ats.length ? ats[ats.length - 1] : null, ats };
 }
 
 // nowOverride is test-only (Date.now() is unavailable in some runtimes); prod passes nothing.
@@ -66,9 +65,11 @@ export const getFollowUpCandidates = query({
     );
 
     type Row = typeof open[number];
+    // touchAts = timestamps of follow-up touches already sent (index 0 = H+1, 1 = H+2, 2 = H+2B) so
+    // the UI can show "✓H+1 ✓H+2 ○H+2B" + when each went out.
     type Candidate = { conversationId: Row["_id"]; customerName: string; customerPhone: string;
-      productName: string; orderId: string; csName: string; lastInboundAt: number };
-    const eligible: Array<{ c: Row; stage: number; lastInboundAt: number }> = [];
+      productName: string; orderId: string; csName: string; lastInboundAt: number; touchAts: number[] };
+    const eligible: Array<{ c: Row; stage: number; lastInboundAt: number; touchAts: number[] }> = [];
     ghosted.forEach((x, i) => {
       const lastInbound = lastInbounds[i];
       const stage = eligibleStage({
@@ -80,7 +81,7 @@ export const getFollowUpCandidates = query({
         now,
       });
       if (stage == null || lastInbound == null) return;
-      eligible.push({ c: x.c, stage, lastInboundAt: lastInbound.createdAt });
+      eligible.push({ c: x.c, stage, lastInboundAt: lastInbound.createdAt, touchAts: touches[i].ats });
     });
 
     // Dedupe per customer: one follow-up per phone (a customer with several ghosted orders shouldn't
@@ -98,17 +99,19 @@ export const getFollowUpCandidates = query({
     );
     const stage1: Candidate[] = [];
     const stage2: Candidate[] = [];
+    const stage3: Candidate[] = [];
     deduped.forEach((e, i) => {
       const card: Candidate = {
         conversationId: e.c._id, customerName: e.c.customerName, customerPhone: e.c.customerPhone,
         productName: orders[i]?.productName ?? "—", orderId: e.c.orderId,
-        csName: e.c.assignedCsName, lastInboundAt: e.lastInboundAt,
+        csName: e.c.assignedCsName, lastInboundAt: e.lastInboundAt, touchAts: e.touchAts,
       };
-      (e.stage === 1 ? stage1 : stage2).push(card);
+      (e.stage === 1 ? stage1 : e.stage === 2 ? stage2 : stage3).push(card);
     });
     stage1.sort((a, b) => a.lastInboundAt - b.lastInboundAt);
     stage2.sort((a, b) => a.lastInboundAt - b.lastInboundAt);
-    return { stage1, stage2 };
+    stage3.sort((a, b) => a.lastInboundAt - b.lastInboundAt);
+    return { stage1, stage2, stage3 };
   },
 });
 

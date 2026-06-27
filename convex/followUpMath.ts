@@ -13,12 +13,19 @@ export type FollowUpStageConfig = {
   minHoursSincePrevStage?: number;
 };
 
-// NOTE: templateName values are PLACEHOLDERS until the user supplies the approved names.
+// Timing = hours since the customer's LAST inbound; requiresPrevStage = follow-up touches already
+// sent (manual-via-WABA or API). No upper ceiling here — leads that never get touched are bounded by
+// the conversationLifecycle stale-archive (5 days). H+2B is the final goodbye, after which the
+// conversation is archived.
+// NOTE: templateName values are PLACEHOLDERS until the user supplies the approved names. H+2B's
+// approved template is the goodbye copy ("Kak, kalau memang belum ingin lanjut sekarang...").
 export const FOLLOWUP_STAGES: FollowUpStageConfig[] = [
   { stage: 1, label: "H+1", templateName: "followup_h1", language: "id",
-    minHoursSinceLastInbound: 24, maxHoursSinceLastInbound: 120 }, // 24h .. 5-day ceiling
+    minHoursSinceLastInbound: 24 },                                                    // >=24h, 0 touches
   { stage: 2, label: "H+2", templateName: "followup_h2", language: "id",
-    requiresPrevStage: 1, minHoursSincePrevStage: 20, maxHoursSinceLastInbound: 120 },
+    requiresPrevStage: 1, minHoursSinceLastInbound: 48, minHoursSincePrevStage: 12 }, // >=48h, 1 touch, >=12h since it
+  { stage: 3, label: "H+2B", templateName: "followup_h2b", language: "id",
+    requiresPrevStage: 2, minHoursSinceLastInbound: 60, minHoursSincePrevStage: 12 }, // >=60h, 2 touches -> goodbye -> archive
 ];
 
 const HOUR = 3_600_000;

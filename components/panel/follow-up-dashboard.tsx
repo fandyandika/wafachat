@@ -16,19 +16,44 @@ type Candidate = {
   orderId: string;
   csName: string;
   lastInboundAt: number;
+  touchAts: number[]; // [H+1 sentAt, H+2 sentAt, H+2B sentAt] — only the ones already sent
 };
+type Staged = Candidate & { stage: 1 | 2 | 3 };
 
-type Tab = 'stage1' | 'stage2';
+type Tab = 'all' | 'stage1' | 'stage2' | 'stage3';
+
+const STAGE_LABEL: Record<1 | 2 | 3, string> = { 1: 'H+1', 2: 'H+2', 3: 'H+2B' };
+const STAGE_NAMES = ['H+1', 'H+2', 'H+2B'];
 
 const formatRelativeTime = (ms: number): string => {
   const now = Date.now();
-  const diffMs = now - ms;
-  const diffH = Math.round(diffMs / 3.6e6);
-  if (diffH < 1) return '<1h lalu';
-  if (diffH < 24) return `${diffH}h lalu`;
-  const diffD = Math.round(diffH / 24);
-  return `${diffD}d lalu`;
+  const diffH = Math.round((now - ms) / 3.6e6);
+  if (diffH < 1) return '<1j lalu';
+  if (diffH < 24) return `${diffH}j lalu`;
+  return `${Math.round(diffH / 24)}h lalu`;
 };
+
+// Progress badges: which follow-up touches already went out (manual-via-WABA or API) + when.
+function ProgressBadges({ touchAts }: { touchAts: number[] }) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {STAGE_NAMES.map((lbl, i) => {
+        const done = touchAts.length > i;
+        return (
+          <span
+            key={lbl}
+            title={done ? new Date(touchAts[i]).toLocaleString('id-ID') : 'belum dikirim'}
+            className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
+              done ? 'bg-green-100 text-green-700' : 'bg-muted text-muted-foreground'
+            }`}
+          >
+            {done ? '✓' : '○'}{lbl}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 // Lazy chat preview: only queried when its row is expanded (one conversation at a time), so it adds
 // no load to the candidate list. Shows the last few messages so a CS can eyeball whether the lead was
@@ -68,7 +93,7 @@ function ChatPreview({ conversationId }: { conversationId: string }) {
 
 export function FollowUpDashboard() {
   const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs' } | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('stage1');
+  const [activeTab, setActiveTab] = useState<Tab>('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState<Record<string, boolean>>({});
   const [result, setResult] = useState<Record<string, 'ok' | string>>({});
@@ -88,9 +113,24 @@ export function FollowUpDashboard() {
   const data = useQuery(api.followUp.getFollowUpCandidates, me ? { csName } : 'skip');
 
   const isLoading = data === undefined;
-  const candidates = activeTab === 'stage1' ? (data?.stage1 ?? []) : (data?.stage2 ?? []);
+  // One unified list tagged with each lead's current stage → powers the "Semua" pipeline view.
+  const withStage: Staged[] = [
+    ...(data?.stage1 ?? []).map((c) => ({ ...c, stage: 1 as const })),
+    ...(data?.stage2 ?? []).map((c) => ({ ...c, stage: 2 as const })),
+    ...(data?.stage3 ?? []).map((c) => ({ ...c, stage: 3 as const })),
+  ];
+  const want = activeTab === 'stage1' ? 1 : activeTab === 'stage2' ? 2 : activeTab === 'stage3' ? 3 : null;
+  const candidates = want ? withStage.filter((c) => c.stage === want) : withStage;
+
   const allIds = candidates.map((c) => c.conversationId);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+
+  const tabs: Array<{ key: Tab; label: string; count: number }> = [
+    { key: 'all', label: 'Semua', count: withStage.length },
+    { key: 'stage1', label: 'H+1', count: data?.stage1.length ?? 0 },
+    { key: 'stage2', label: 'H+2', count: data?.stage2.length ?? 0 },
+    { key: 'stage3', label: 'H+2B', count: data?.stage3.length ?? 0 },
+  ];
 
   const toggleSelectAll = () => {
     if (allSelected) {
@@ -113,7 +153,7 @@ export function FollowUpDashboard() {
     });
   };
 
-  async function send(conversationId: string, stage: 1 | 2) {
+  async function send(conversationId: string, stage: 1 | 2 | 3) {
     setSending((s) => ({ ...s, [conversationId]: true }));
     const r = await fetch('/api/follow-up/send', {
       method: 'POST',
@@ -123,56 +163,41 @@ export function FollowUpDashboard() {
       .then((x) => x.json())
       .catch(() => ({ ok: false, error: 'Gagal' }));
     setSending((s) => ({ ...s, [conversationId]: false }));
-    setResult((m) => ({
-      ...m,
-      [conversationId]: r.ok ? 'ok' : (r.error || 'Gagal'),
-    }));
+    setResult((m) => ({ ...m, [conversationId]: r.ok ? 'ok' : (r.error || 'Gagal') }));
   }
 
   async function sendSelected() {
     const ids = Array.from(selected);
-    if (ids.length > 20) {
-      const confirmed = window.confirm(
-        `Kirim follow-up ke ${ids.length} customer sekaligus?`,
-      );
-      if (!confirmed) return;
-    }
+    if (ids.length > 20 && !window.confirm(`Kirim follow-up ke ${ids.length} customer sekaligus?`)) return;
+    // Each lead sends its OWN stage (in the "Semua" tab the selection can span stages).
+    const stageById = new Map(withStage.map((c) => [c.conversationId, c.stage]));
     for (const id of ids) {
-      const stage = activeTab === 'stage1' ? 1 : 2;
-      await send(id, stage);
+      const stage = stageById.get(id);
+      if (stage) await send(id, stage);
     }
     setSelected(new Set());
   }
 
-  const stage1Count = data?.stage1.length ?? 0;
-  const stage2Count = data?.stage2.length ?? 0;
+  const colSpan = me?.role === 'admin' ? 8 : 7;
 
   return (
     <div className="space-y-6">
       {/* Tab toggle */}
       <div className="flex flex-wrap gap-3">
-        <button
-          type="button"
-          onClick={() => setActiveTab('stage1')}
-          className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-            activeTab === 'stage1'
-              ? 'bg-primary text-primary-foreground shadow-sm'
-              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-          }`}
-        >
-          H+1 ({stage1Count})
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab('stage2')}
-          className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-            activeTab === 'stage2'
-              ? 'bg-primary text-primary-foreground shadow-sm'
-              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-          }`}
-        >
-          H+2 ({stage2Count})
-        </button>
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setActiveTab(t.key)}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === t.key
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
+            }`}
+          >
+            {t.label} ({t.count})
+          </button>
+        ))}
       </div>
 
       {isLoading ? (
@@ -195,20 +220,14 @@ export function FollowUpDashboard() {
             <thead className="border-b border-border bg-muted/50">
               <tr>
                 <th className="px-4 py-3 text-left font-medium">
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={toggleSelectAll}
-                    className="rounded"
-                  />
+                  <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} className="rounded" />
                 </th>
                 <th className="px-4 py-3 text-left font-medium">Customer</th>
                 <th className="px-4 py-3 text-left font-medium">Produk</th>
                 <th className="px-4 py-3 text-left font-medium">Order</th>
+                <th className="px-4 py-3 text-left font-medium">Progres FU</th>
                 <th className="px-4 py-3 text-left font-medium">Chat Terakhir</th>
-                {me?.role === 'admin' && (
-                  <th className="px-4 py-3 text-left font-medium">CS</th>
-                )}
+                {me?.role === 'admin' && <th className="px-4 py-3 text-left font-medium">CS</th>}
                 <th className="px-4 py-3 text-left font-medium">Aksi</th>
               </tr>
             </thead>
@@ -216,80 +235,57 @@ export function FollowUpDashboard() {
               {candidates.map((c) => {
                 const rowResult = result[c.conversationId];
                 const isSending = sending[c.conversationId];
-                const stage = activeTab === 'stage1' ? 1 : 2;
                 return (
                   <Fragment key={c.conversationId}>
-                  <tr className="hover:bg-accent/30">
-                    <td className="px-4 py-3">
-                      <input
-                        type="checkbox"
-                        checked={selected.has(c.conversationId)}
-                        onChange={() => toggleSelect(c.conversationId)}
-                        className="rounded"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="font-medium text-foreground">
-                        {c.customerName || '—'}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {c.customerPhone}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setExpanded((e) => (e === c.conversationId ? null : c.conversationId))
-                        }
-                        className="mt-1 text-xs text-blue-600 hover:underline"
-                      >
-                        {expanded === c.conversationId ? '▲ Tutup chat' : '👁 Lihat chat'}
-                      </button>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {c.productName}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {c.orderId}
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">
-                      {formatRelativeTime(c.lastInboundAt)}
-                    </td>
-                    {me?.role === 'admin' && (
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {c.csName}
+                    <tr className="hover:bg-accent/30">
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(c.conversationId)}
+                          onChange={() => toggleSelect(c.conversationId)}
+                          className="rounded"
+                        />
                       </td>
-                    )}
-                    <td className="px-4 py-3">
-                      {rowResult === 'ok' ? (
-                        <span className="text-sm font-medium text-green-600">
-                          ✓ Terkirim
-                        </span>
-                      ) : rowResult ? (
-                        <span className="text-sm font-medium text-red-600">
-                          {rowResult}
-                        </span>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={isSending}
-                          onClick={() => send(c.conversationId, stage)}
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-foreground">{c.customerName || '—'}</div>
+                        <div className="text-xs text-muted-foreground">{c.customerPhone}</div>
+                        <button
+                          type="button"
+                          onClick={() => setExpanded((e) => (e === c.conversationId ? null : c.conversationId))}
+                          className="mt-1 text-xs text-blue-600 hover:underline"
                         >
-                          {isSending ? 'Mengirim...' : 'Kirim'}
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                  {expanded === c.conversationId && (
-                    <tr>
-                      <td
-                        colSpan={me?.role === 'admin' ? 7 : 6}
-                        className="border-t border-border/50 p-0"
-                      >
-                        <ChatPreview conversationId={c.conversationId} />
+                          {expanded === c.conversationId ? '▲ Tutup chat' : '👁 Lihat chat'}
+                        </button>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">{c.productName}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{c.orderId}</td>
+                      <td className="px-4 py-3"><ProgressBadges touchAts={c.touchAts} /></td>
+                      <td className="px-4 py-3 text-muted-foreground">{formatRelativeTime(c.lastInboundAt)}</td>
+                      {me?.role === 'admin' && <td className="px-4 py-3 text-muted-foreground">{c.csName}</td>}
+                      <td className="px-4 py-3">
+                        {rowResult === 'ok' ? (
+                          <span className="text-sm font-medium text-green-600">✓ Terkirim</span>
+                        ) : rowResult ? (
+                          <span className="text-sm font-medium text-red-600">{rowResult}</span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={isSending}
+                            onClick={() => send(c.conversationId, c.stage)}
+                          >
+                            {isSending ? 'Mengirim...' : `Kirim ${STAGE_LABEL[c.stage]}`}
+                          </Button>
+                        )}
                       </td>
                     </tr>
-                  )}
+                    {expanded === c.conversationId && (
+                      <tr>
+                        <td colSpan={colSpan} className="border-t border-border/50 p-0">
+                          <ChatPreview conversationId={c.conversationId} />
+                        </td>
+                      </tr>
+                    )}
                   </Fragment>
                 );
               })}
