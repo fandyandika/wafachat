@@ -36,12 +36,12 @@ test("1 touch, 50h old, but only 8h since the touch -> null (needs >=12h gap)", 
   expect(eligibleStage(base({ touchCount: 1, lastTouchAt: 42 * HOUR, now: 50 * HOUR }))).toBeNull();
 });
 
-test("2 touches, 70h old, 20h since touch -> stage 3 (H+2B, goodbye)", () => {
-  expect(eligibleStage(base({ touchCount: 2, lastTouchAt: 50 * HOUR, now: 70 * HOUR }))).toBe(3);
+test("2 touches, 80h old, 30h since touch -> stage 3 (H+3, goodbye)", () => {
+  expect(eligibleStage(base({ touchCount: 2, lastTouchAt: 50 * HOUR, now: 80 * HOUR }))).toBe(3);
 });
 
-test("2 touches but only 50h old -> null (H+2B needs >=60h)", () => {
-  expect(eligibleStage(base({ touchCount: 2, lastTouchAt: 35 * HOUR, now: 50 * HOUR }))).toBeNull();
+test("2 touches but only 70h old -> null (H+3 needs >=72h)", () => {
+  expect(eligibleStage(base({ touchCount: 2, lastTouchAt: 50 * HOUR, now: 70 * HOUR }))).toBeNull();
 });
 
 test("3 touches -> null (funnel done, all sent)", () => {
@@ -52,6 +52,6 @@ test("ANTI-DOUBLE: 1 touch keeps it out of H+1, and too early for H+2 -> null", 
   expect(eligibleStage(base({ touchCount: 1, lastTouchAt: 25 * HOUR, now: 30 * HOUR }))).toBeNull();
 });
 
-test("config: three stages, H+1 -> H+2 -> H+2B", () => {
-  expect(FOLLOWUP_STAGES.map((s) => s.label)).toEqual(["H+1", "H+2", "H+2B"]);
+test("config: three stages, H+1 -> H+2 -> H+3", () => {
+  expect(FOLLOWUP_STAGES.map((s) => s.label)).toEqual(["H+1", "H+2", "H+3"]);
 });
