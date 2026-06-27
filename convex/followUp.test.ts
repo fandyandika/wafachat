@@ -428,3 +428,36 @@ test("getFollowUpEffectiveness: counts closings with FU touches", async () => {
   expect(res.fromFollowUp).toBe(1);
   expect(res.byStage.h2).toBe(1);
 });
+
+// Closing tab: recent closings, with via-follow-up flag, scoped + cleaned
+test("getClosedFollowUps: lists recent closings, flags via-follow-up, filters cancelled/test/scope", async () => {
+  const t = convexTest(schema);
+  const recap = (orderId: string, phone: string, cs: string, closedAt: number, extra: Record<string, any> = {}) => ({
+    orderIdBerdu: orderId, customerPhone: phone, customerName: "Cust " + orderId, csName: cs, closedAt,
+    recipientName: "Cust", recipientPhone: phone, recipientAddress: "", recipientDistrict: "",
+    recipientCity: "", packageContent: "Quran", paymentMethod: "cod" as const,
+    status: "ready" as const, flags: [], sourceMessageText: "", version: 1,
+    createdAt: closedAt, updatedAt: closedAt, ...extra,
+  });
+  await t.run(async (ctx) => {
+    await ctx.db.insert("shippingRecaps", recap("C-1", "62901", "Nabila", now - 1 * HOUR, { followUpTouchesAtClose: 2 })); // via FU
+    await ctx.db.insert("shippingRecaps", recap("C-2", "62902", "Nabila", now - 2 * HOUR)); // direct (no touches)
+    await ctx.db.insert("shippingRecaps", recap("C-3", "62903", "Lila", now - 3 * HOUR)); // other CS
+    await ctx.db.insert("shippingRecaps", recap("C-4", "62904", "Nabila", now - 4 * HOUR, { status: "cancelled" })); // cancelled
+    await ctx.db.insert("shippingRecaps", recap("C-5", "6285715682110", "Nabila", now - 5 * HOUR)); // internal-test phone
+  });
+
+  const scoped = await t.query(api.followUp.getClosedFollowUps, { csName: "Nabila", sinceDays: 1, nowOverride: now });
+  const ids = scoped.map((r) => r.orderId);
+  expect(ids).toContain("C-1");
+  expect(ids).toContain("C-2");
+  expect(ids).not.toContain("C-3"); // other CS
+  expect(ids).not.toContain("C-4"); // cancelled
+  expect(ids).not.toContain("C-5"); // internal test
+  expect(scoped[0].orderId).toBe("C-1"); // newest first
+  expect(scoped.find((r) => r.orderId === "C-1")!.fromFollowUp).toBe(true);
+  expect(scoped.find((r) => r.orderId === "C-2")!.fromFollowUp).toBe(false);
+
+  const all = await t.query(api.followUp.getClosedFollowUps, { sinceDays: 1, nowOverride: now });
+  expect(all.map((r) => r.orderId)).toContain("C-3"); // unscoped sees other CS
+});

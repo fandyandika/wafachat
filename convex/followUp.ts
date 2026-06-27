@@ -416,3 +416,53 @@ export const getFollowUpEffectiveness = query({
     return { totalClosings, fromFollowUp, byStage: byTouches };
   },
 });
+
+// "Closing" tab: recent closings so CS can see where a lead WENT after it dropped out of the funnel
+// (PEMESANAN BERHASIL / marker → status closed → vanishes from H+1/2/3). Read-only over shippingRecaps;
+// a lead that closed after ≥1 follow-up touch gets fromFollowUp=true so the funnel's effect is visible.
+export const getClosedFollowUps = query({
+  args: { csName: v.optional(v.string()), sinceDays: v.optional(v.number()), nowOverride: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const now = args.nowOverride ?? Date.now();
+    const DAY = 86_400_000;
+    const since = now - (args.sinceDays ?? 7) * DAY;
+    const csKeyMemo = args.csName ? csKey(args.csName) : null;
+
+    const recaps = await ctx.db
+      .query("shippingRecaps")
+      .withIndex("by_closedAt", (q: any) => q.gte("closedAt", since).lte("closedAt", now))
+      .collect();
+
+    const filtered = recaps
+      .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export")
+      .filter((r) => !isInternalTestPhone(r.customerPhone))
+      .filter((r) => (csKeyMemo ? csKey(r.csName) === csKeyMemo : true));
+
+    type ClosedRow = {
+      customerName: string;
+      customerPhone: string;
+      csName: string;
+      orderId: string;
+      closedAt: number;
+      product: string;
+      touches: number;
+      fromFollowUp: boolean;
+    };
+    const rows: ClosedRow[] = filtered.map((r) => {
+      const touches = r.followUpTouchesAtClose ?? 0;
+      return {
+        customerName: r.customerName,
+        customerPhone: r.customerPhone,
+        csName: r.csName,
+        orderId: r.orderIdBerdu ?? "",
+        closedAt: r.closedAt,
+        product: r.packageContent ?? "",
+        touches,
+        fromFollowUp: touches >= 1,
+      };
+    });
+
+    rows.sort((a, b) => b.closedAt - a.closedAt);
+    return rows.slice(0, 300);
+  },
+});
