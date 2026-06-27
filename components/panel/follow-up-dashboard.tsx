@@ -648,34 +648,88 @@ export function FollowUpDashboard() {
       : 0;
 
   return (
-    // Height tuned to sit below the (now lean) panel header and above the mobile bottom-nav; nudge if needed.
-    <div className="flex h-[calc(100dvh-10rem)] min-h-[26rem] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm md:h-[calc(100dvh-6.5rem)]">
-      {/* KPI strip */}
+    // Fills almost all the space below the (lean) panel header, above the mobile bottom-nav; nudge if needed.
+    <div className="flex h-[calc(100dvh-8.5rem)] min-h-[24rem] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm md:h-[calc(100dvh-5rem)]">
+      {/* KPI — compact one-liner */}
       {kpiData && typeof kpiData === 'object' && 'totalClosings' in kpiData && (
-        <div className="shrink-0 border-b border-border bg-gradient-to-r from-emerald-50 to-transparent px-4 py-2.5 dark:from-emerald-950/30">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-            <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Efektivitas 30 hari</span>
-            <span className="text-foreground">
-              <strong>{kpiData.totalClosings}</strong> closing
+        <div className="shrink-0 border-b border-border bg-emerald-50/60 px-3 py-1.5 dark:bg-emerald-950/20">
+          <p className="truncate text-xs">
+            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+              {kpiData.fromFollowUp} closing dari follow-up ({kpiPct}%)
             </span>
-            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-              {kpiData.fromFollowUp} dari follow-up ({kpiPct}%)
+            <span className="text-muted-foreground">
+              {' '}· 30 hari · total {kpiData.totalClosings} · H1 {kpiData.byStage.h1} H2 {kpiData.byStage.h2} H3 {kpiData.byStage.h3}
             </span>
-            <span className="text-xs text-muted-foreground">
-              H+1 {kpiData.byStage.h1} · H+2 {kpiData.byStage.h2} · H+3 {kpiData.byStage.h3}
-            </span>
-          </div>
+          </p>
         </div>
       )}
 
-      {/* Header: CS label + auto-send, tabs, search/sort */}
-      <div className="shrink-0 space-y-2.5 border-b border-border bg-card p-3 md:p-4">
-        <div className="flex items-center justify-between gap-3">
-          {/* Auto-send with an explicit, high-contrast ON/OFF state */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-medium text-muted-foreground">Auto-send</span>
+      {/* Controls — compact: row 1 = search + sort + CS filter, row 2 = tabs + auto-send */}
+      <div className="shrink-0 space-y-2 border-b border-border bg-card p-2.5">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Cari nama/nomor…"
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setSelectedId(null);
+            }}
+            className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground"
+          />
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as 'oldest' | 'newest')}
+            title="Urutkan (lama/baru ghosting)"
+            className="shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm text-foreground"
+          >
+            <option value="oldest">Lama</option>
+            <option value="newest">Baru</option>
+          </select>
+          {!isCs && (
+            <select
+              value={csFilter}
+              onChange={(e) => {
+                setCsFilter(e.target.value);
+                setSelectedId(null);
+                setSelectedIds(new Set());
+              }}
+              title="Filter per CS"
+              className="max-w-[38%] shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm font-medium text-foreground"
+            >
+              <option value="all">Semua CS</option>
+              {csList.map((c) => (
+                <option key={c.key} value={c.csName}>
+                  {c.csName.replace(/^CS\s+/i, '')}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <div className="flex flex-1 gap-1.5 overflow-x-auto">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => switchTab(t.key)}
+                className={`shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium transition-colors ${
+                  activeTab === t.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent'
+                }`}
+              >
+                {t.label} ({t.count})
+              </button>
+            ))}
+          </div>
+          {/* Auto-send — compact ON/OFF + switch */}
+          <div
+            className="flex shrink-0 items-center gap-1"
+            title={!csName ? 'Pilih satu CS dulu untuk auto-send' : 'Auto-send 08–14 WIB'}
+          >
+            <span className="text-[10px] font-medium text-muted-foreground">Auto</span>
             <span
-              className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+              className={`rounded px-1 py-0.5 text-[9px] font-bold ${
                 !csName ? 'bg-muted text-muted-foreground' : autoSendEnabled ? 'bg-emerald-600 text-white' : 'bg-zinc-300 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200'
               }`}
             >
@@ -685,71 +739,8 @@ export function FollowUpDashboard() {
               checked={autoSendEnabled}
               onCheckedChange={handleAutoSendToggle}
               disabled={!csName || togglingAutoSend}
-              title={!csName ? 'Pilih satu CS dulu' : 'Auto-send 08–14 WIB'}
             />
           </div>
-          {/* CS filter — top-right; local state so it always re-filters */}
-          {!isCs ? (
-            <select
-              value={csFilter}
-              onChange={(e) => {
-                setCsFilter(e.target.value);
-                setSelectedId(null);
-                setSelectedIds(new Set());
-              }}
-              title="Filter per CS"
-              className="max-w-[55%] shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm font-medium text-foreground"
-            >
-              <option value="all">Semua CS</option>
-              {csList.map((c) => (
-                <option key={c.key} value={c.csName}>
-                  {c.csName.replace(/^CS\s+/i, '')}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span className="text-xs text-muted-foreground">
-              CS: <strong className="text-foreground">{me?.name}</strong>
-            </span>
-          )}
-        </div>
-
-        {/* Tabs — horizontally scrollable on mobile */}
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => switchTab(t.key)}
-              className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                activeTab === t.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent'
-              }`}
-            >
-              {t.label} ({t.count})
-            </button>
-          ))}
-        </div>
-
-        <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="Cari nama atau nomor…"
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setSelectedId(null);
-            }}
-            className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground placeholder-muted-foreground"
-          />
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as 'oldest' | 'newest')}
-            title="Urutkan"
-            className="rounded-lg border border-input bg-background px-2 py-2 text-sm text-foreground"
-          >
-            <option value="oldest">Paling lama</option>
-            <option value="newest">Paling baru</option>
-          </select>
         </div>
       </div>
 
@@ -766,7 +757,7 @@ export function FollowUpDashboard() {
         <div className={`flex w-full flex-col border-r border-border bg-background md:w-96 ${showConvOnMobile ? 'hidden md:flex' : 'flex'}`}>
           {/* Select-all toolbar */}
           {selectable && !isLoading && activeList.length > 0 && (
-            <div className="flex shrink-0 items-center gap-2.5 border-b border-border bg-muted/30 px-3 py-2">
+            <div className="flex shrink-0 items-center gap-2.5 border-b border-border bg-muted/30 px-3 py-1.5">
               <RowCheck checked={allVisibleChecked} onToggle={toggleSelectAll} />
               <span className="text-xs text-muted-foreground">
                 {selectedIds.size > 0 ? `${selectedIds.size} dipilih` : `Pilih semua (${activeList.length})`}

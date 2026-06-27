@@ -35,6 +35,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   const title = NAV.find((n) => n.href === pathname)?.label ?? 'Dashboard';
   const [navHidden, setNavHidden] = useState(false);
   const navItems = NAV; // Settings is visible to everyone; sign-out lives on the Settings page.
+  const isFollowUp = pathname === '/panel/follow-up'; // CRM page: hide header filters + tighten padding for more room.
 
   const setParam = (key: string, value: string | undefined) => {
     const next = new URLSearchParams(sp.toString());
@@ -97,8 +98,9 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                 <img src="/logo.png" alt="Pustaka Islam" className="hidden h-6 w-auto sm:block" />
                 <span className="text-xs text-muted-foreground">via WaFaChat</span>
               </div>
+              {!isFollowUp && (
               <div className="flex flex-wrap items-center gap-3">
-                {pathname !== '/panel/laporan' && pathname !== '/panel/follow-up' && (
+                {pathname !== '/panel/laporan' && (
                 <div className="flex flex-wrap items-center gap-1">
                   {RANGES.map((r) => (
                     <button
@@ -115,21 +117,20 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                   ))}
                 </div>
                 )}
-                {pathname !== '/panel/follow-up' && (
-                  <Select value={cs} onValueChange={(v) => setParam('cs', v ?? 'all')}>
-                    <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Semua CS" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Semua CS</SelectItem>
-                      {csList.map((c) => (
-                        <SelectItem key={c.key} value={c.csName}>{c.csName.replace(/^CS\s+/i, '')}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
+                <Select value={cs} onValueChange={(v) => setParam('cs', v ?? 'all')}>
+                  <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Semua CS" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua CS</SelectItem>
+                    {csList.map((c) => (
+                      <SelectItem key={c.key} value={c.csName}>{c.csName.replace(/^CS\s+/i, '')}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+              )}
             </div>
           </header>
-          <div className="mx-auto w-full max-w-6xl space-y-6 p-4 pb-24 md:p-6 md:pb-8">{children}</div>
+          <div className={cn('mx-auto w-full max-w-6xl space-y-6', isFollowUp ? 'p-2 pb-20 md:p-4 md:pb-4' : 'p-4 pb-24 md:p-6 md:pb-8')}>{children}</div>
         </main>
       </div>
 
