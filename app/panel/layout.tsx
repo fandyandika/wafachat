@@ -1,14 +1,13 @@
 'use client';
 
-import { Suspense, useState, useEffect } from 'react';
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { Bot, LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings } from 'lucide-react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { usePanelFilters, type DateRangeKey } from '@/components/panel/use-panel-filters';
 
 const NAV = [
@@ -35,15 +34,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const title = NAV.find((n) => n.href === pathname)?.label ?? 'Dashboard';
   const [navHidden, setNavHidden] = useState(false);
-  const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs' } | null>(null);
-  useEffect(() => {
-    fetch('/api/me').then((r) => (r.ok ? r.json() : null)).then(setMe).catch(() => setMe(null));
-  }, []);
-  const navItems = NAV.filter((n) => n.href !== '/panel/settings' || me?.role === 'admin');
-  async function logout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/login');
-  }
+  const navItems = NAV; // Settings is visible to everyone; sign-out lives on the Settings page.
 
   const setParam = (key: string, value: string | undefined) => {
     const next = new URLSearchParams(sp.toString());
@@ -124,43 +115,16 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                   ))}
                 </div>
                 )}
-                <Select value={cs} onValueChange={(v) => setParam('cs', v ?? 'all')}>
-                  <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Semua CS" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Semua CS</SelectItem>
-                    {csList.map((c) => (
-                      <SelectItem key={c.key} value={c.csName}>{c.csName.replace(/^CS\s+/i, '')}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {me && (
-                  <div className="border-l border-border pl-3">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-accent active:scale-95">
-                        <span className="flex size-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-                          {me.name?.[0]?.toUpperCase() ?? 'U'}
-                        </span>
-                        <span className="hidden leading-none sm:block">
-                          <span className="block text-sm font-medium text-foreground">{me.name}</span>
-                          <span className="mt-0.5 block text-[11px] uppercase tracking-wide text-muted-foreground">{me.role}</span>
-                        </span>
-                        <ChevronDown className="size-4 text-muted-foreground" />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-44">
-                        {me.role === 'admin' && (
-                          <DropdownMenuItem onClick={() => router.push(`/panel/settings?${sp.toString()}`)}>
-                            <Settings className="size-4" />
-                            Settings
-                          </DropdownMenuItem>
-                        )}
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem variant="destructive" onClick={logout}>
-                          <LogOut className="size-4" />
-                          Keluar
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
+                {pathname !== '/panel/follow-up' && (
+                  <Select value={cs} onValueChange={(v) => setParam('cs', v ?? 'all')}>
+                    <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Semua CS" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Semua CS</SelectItem>
+                      {csList.map((c) => (
+                        <SelectItem key={c.key} value={c.csName}>{c.csName.replace(/^CS\s+/i, '')}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 )}
               </div>
             </div>

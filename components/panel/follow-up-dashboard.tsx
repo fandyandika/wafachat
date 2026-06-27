@@ -156,9 +156,14 @@ function ChatListItem({
           <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelativeTime(candidate.lastInboundAt)}</span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
-          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800 dark:bg-sky-900 dark:text-sky-100">
-            {STAGE_LABEL[candidate.stage]}
-          </span>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800 dark:bg-sky-900 dark:text-sky-100">
+              {STAGE_LABEL[candidate.stage]}
+            </span>
+            <span className="truncate text-[11px] text-muted-foreground" title={`CS: ${candidate.csName}`}>
+              {candidate.csName?.replace(/^CS\s+/i, '') || '—'}
+            </span>
+          </div>
           <ProgressDots touchAts={candidate.touchAts} />
         </div>
         <p className="mt-1 truncate text-xs text-muted-foreground">{truncateText(candidate.lastMessageText)}</p>
@@ -469,9 +474,13 @@ export function FollowUpDashboard() {
       .catch(() => setMe(null));
   }, []);
 
+  // CS filter lives INSIDE the dashboard (local state) so changing it always re-runs the queries —
+  // the shared header's URL-based filter wasn't reaching this page reliably. Seeded from ?cs= once.
   const { cs } = usePanelFilters();
-  const csName = me?.role === 'cs' ? me.name : cs && cs !== 'all' ? cs : undefined;
-  const csLabel = me?.role === 'cs' ? me.name : csName ?? 'Semua CS';
+  const csList = useQuery(api.cs.listCs, {}) ?? [];
+  const isCs = me?.role === 'cs';
+  const [csFilter, setCsFilter] = useState<string>(cs && cs !== 'all' ? cs : 'all');
+  const csName = isCs ? me!.name : csFilter !== 'all' ? csFilter : undefined;
 
   const data = useQuery(api.followUp.getFollowUpCandidates, me ? { csName } : 'skip');
   const archivedData = useQuery(api.followUp.getArchivedFollowUps, me && activeTab === 'archived' ? { csName } : 'skip');
@@ -639,8 +648,8 @@ export function FollowUpDashboard() {
       : 0;
 
   return (
-    // Height tuned to sit below the panel header and above the mobile bottom-nav; nudge the rem values if needed.
-    <div className="flex h-[calc(100dvh-13.5rem)] min-h-[26rem] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm md:h-[calc(100dvh-7.5rem)]">
+    // Height tuned to sit below the (now lean) panel header and above the mobile bottom-nav; nudge if needed.
+    <div className="flex h-[calc(100dvh-10rem)] min-h-[26rem] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm md:h-[calc(100dvh-6.5rem)]">
       {/* KPI strip */}
       {kpiData && typeof kpiData === 'object' && 'totalClosings' in kpiData && (
         <div className="shrink-0 border-b border-border bg-gradient-to-r from-emerald-50 to-transparent px-4 py-2.5 dark:from-emerald-950/30">
@@ -662,18 +671,47 @@ export function FollowUpDashboard() {
       {/* Header: CS label + auto-send, tabs, search/sort */}
       <div className="shrink-0 space-y-2.5 border-b border-border bg-card p-3 md:p-4">
         <div className="flex items-center justify-between gap-3">
-          <div className="truncate text-xs text-muted-foreground">
-            Menampilkan: <strong className="text-foreground">{csLabel}</strong>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <label className="text-xs font-medium text-muted-foreground">Auto-send</label>
+          {/* Auto-send with an explicit, high-contrast ON/OFF state */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-medium text-muted-foreground">Auto-send</span>
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                !csName ? 'bg-muted text-muted-foreground' : autoSendEnabled ? 'bg-emerald-600 text-white' : 'bg-zinc-300 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200'
+              }`}
+            >
+              {!csName ? '—' : autoSendEnabled ? 'ON' : 'OFF'}
+            </span>
             <Switch
               checked={autoSendEnabled}
               onCheckedChange={handleAutoSendToggle}
               disabled={!csName || togglingAutoSend}
-              title={!csName ? 'Pilih satu CS dulu di filter atas' : 'Auto-send 08–14 WIB'}
+              title={!csName ? 'Pilih satu CS dulu' : 'Auto-send 08–14 WIB'}
             />
           </div>
+          {/* CS filter — top-right; local state so it always re-filters */}
+          {!isCs ? (
+            <select
+              value={csFilter}
+              onChange={(e) => {
+                setCsFilter(e.target.value);
+                setSelectedId(null);
+                setSelectedIds(new Set());
+              }}
+              title="Filter per CS"
+              className="max-w-[55%] shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm font-medium text-foreground"
+            >
+              <option value="all">Semua CS</option>
+              {csList.map((c) => (
+                <option key={c.key} value={c.csName}>
+                  {c.csName.replace(/^CS\s+/i, '')}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              CS: <strong className="text-foreground">{me?.name}</strong>
+            </span>
+          )}
         </div>
 
         {/* Tabs — horizontally scrollable on mobile */}

@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useMutation, useQuery } from 'convex/react';
-import { Upload, Trash2, Zap, MessageSquare, TrendingUp, Power } from 'lucide-react';
+import { Upload, Trash2, Zap, MessageSquare, TrendingUp, Power, LogOut } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -82,6 +83,7 @@ function TeamSection() {
 }
 
 export function SettingsDashboard() {
+  const router = useRouter();
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const genUrl = useMutation(api.cs.generateUploadUrl);
   const setAvatar = useMutation(api.cs.setCsAvatar);
@@ -90,6 +92,14 @@ export function SettingsDashboard() {
 
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs' } | null>(null);
+  useEffect(() => {
+    fetch('/api/me').then((r) => (r.ok ? r.json() : null)).then(setMe).catch(() => setMe(null));
+  }, []);
+  async function logout() {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    router.push('/login');
+  }
 
   async function onPick(file: File, csName: string) {
     setBusy(csName);
@@ -140,16 +150,32 @@ export function SettingsDashboard() {
 
   return (
     <div className="space-y-6">
-      <TeamSection />
+      {/* Akun — user identity + sign out (moved here from the header so it stays out of the way) */}
+      <Card>
+        <CardHeader className="pb-3"><CardTitle className="text-base">Akun</CardTitle></CardHeader>
+        <CardContent className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-foreground">{me?.name ?? '—'}</div>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{me?.role ?? ''}</div>
+          </div>
+          <Button variant="outline" onClick={logout} className="shrink-0">
+            <LogOut className="size-4" /> Keluar
+          </Button>
+        </CardContent>
+      </Card>
 
-      {err && (
-        <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive">
-          {err}
-        </div>
-      )}
+      {me?.role !== 'admin' ? null : (
+        <>
+          <TeamSection />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {csList.map((c) => (
+          {err && (
+            <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive">
+              {err}
+            </div>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {csList.map((c) => (
           <Card key={c.key} className="flex flex-col">
             <CardHeader className="pb-3">
               <div className="flex items-center gap-3 mb-2">
@@ -279,10 +305,12 @@ export function SettingsDashboard() {
         ))}
       </div>
 
-      {csList.length === 0 && (
-        <div className="rounded-xl border border-border bg-card p-8 text-center">
-          <p className="text-sm text-muted-foreground">Belum ada CS terdaftar.</p>
-        </div>
+          {csList.length === 0 && (
+            <div className="rounded-xl border border-border bg-card p-8 text-center">
+              <p className="text-sm text-muted-foreground">Belum ada CS terdaftar.</p>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
