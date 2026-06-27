@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -16,88 +16,294 @@ type Candidate = {
   orderId: string;
   csName: string;
   lastInboundAt: number;
-  touchAts: number[]; // [H+1 sentAt, H+2 sentAt, H+2B sentAt] — only the ones already sent
+  touchAts: number[];
+  lastMessageText: string;
 };
 type Staged = Candidate & { stage: 1 | 2 | 3 };
 
 type Tab = 'all' | 'stage1' | 'stage2' | 'stage3';
 
-const STAGE_LABEL: Record<1 | 2 | 3, string> = { 1: 'H+1', 2: 'H+2', 3: 'H+2B' };
-const STAGE_NAMES = ['H+1', 'H+2', 'H+2B'];
+const STAGE_LABEL: Record<1 | 2 | 3, string> = { 1: 'H+1', 2: 'H+2', 3: 'H+3' };
+const STAGE_NAMES = ['H+1', 'H+2', 'H+3'];
 
 const formatRelativeTime = (ms: number): string => {
   const now = Date.now();
   const diffH = Math.round((now - ms) / 3.6e6);
-  if (diffH < 1) return '<1j lalu';
-  if (diffH < 24) return `${diffH}j lalu`;
-  return `${Math.round(diffH / 24)}h lalu`;
+  if (diffH < 1) return '<1j';
+  if (diffH < 24) return `${diffH}j`;
+  return `${Math.round(diffH / 24)}h`;
 };
 
-// Progress badges: which follow-up touches already went out (manual-via-WABA or API) + when.
-function ProgressBadges({ touchAts }: { touchAts: number[] }) {
+// Avatar with customer initial
+function Avatar({ name }: { name: string }) {
+  const initial = name?.[0]?.toUpperCase() ?? 'U';
   return (
-    <div className="flex flex-wrap gap-1">
-      {STAGE_NAMES.map((lbl, i) => {
-        const done = touchAts.length > i;
-        return (
-          <span
-            key={lbl}
-            title={done ? new Date(touchAts[i]).toLocaleString('id-ID') : 'belum dikirim'}
-            className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
-              done ? 'bg-green-100 text-green-700' : 'bg-muted text-muted-foreground'
-            }`}
-          >
-            {done ? '✓' : '○'}{lbl}
-          </span>
-        );
-      })}
+    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-500 text-white text-sm font-medium">
+      {initial}
     </div>
   );
 }
 
-// Lazy chat preview: only queried when its row is expanded (one conversation at a time), so it adds
-// no load to the candidate list. Shows the last few messages so a CS can eyeball whether the lead was
-// already followed up (and is genuinely ghosted) before sending — the raw evidence, not a guess.
-function ChatPreview({ conversationId }: { conversationId: string }) {
-  const msgs = useQuery(api.messages.listMessages, {
-    conversationId: conversationId as Id<'conversations'>,
-    limit: 6,
-  });
-  if (msgs === undefined)
-    return <div className="px-4 py-3 text-xs text-muted-foreground">Memuat chat…</div>;
-  if (msgs.length === 0)
-    return <div className="px-4 py-3 text-xs text-muted-foreground">Belum ada pesan.</div>;
+// Progress dots: v = done, o = pending
+function ProgressDots({ touchAts }: { touchAts: number[] }) {
   return (
-    <div className="space-y-2 bg-muted/30 px-4 py-3">
-      {msgs.map((m) => {
-        const inbound = m.direction === 'inbound';
-        return (
-          <div key={m._id} className="text-xs">
-            <span className={`font-medium ${inbound ? 'text-foreground' : 'text-blue-600'}`}>
-              {inbound ? '← Customer' : '→ CS'}
-            </span>
-            <span className="ml-2 text-muted-foreground">
-              {new Date(m.createdAt).toLocaleString('id-ID', {
-                day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
-              })}
-            </span>
-            <div className="ml-4 whitespace-pre-wrap break-words text-foreground/90">
-              {m.content || `[${m.messageType}]`}
+    <div className="flex gap-1">
+      {STAGE_NAMES.map((_, i) => (
+        <span key={i} className={`text-xs font-bold ${touchAts.length > i ? 'text-green-600' : 'text-gray-400'}`}>
+          {touchAts.length > i ? 'v' : 'o'}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// Truncate message preview
+function truncateText(text: string, maxLen: number = 50): string {
+  if (!text) return '';
+  return text.length > maxLen ? text.substring(0, maxLen) + '...' : text;
+}
+
+// Chat list item
+function ChatListItem({
+  candidate,
+  isSelected,
+  onClick,
+}: {
+  candidate: Staged;
+  isSelected: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <div
+      onClick={onClick}
+      className={`flex cursor-pointer gap-3 border-b border-border p-3 transition-colors hover:bg-accent ${
+        isSelected ? 'bg-blue-50 dark:bg-blue-950' : ''
+      }`}
+    >
+      <Avatar name={candidate.customerName} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-bold text-foreground truncate">{candidate.customerName || 'Unknown'}</h3>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">{formatRelativeTime(candidate.lastInboundAt)}</span>
+        </div>
+        <div className="flex items-center justify-between gap-2 mt-1">
+          <span className="text-xs bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100 px-2 py-0.5 rounded">
+            {STAGE_LABEL[candidate.stage]}
+          </span>
+          <ProgressDots touchAts={candidate.touchAts} />
+        </div>
+        <p className="text-xs text-muted-foreground mt-1 truncate">{truncateText(candidate.lastMessageText)}</p>
+      </div>
+    </div>
+  );
+}
+
+// WhatsApp-style message bubble
+function MessageBubble({ message }: { message: any }) {
+  const isOutbound = message.direction === 'outbound';
+  const timeStr = new Date(message.createdAt).toLocaleString('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  return (
+    <div className={`flex mb-3 ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className={`max-w-xs px-4 py-2 rounded-2xl ${
+          isOutbound
+            ? 'bg-[#dcf8c6] text-[#111b21]'
+            : 'bg-white dark:bg-muted text-foreground'
+        }`}
+      >
+        <p className="break-words whitespace-pre-wrap text-sm">{message.content || `[${message.messageType}]`}</p>
+        <p className="text-xs mt-1 opacity-70">{timeStr}</p>
+      </div>
+    </div>
+  );
+}
+
+// Conversation pane
+function ConversationPane({
+  candidate,
+  onBack,
+}: {
+  candidate: Staged | null;
+  onBack?: () => void;
+}) {
+  const [selectedStage, setSelectedStage] = useState<1 | 2 | 3>(1);
+  const [sending, setSending] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [status, setStatus] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const messages = useQuery(
+    api.messages.listMessages,
+    candidate ? { conversationId: candidate.conversationId as Id<'conversations'>, limit: 50 } : 'skip'
+  );
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  if (!candidate) {
+    return (
+      <div className="hidden md:flex flex-col items-center justify-center h-full bg-muted/30">
+        <p className="text-muted-foreground">Pilih chat di kiri untuk lihat & follow-up</p>
+      </div>
+    );
+  }
+
+  const isStageDone = candidate.touchAts.length > (selectedStage - 1);
+
+  async function handleSend() {
+    if (!candidate) return;
+    setSending(true);
+    setStatus(null);
+    try {
+      const r = await fetch('/api/follow-up/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: candidate.conversationId, stage: selectedStage }),
+      }).then((x) => x.json());
+
+      if (r.ok) {
+        setStatus({ type: 'ok', message: `Follow-up ${STAGE_LABEL[selectedStage]} terkirim!` });
+        setTimeout(() => {
+          setStatus(null);
+        }, 2000);
+      } else {
+        setStatus({ type: 'error', message: r.error || 'Gagal mengirim' });
+      }
+    } catch (e) {
+      setStatus({ type: 'error', message: 'Gagal menghubungi server' });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleArchive() {
+    if (!candidate) return;
+    if (!window.confirm('Arsipkan chat ini? Keluar dari daftar follow-up.')) return;
+    setArchiving(true);
+    setStatus(null);
+    try {
+      const r = await fetch('/api/follow-up/archive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: candidate.conversationId }),
+      }).then((x) => x.json());
+
+      if (r.ok) {
+        setStatus({ type: 'ok', message: 'Chat diarsipkan!' });
+        setTimeout(() => {
+          onBack?.();
+        }, 1000);
+      } else {
+        setStatus({ type: 'error', message: r.error || 'Gagal mengarsipkan' });
+      }
+    } catch (e) {
+      setStatus({ type: 'error', message: 'Gagal menghubungi server' });
+    } finally {
+      setArchiving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full bg-background">
+      {/* Header */}
+      <div className="border-b border-border p-4 bg-card">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3 flex-1">
+            {onBack && (
+              <button onClick={onBack} className="text-muted-foreground hover:text-foreground">
+                ←
+              </button>
+            )}
+            <div>
+              <h2 className="font-bold text-foreground">{candidate.customerName}</h2>
+              <p className="text-xs text-muted-foreground">{candidate.customerPhone}</p>
             </div>
           </div>
-        );
-      })}
+          <ProgressDots touchAts={candidate.touchAts} />
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {messages === undefined ? (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-muted-foreground">Memuat...</p>
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-muted-foreground">Belum ada pesan</p>
+          </div>
+        ) : (
+          <>
+            {messages.map((msg) => (
+              <MessageBubble key={msg._id} message={msg} />
+            ))}
+            <div ref={messagesEndRef} />
+          </>
+        )}
+      </div>
+
+      {/* Status message */}
+      {status && (
+        <div className={`px-4 py-2 text-sm font-medium ${
+          status.type === 'ok'
+            ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
+            : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100'
+        }`}>
+          {status.message}
+        </div>
+      )}
+
+      {/* Composer */}
+      <div className="border-t border-border p-4 bg-card space-y-3">
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium">Template:</label>
+          <select
+            value={selectedStage}
+            onChange={(e) => setSelectedStage(parseInt(e.target.value) as 1 | 2 | 3)}
+            disabled={sending || archiving}
+            className="flex-1 px-3 py-2 rounded border border-input bg-background text-foreground text-sm"
+          >
+            <option value={1}>H+1</option>
+            <option value={2}>H+2</option>
+            <option value={3}>H+3</option>
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            onClick={handleSend}
+            disabled={sending || archiving || isStageDone}
+            className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+            size="sm"
+          >
+            {sending ? 'Mengirim...' : 'Kirim'}
+          </Button>
+          <Button
+            onClick={handleArchive}
+            disabled={sending || archiving}
+            variant="outline"
+            size="sm"
+          >
+            {archiving ? 'Mengarsip...' : 'Arsip'}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
 
+// Main dashboard
 export function FollowUpDashboard() {
   const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs' } | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('all');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [sending, setSending] = useState<Record<string, boolean>>({});
-  const [result, setResult] = useState<Record<string, 'ok' | string>>({});
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showConvOnMobile, setShowConvOnMobile] = useState(false);
 
   useEffect(() => {
     fetch('/api/me')
@@ -107,201 +313,126 @@ export function FollowUpDashboard() {
   }, []);
 
   const { cs } = usePanelFilters();
-  // CS users see their own; admin sees all CS by default, or narrows via the header filter.
-  // (The active pool is bounded by the lifecycle sweep, so the unscoped query stays under the read limit.)
   const csName = me?.role === 'cs' ? me.name : (cs && cs !== 'all' ? cs : undefined);
   const data = useQuery(api.followUp.getFollowUpCandidates, me ? { csName } : 'skip');
 
   const isLoading = data === undefined;
-  // One unified list tagged with each lead's current stage → powers the "Semua" pipeline view.
+
   const withStage: Staged[] = [
     ...(data?.stage1 ?? []).map((c) => ({ ...c, stage: 1 as const })),
     ...(data?.stage2 ?? []).map((c) => ({ ...c, stage: 2 as const })),
     ...(data?.stage3 ?? []).map((c) => ({ ...c, stage: 3 as const })),
   ];
-  const want = activeTab === 'stage1' ? 1 : activeTab === 'stage2' ? 2 : activeTab === 'stage3' ? 3 : null;
-  const candidates = want ? withStage.filter((c) => c.stage === want) : withStage;
 
-  const allIds = candidates.map((c) => c.conversationId);
-  const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+  const want = activeTab === 'stage1' ? 1 : activeTab === 'stage2' ? 2 : activeTab === 'stage3' ? 3 : null;
+  let candidates = want ? withStage.filter((c) => c.stage === want) : withStage;
+
+  // Client-side search by name or phone
+  if (searchQuery.trim()) {
+    const q = searchQuery.toLowerCase();
+    candidates = candidates.filter(
+      (c) => c.customerName.toLowerCase().includes(q) || c.customerPhone.includes(q)
+    );
+  }
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: 'all', label: 'Semua', count: withStage.length },
     { key: 'stage1', label: 'H+1', count: data?.stage1.length ?? 0 },
     { key: 'stage2', label: 'H+2', count: data?.stage2.length ?? 0 },
-    { key: 'stage3', label: 'H+2B', count: data?.stage3.length ?? 0 },
+    { key: 'stage3', label: 'H+3', count: data?.stage3.length ?? 0 },
   ];
 
-  const toggleSelectAll = () => {
-    if (allSelected) {
-      setSelected((s) => {
-        const next = new Set(s);
-        allIds.forEach((id) => next.delete(id));
-        return next;
-      });
-    } else {
-      setSelected((s) => new Set([...s, ...allIds]));
-    }
+  const selected = candidates.find((c) => c.conversationId === selectedId) || null;
+
+  const handleBack = () => {
+    setShowConvOnMobile(false);
+    setSelectedId(null);
   };
-
-  const toggleSelect = (id: string) => {
-    setSelected((s) => {
-      const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  async function send(conversationId: string, stage: 1 | 2 | 3) {
-    setSending((s) => ({ ...s, [conversationId]: true }));
-    const r = await fetch('/api/follow-up/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId, stage }),
-    })
-      .then((x) => x.json())
-      .catch(() => ({ ok: false, error: 'Gagal' }));
-    setSending((s) => ({ ...s, [conversationId]: false }));
-    setResult((m) => ({ ...m, [conversationId]: r.ok ? 'ok' : (r.error || 'Gagal') }));
-  }
-
-  async function sendSelected() {
-    const ids = Array.from(selected);
-    if (ids.length > 20 && !window.confirm(`Kirim follow-up ke ${ids.length} customer sekaligus?`)) return;
-    // Each lead sends its OWN stage (in the "Semua" tab the selection can span stages).
-    const stageById = new Map(withStage.map((c) => [c.conversationId, c.stage]));
-    for (const id of ids) {
-      const stage = stageById.get(id);
-      if (stage) await send(id, stage);
-    }
-    setSelected(new Set());
-  }
-
-  const colSpan = me?.role === 'admin' ? 8 : 7;
 
   return (
-    <div className="space-y-6">
-      {/* Tab toggle */}
-      <div className="flex flex-wrap gap-3">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setActiveTab(t.key)}
-            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-              activeTab === t.key
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
-            }`}
-          >
-            {t.label} ({t.count})
-          </button>
-        ))}
+    <div className="h-screen flex flex-col bg-background">
+      {/* Header with tabs */}
+      <div className="border-b border-border p-4 bg-card space-y-3">
+        <div className="flex flex-wrap gap-2">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => {
+                setActiveTab(t.key);
+                setSelectedId(null);
+              }}
+              className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                activeTab === t.key
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-accent'
+              }`}
+            >
+              {t.label} ({t.count})
+            </button>
+          ))}
+        </div>
+        <input
+          type="text"
+          placeholder="Cari nama atau nomor..."
+          value={searchQuery}
+          onChange={(e) => {
+            setSearchQuery(e.target.value);
+            setSelectedId(null);
+          }}
+          className="w-full px-3 py-2 rounded border border-input bg-background text-foreground text-sm placeholder-muted-foreground"
+        />
       </div>
 
-      {isLoading ? (
-        <div className="space-y-3">
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
+      {/* Two-pane layout */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Chat list pane */}
+        <div
+          className={`w-full md:w-96 border-r border-border overflow-y-auto bg-background ${
+            showConvOnMobile ? 'hidden md:block' : ''
+          }`}
+        >
+          {isLoading ? (
+            <div className="space-y-2 p-3">
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+              <Skeleton className="h-20 w-full" />
+            </div>
+          ) : candidates.length === 0 ? (
+            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+              Tidak ada yang perlu di-follow-up
+            </div>
+          ) : (
+            candidates.map((c) => (
+              <ChatListItem
+                key={c.conversationId}
+                candidate={c}
+                isSelected={selectedId === c.conversationId}
+                onClick={() => {
+                  setSelectedId(c.conversationId);
+                  setShowConvOnMobile(true);
+                }}
+              />
+            ))
+          )}
         </div>
-      ) : candidates.length === 0 ? (
-        /* Empty state */
-        <div className="rounded-lg border border-border bg-card/50 p-8 text-center">
-          <div className="text-sm text-muted-foreground">
-            Tidak ada yang perlu di-follow-up 🎉
-          </div>
-        </div>
-      ) : (
-        /* Table */
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead className="border-b border-border bg-muted/50">
-              <tr>
-                <th className="px-4 py-3 text-left font-medium">
-                  <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} className="rounded" />
-                </th>
-                <th className="px-4 py-3 text-left font-medium">Customer</th>
-                <th className="px-4 py-3 text-left font-medium">Produk</th>
-                <th className="px-4 py-3 text-left font-medium">Order</th>
-                <th className="px-4 py-3 text-left font-medium">Progres FU</th>
-                <th className="px-4 py-3 text-left font-medium">Chat Terakhir</th>
-                {me?.role === 'admin' && <th className="px-4 py-3 text-left font-medium">CS</th>}
-                <th className="px-4 py-3 text-left font-medium">Aksi</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {candidates.map((c) => {
-                const rowResult = result[c.conversationId];
-                const isSending = sending[c.conversationId];
-                return (
-                  <Fragment key={c.conversationId}>
-                    <tr className="hover:bg-accent/30">
-                      <td className="px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={selected.has(c.conversationId)}
-                          onChange={() => toggleSelect(c.conversationId)}
-                          className="rounded"
-                        />
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-foreground">{c.customerName || '—'}</div>
-                        <div className="text-xs text-muted-foreground">{c.customerPhone}</div>
-                        <button
-                          type="button"
-                          onClick={() => setExpanded((e) => (e === c.conversationId ? null : c.conversationId))}
-                          className="mt-1 text-xs text-blue-600 hover:underline"
-                        >
-                          {expanded === c.conversationId ? '▲ Tutup chat' : '👁 Lihat chat'}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">{c.productName}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{c.orderId}</td>
-                      <td className="px-4 py-3"><ProgressBadges touchAts={c.touchAts} /></td>
-                      <td className="px-4 py-3 text-muted-foreground">{formatRelativeTime(c.lastInboundAt)}</td>
-                      {me?.role === 'admin' && <td className="px-4 py-3 text-muted-foreground">{c.csName}</td>}
-                      <td className="px-4 py-3">
-                        {rowResult === 'ok' ? (
-                          <span className="text-sm font-medium text-green-600">✓ Terkirim</span>
-                        ) : rowResult ? (
-                          <span className="text-sm font-medium text-red-600">{rowResult}</span>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={isSending}
-                            onClick={() => send(c.conversationId, c.stage)}
-                          >
-                            {isSending ? 'Mengirim...' : `Kirim ${STAGE_LABEL[c.stage]}`}
-                          </Button>
-                        )}
-                      </td>
-                    </tr>
-                    {expanded === c.conversationId && (
-                      <tr>
-                        <td colSpan={colSpan} className="border-t border-border/50 p-0">
-                          <ChatPreview conversationId={c.conversationId} />
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
 
-      {/* Batch send button */}
-      {!isLoading && candidates.length > 0 && selected.size > 0 && (
-        <div className="flex justify-end">
-          <Button onClick={sendSelected} variant="default" size="lg">
-            Kirim terpilih ({selected.size})
-          </Button>
+        {/* Conversation pane */}
+        <div
+          className={`flex-1 ${
+            showConvOnMobile ? 'block' : 'hidden md:block'
+          }`}
+        >
+          {selected ? (
+            <ConversationPane
+              candidate={selected}
+              onBack={handleBack}
+            />
+          ) : (
+            <ConversationPane candidate={null} />
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

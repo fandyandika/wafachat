@@ -218,3 +218,33 @@ test("sendFollowUp: missing KIRIMDEV_API_KEY -> not ok, fetch not called", async
   expect(fetchMock).not.toHaveBeenCalled();
   vi.unstubAllGlobals();
 });
+
+test("archiveFollowUp: wrong secret -> not ok, status unchanged", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-13", customerPhone: "62813b" });
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+  const res = await t.mutation(api.followUp.archiveFollowUp, { conversationId: convId, authSecret: "WRONG" });
+  expect(res.ok).toBe(false);
+  await t.run(async (ctx) => {
+    const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
+    expect(c!.status).toBe("active"); // should not change
+  });
+});
+
+test("archiveFollowUp: right secret -> ok, status closed", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-14", customerPhone: "62814b" });
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+  const res = await t.mutation(api.followUp.archiveFollowUp, { conversationId: convId, authSecret: "s3cret" });
+  expect(res.ok).toBe(true);
+  await t.run(async (ctx) => {
+    const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
+    expect(c!.status).toBe("closed");
+  });
+});

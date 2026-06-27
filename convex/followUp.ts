@@ -1,4 +1,4 @@
-import { query, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { query, action, mutation, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { csKey, isInternalTestPhone, normalizeCsName } from "./lib";
 import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
@@ -68,8 +68,8 @@ export const getFollowUpCandidates = query({
     // touchAts = timestamps of follow-up touches already sent (index 0 = H+1, 1 = H+2, 2 = H+2B) so
     // the UI can show "✓H+1 ✓H+2 ○H+2B" + when each went out.
     type Candidate = { conversationId: Row["_id"]; customerName: string; customerPhone: string;
-      productName: string; orderId: string; csName: string; lastInboundAt: number; touchAts: number[] };
-    const eligible: Array<{ c: Row; stage: number; lastInboundAt: number; touchAts: number[] }> = [];
+      productName: string; orderId: string; csName: string; lastInboundAt: number; touchAts: number[]; lastMessageText: string };
+    const eligible: Array<{ c: Row; stage: number; lastInboundAt: number; touchAts: number[]; lastMessageText: string }> = [];
     ghosted.forEach((x, i) => {
       const lastInbound = lastInbounds[i];
       const stage = eligibleStage({
@@ -81,7 +81,7 @@ export const getFollowUpCandidates = query({
         now,
       });
       if (stage == null || lastInbound == null) return;
-      eligible.push({ c: x.c, stage, lastInboundAt: lastInbound.createdAt, touchAts: touches[i].ats });
+      eligible.push({ c: x.c, stage, lastInboundAt: lastInbound.createdAt, touchAts: touches[i].ats, lastMessageText: x.lastMsg?.content ?? "" });
     });
 
     // Dedupe per customer: one follow-up per phone (a customer with several ghosted orders shouldn't
@@ -104,7 +104,7 @@ export const getFollowUpCandidates = query({
       const card: Candidate = {
         conversationId: e.c._id, customerName: e.c.customerName, customerPhone: e.c.customerPhone,
         productName: orders[i]?.productName ?? "—", orderId: e.c.orderId,
-        csName: e.c.assignedCsName, lastInboundAt: e.lastInboundAt, touchAts: e.touchAts,
+        csName: e.c.assignedCsName, lastInboundAt: e.lastInboundAt, touchAts: e.touchAts, lastMessageText: e.lastMessageText,
       };
       (e.stage === 1 ? stage1 : e.stage === 2 ? stage2 : stage3).push(card);
     });
@@ -221,5 +221,18 @@ export const sendFollowUp = action({
     return await ctx.runAction(internal.followUp.performFollowUpSend, {
       conversationId: args.conversationId, stage: args.stage, nowOverride: args.nowOverride
     });
+  },
+});
+
+export const archiveFollowUp = mutation({
+  args: { conversationId: v.id("conversations"), authSecret: v.string() },
+  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
+    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
+      return { ok: false, error: "unauthorized" };
+    }
+    const c = await ctx.db.get(args.conversationId);
+    if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
+    await ctx.db.patch(args.conversationId, { status: "closed", updatedAt: Date.now() });
+    return { ok: true };
   },
 });

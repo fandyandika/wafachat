@@ -10,14 +10,13 @@ export async function POST(req: NextRequest) {
   const session = await verifySession(req.cookies.get('auth_token')?.value);
   if (!session) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
-  const { conversationId, stage } = await req.json();
-  if (!conversationId || (stage !== 1 && stage !== 2 && stage !== 3)) {
+  const { conversationId } = await req.json();
+  if (!conversationId) {
     return NextResponse.json({ ok: false, error: 'bad request' }, { status: 400 });
   }
 
-  const result = await convex.action(api.followUp.sendFollowUp, {
+  const result = await convex.mutation(api.followUp.archiveFollowUp, {
     conversationId,
-    stage,
     authSecret: secret(),
   });
   return NextResponse.json(result);
