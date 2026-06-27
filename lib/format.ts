@@ -9,7 +9,7 @@ export function formatRupiahShort(value?: number): string {
   if (value >= 1_000_000_000) return `Rp${(value / 1_000_000_000).toFixed(1).replace('.', ',')} M`;
   if (value >= 1_000_000) return `Rp${(value / 1_000_000).toFixed(1).replace('.', ',')} jt`;
   if (value >= 1_000) return `Rp${Math.round(value / 1_000)} rb`;
-  return 'Rp' + value;
+  return 'Rp' + Math.round(value); // round: count-up interpolation passes floats (e.g. CP Diskon 667.91 -> Rp668)
 }
 
 export function formatTime(iso: string): string {
