@@ -157,7 +157,15 @@ export const candidacyFor = internalQuery({
     const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first();
     const order = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", c.orderId)).first();
     const normName = normalizeCsName(c.assignedCsName);
-    const cfg = await ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", normName)).first();
+    let cfg = await ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", normName)).first();
+    // assignedCsName is inconsistent across the data ("Aisyah" vs "CS Aisyah"), so an exact
+    // normalizedName match can miss the WABA number. Fall back to a csKey match (ignores the
+    // "CS " prefix) so providerNumberId resolves regardless of how the lead was named.
+    if (!cfg || !cfg.providerNumberId) {
+      const k = csKey(c.assignedCsName);
+      const all = await ctx.db.query("csConfigs").collect();
+      cfg = all.find((x) => csKey(x.csName) === k && x.providerNumberId) ?? cfg;
+    }
     const touch = await touchInfo(ctx, c._id, lastInbound?.createdAt ?? null);
     const eligible = eligibleStage({
       lastInboundAt: lastInbound?.createdAt ?? null,

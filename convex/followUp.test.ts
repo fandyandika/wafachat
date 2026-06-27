@@ -2,7 +2,7 @@
 import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 
 const HOUR = 3_600_000;
@@ -460,4 +460,25 @@ test("getClosedFollowUps: lists recent closings, flags via-follow-up, filters ca
 
   const all = await t.query(api.followUp.getClosedFollowUps, { sinceDays: 1, nowOverride: now });
   expect(all.map((r) => r.orderId)).toContain("C-3"); // unscoped sees other CS
+});
+
+// WABA number resolution must tolerate the "CS " prefix mismatch in assignedCsName.
+test("candidacyFor: resolves providerNumberId by csKey even when assignedCsName lacks 'CS ' prefix", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    // Conversation named WITHOUT the "CS " prefix...
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-cfg", customerPhone: "62870", assignedCsName: "Aisyah" });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-cfg", customerPhone: "62870", assignedCsName: "Aisyah" });
+    await ctx.db.insert("messages", msg(convId, "O-cfg", "62870", "inbound", now - 30 * HOUR));
+    await ctx.db.insert("messages", msg(convId, "O-cfg", "62870", "outbound", now - 29 * HOUR));
+    // ...but the csConfig is stored WITH the prefix + a WABA number.
+    await ctx.db.insert("csConfigs", {
+      normalizedName: "csaisyah", csName: "CS Aisyah", providerNumberId: "PHONE_X",
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: now, updatedAt: now,
+    });
+  });
+  const d = await t.query(internal.followUp.candidacyFor, { conversationId: convId, nowOverride: now });
+  expect(d?.phoneNumberId).toBe("PHONE_X");
 });
