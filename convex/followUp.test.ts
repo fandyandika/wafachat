@@ -246,5 +246,185 @@ test("archiveFollowUp: right secret -> ok, status closed", async () => {
   await t.run(async (ctx) => {
     const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
     expect(c!.status).toBe("closed");
+    expect(c!.followUpArchivedAt).toBeDefined();
   });
+});
+
+// Feature #8: manual stage override
+test("setFollowUpStage: valid stage -> override set, appears in getFollowUpCandidates", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-15", customerPhone: "62815" });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-15", customerPhone: "62815" });
+    await ctx.db.insert("messages", msg(convId, "O-15", "62815", "inbound", now - 30 * HOUR));
+    await ctx.db.insert("messages", msg(convId, "O-15", "62815", "outbound", now - 29 * HOUR));
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+  const res = await t.mutation(api.followUp.setFollowUpStage, { conversationId: convId, stage: 2, authSecret: "s3cret" });
+  expect(res.ok).toBe(true);
+  const candidates = await t.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  expect(candidates.stage2.find((c) => c.orderId === "O-15")).toBeDefined();
+  expect(candidates.stage1.find((c) => c.orderId === "O-15")).toBeUndefined();
+});
+
+test("setFollowUpStage: invalid stage -> rejected", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-16", customerPhone: "62816" });
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+  const res = await t.mutation(api.followUp.setFollowUpStage, { conversationId: convId, stage: 5, authSecret: "s3cret" });
+  expect(res.ok).toBe(false);
+});
+
+test("setFollowUpStage: cleared on customer reply (inbound)", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-17", customerPhone: "62817" });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-17", customerPhone: "62817" });
+    await ctx.db.insert("messages", msg(convId, "O-17", "62817", "inbound", now - 30 * HOUR));
+    await ctx.db.insert("messages", msg(convId, "O-17", "62817", "outbound", now - 29 * HOUR));
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+  await t.mutation(api.followUp.setFollowUpStage, { conversationId: convId, stage: 2, authSecret: "s3cret" });
+
+  // Simulate inbound customer reply
+  await t.mutation(api.messages.appendMessageFromN8n, {
+    phone: "62817", order_id: "O-17", direction: "inbound", role: "customer",
+    content: "Terima kasih", createdAt: now - 1 * HOUR
+  });
+
+  await t.run(async (ctx) => {
+    const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
+    expect(c!.followUpStageOverride).toBeUndefined();
+  });
+});
+
+test("setFollowUpStage: cleared on send (stampFollowUp)", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-17b", customerPhone: "62817b" });
+    await ctx.db.insert("orders", { ...orderBase, orderId: "O-17b", customerPhone: "62817b" });
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+  await t.mutation(api.followUp.setFollowUpStage, { conversationId: convId, stage: 2, authSecret: "s3cret" });
+
+  // Simulate stampFollowUp call (internal mutation)
+  await t.run(async (ctx) => {
+    await ctx.db.patch(convId, { followUpStage: 1, followUpStageAt: now, followUpStageOverride: undefined, updatedAt: now });
+  });
+
+  await t.run(async (ctx) => {
+    const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
+    expect(c!.followUpStageOverride).toBeUndefined();
+    expect(c!.followUpStage).toBe(1);
+  });
+});
+
+// Feature #2: archive/undo
+test("unarchiveFollowUp: restores to active + clears timestamp", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-18", customerPhone: "62818", status: "closed", followUpArchivedAt: now - 1 * HOUR });
+  });
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+  const res = await t.mutation(api.followUp.unarchiveFollowUp, { conversationId: convId, authSecret: "s3cret" });
+  expect(res.ok).toBe(true);
+  await t.run(async (ctx) => {
+    const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
+    expect(c!.status).toBe("active");
+    expect(c!.followUpArchivedAt).toBeUndefined();
+  });
+});
+
+test("getArchivedFollowUps: lists recent manual archives, scoped by CS", async () => {
+  const t = convexTest(schema);
+  let convId1: any, convId2: any;
+  await t.run(async (ctx) => {
+    convId1 = await ctx.db.insert("conversations", {
+      ...convBase, orderId: "O-19", customerPhone: "62819", assignedCsName: "Nabila",
+      status: "closed", followUpArchivedAt: now - 1 * HOUR
+    });
+    convId2 = await ctx.db.insert("conversations", {
+      ...convBase, orderId: "O-20", customerPhone: "62820", assignedCsName: "Lila",
+      status: "closed", followUpArchivedAt: now - 2 * HOUR
+    });
+  });
+  const res = await t.query(api.followUp.getArchivedFollowUps, { csName: "Nabila" });
+  expect(res.find((r) => r.orderId === "O-19")).toBeDefined();
+  expect(res.find((r) => r.orderId === "O-20")).toBeUndefined();
+  expect(res[0].followUpArchivedAt).toBeGreaterThan(res[1]?.followUpArchivedAt ?? 0);
+});
+
+// Feature #5b: auto-send toggle
+test("setAutoFollowUp: inserts if not exists, patches if exists", async () => {
+  const t = convexTest(schema);
+  process.env.PANEL_AUTH_SECRET = "s3cret";
+
+  // First toggle (insert path)
+  const res1 = await t.mutation(api.followUp.setAutoFollowUp, { csName: "CS New", enabled: true, authSecret: "s3cret" });
+  expect(res1.ok).toBe(true);
+  expect(res1.enabled).toBe(true);
+
+  // Check inserted
+  await t.run(async (ctx) => {
+    const cfg = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", "csnew"))
+      .unique();
+    expect(cfg?.autoFollowUpEnabled).toBe(true);
+  });
+
+  // Second toggle (update path)
+  const res2 = await t.mutation(api.followUp.setAutoFollowUp, { csName: "CS New", enabled: false, authSecret: "s3cret" });
+  expect(res2.ok).toBe(true);
+  expect(res2.enabled).toBe(false);
+
+  await t.run(async (ctx) => {
+    const cfg = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", "csnew"))
+      .unique();
+    expect(cfg?.autoFollowUpEnabled).toBe(false);
+  });
+});
+
+test("getAutoFollowUp: returns enabled status", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("csConfigs", csCfg("TestCS"));
+  });
+  const res = await t.query(api.followUp.getAutoFollowUp, { csName: "TestCS" });
+  expect(res.enabled).toBe(false); // csCfg default
+});
+
+// Feature #10: KPI
+test("getFollowUpEffectiveness: counts closings with FU touches", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    const convId = await ctx.db.insert("conversations", { ...convBase, orderId: "O-21", customerPhone: "62821" });
+    await ctx.db.insert("messages", msg(convId, "O-21", "62821", "inbound", now - 50 * HOUR));
+    await ctx.db.insert("messages", msg(convId, "O-21", "62821", "outbound", now - 49 * HOUR)); // in-window
+    await ctx.db.insert("messages", msg(convId, "O-21", "62821", "outbound", now - 25 * HOUR)); // post-window touch 1
+    await ctx.db.insert("messages", msg(convId, "O-21", "62821", "outbound", now - 20 * HOUR)); // post-window touch 2
+
+    // Recap with 2 touches
+    await ctx.db.insert("shippingRecaps", {
+      orderIdBerdu: "O-21", customerPhone: "62821", customerName: "Budi", csName: "Nabila", closedAt: now,
+      recipientName: "Budi", recipientPhone: "62821", recipientAddress: "", recipientDistrict: "",
+      recipientCity: "", packageContent: "X", paymentMethod: "cod" as const,
+      status: "ready" as const, flags: [], sourceMessageText: "", version: 1, followUpTouchesAtClose: 2,
+      createdAt: now, updatedAt: now,
+    });
+  });
+
+  const res = await t.query(api.followUp.getFollowUpEffectiveness, { startAt: now - 1 * HOUR, endAt: now, csName: "Nabila" });
+  expect(res.totalClosings).toBe(1);
+  expect(res.fromFollowUp).toBe(1);
+  expect(res.byStage.h2).toBe(1);
 });

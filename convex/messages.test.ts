@@ -98,3 +98,85 @@ test("appendMessageFromN8n: heals 'Unknown' conversation csName when a known CS 
     ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62833")).first());
   expect(after2?.assignedCsName).toBe("Risma");
 });
+
+// Feature #8: override cleared on inbound
+test("appendMessageFromN8n: inbound message clears followUpStageOverride", async () => {
+  const t = convexTest(schema);
+  const now = Date.now();
+
+  // Create conversation with override set
+  const convId = await t.run(async (ctx) => {
+    const id = await ctx.db.insert("conversations", {
+      orderId: "O-ovr1", customerPhone: "62851", customerName: "Test", assignedCsName: "CS Test",
+      status: "active", aiEnabled: false, note: "",
+      followUpStageOverride: 2, createdAt: now, updatedAt: now,
+    });
+    return id;
+  });
+
+  // Inbound message arrives
+  await t.mutation(api.messages.appendMessageFromN8n, {
+    phone: "62851", order_id: "O-ovr1", role: "customer", direction: "inbound",
+    content: "Iya pak siap", messageType: "text", externalMessageId: "ovr1", createdAt: now,
+  });
+
+  // Override should be cleared
+  await t.run(async (ctx) => {
+    const c = await ctx.db.get(convId);
+    expect(c?.followUpStageOverride).toBeUndefined();
+  });
+});
+
+// Feature #10: KPI recording on closing
+test("appendMessageFromN8n: outbound closing phrase -> records followUpTouchesAtClose", async () => {
+  const t = convexTest(schema);
+  const now = Date.now();
+  const HOUR = 3_600_000;
+
+  // Create conversation with messages
+  const convId = await t.run(async (ctx) => {
+    const id = await ctx.db.insert("conversations", {
+      orderId: "O-kpi1", customerPhone: "62852", customerName: "Test", assignedCsName: "CS Test",
+      status: "active", aiEnabled: false, note: "", createdAt: now - 50 * HOUR, updatedAt: now - 50 * HOUR,
+    });
+    // Inbound 50h ago
+    await ctx.db.insert("messages", {
+      conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
+      role: "customer", direction: "inbound", content: "Berapa harga?", messageType: "text",
+      source: "n8n", createdAt: now - 50 * HOUR,
+    });
+    // In-window outbound (not a touch)
+    await ctx.db.insert("messages", {
+      conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
+      role: "cs", direction: "outbound", content: "Harga Rp50rb", messageType: "text",
+      source: "n8n", createdAt: now - 49 * HOUR,
+    });
+    // Post-window touch 1 (25h ago)
+    await ctx.db.insert("messages", {
+      conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
+      role: "cs", direction: "outbound", content: "Kirim template H+1", messageType: "template",
+      source: "panel", createdAt: now - 25 * HOUR,
+    });
+    // Post-window touch 2 (20h ago)
+    await ctx.db.insert("messages", {
+      conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
+      role: "cs", direction: "outbound", content: "Follow-up H+2", messageType: "template",
+      source: "panel", createdAt: now - 20 * HOUR,
+    });
+    return id;
+  });
+
+  // Outbound closing phrase
+  const res = await t.mutation(api.messages.appendMessageFromN8n, {
+    phone: "62852", order_id: "O-kpi1", csName: "CS Test", role: "cs", direction: "outbound",
+    content: "PEMESANAN BERHASIL\nProduk: Test\nTotal: Rp50.000",
+    messageType: "text", externalMessageId: "kpi1", createdAt: now - 1 * HOUR,
+  });
+
+  // Recap should have followUpTouchesAtClose = 2
+  expect(res.closingRecapId).toBeDefined();
+  await t.run(async (ctx) => {
+    const recap = await ctx.db.get(res.closingRecapId!);
+    expect(recap?.followUpTouchesAtClose).toBe(2);
+  });
+});

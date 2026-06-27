@@ -45,6 +45,8 @@ export default defineSchema({
     lastMessageAt: v.optional(v.number()),
     followUpStage: v.optional(v.number()),   // 1 = H+1 sent, 2 = H+2 sent
     followUpStageAt: v.optional(v.number()),
+    followUpStageOverride: v.optional(v.number()), // manual override: 1, 2, or 3; cleared on reply/send
+    followUpArchivedAt: v.optional(v.number()),     // timestamp when manually archived
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -186,6 +188,7 @@ export default defineSchema({
     deliveredAt: v.optional(v.number()),
     cancelledAt: v.optional(v.number()),
     cancelReason: v.optional(v.string()),
+    followUpTouchesAtClose: v.optional(v.number()), // count of follow-up touches that preceded this closing
     createdAt: v.number(),
     updatedAt: v.number(),
   })

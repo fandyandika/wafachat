@@ -6,6 +6,7 @@ import { getCsFeatureConfig } from "./csConfigs";
 import { messageMatchesPhrase, upsertRecapFromMessage } from "./shippingRecaps";
 import { getActiveClosingPhrases } from "./closingRules";
 import { messageHasDoneMarker } from "./followUpMath";
+import { countFollowUpTouchesBeforeTime } from "./followUp";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
   if (args.orderId) {
@@ -184,7 +185,7 @@ export const appendMessageFromN8n = mutation({
       createdAt,
     });
 
-    const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string } = {
+    const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string; followUpStageOverride?: undefined } = {
       lastMessageAt: createdAt,
       updatedAt: createdAt,
     };
@@ -197,6 +198,10 @@ export const appendMessageFromN8n = mutation({
       (!conversation.assignedCsName || conversation.assignedCsName === "Unknown")
     ) {
       convPatch.assignedCsName = args.csName;
+    }
+    // Feature #8: clear override on customer reply (customer reply resets the manual pin).
+    if (args.direction === "inbound") {
+      convPatch.followUpStageOverride = undefined;
     }
     await ctx.db.patch(conversation._id, convPatch);
     await ctx.db.insert("events", {
@@ -229,6 +234,17 @@ export const appendMessageFromN8n = mutation({
         });
         if (result.action !== "skipped") {
           closingRecapId = result.recapId;
+
+          // Feature #10: record follow-up touches that preceded this closing.
+          const lastInbound = await ctx.db
+            .query("messages")
+            .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversation._id))
+            .order("desc")
+            .filter((q: any) => q.eq(q.field("direction"), "inbound"))
+            .first();
+          const touchCount = await countFollowUpTouchesBeforeTime(ctx, conversation._id, lastInbound?.createdAt ?? null, createdAt);
+          await ctx.db.patch(result.recapId, { followUpTouchesAtClose: touchCount });
+
           await ctx.db.insert("events", {
             conversationId: conversation._id,
             orderId: conversation.orderId,

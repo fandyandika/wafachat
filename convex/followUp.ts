@@ -22,6 +22,19 @@ async function touchInfo(ctx: any, conversationId: any, lastInboundAt: number | 
   return { count: ats.length, lastAt: ats.length ? ats[ats.length - 1] : null, ats };
 }
 
+// Feature #10: count follow-up touches (post-window outbound) that occurred before a specific time.
+// Used to record KPI: how many touches preceded a closing.
+export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: any, lastInboundAt: number | null, beforeTime: number) {
+  if (lastInboundAt == null) return 0;
+  const windowClose = lastInboundAt + WINDOW_HOURS * HOUR;
+  const touches = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversationId).gt("createdAt", windowClose).lt("createdAt", beforeTime))
+    .filter((q: any) => q.eq(q.field("direction"), "outbound"))
+    .collect();
+  return touches.length;
+}
+
 // nowOverride is test-only (Date.now() is unavailable in some runtimes); prod passes nothing.
 export const getFollowUpCandidates = query({
   args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
@@ -72,14 +85,21 @@ export const getFollowUpCandidates = query({
     const eligible: Array<{ c: Row; stage: number; lastInboundAt: number; touchAts: number[]; lastMessageText: string }> = [];
     ghosted.forEach((x, i) => {
       const lastInbound = lastInbounds[i];
-      const stage = eligibleStage({
-        lastInboundAt: lastInbound?.createdAt ?? null,
-        lastMessageOutbound: true, // already filtered to ghosted
-        isClosed: x.c.status === "closed" || recaps[i] != null,
-        touchCount: touches[i].count,
-        lastTouchAt: touches[i].lastAt,
-        now,
-      });
+      let stage: number | null;
+
+      // Feature #8: if override is set and not closed, use the override; else compute eligible stage.
+      if (x.c.followUpStageOverride != null && x.c.status !== "closed" && recaps[i] == null) {
+        stage = x.c.followUpStageOverride;
+      } else {
+        stage = eligibleStage({
+          lastInboundAt: lastInbound?.createdAt ?? null,
+          lastMessageOutbound: true, // already filtered to ghosted
+          isClosed: x.c.status === "closed" || recaps[i] != null,
+          touchCount: touches[i].count,
+          lastTouchAt: touches[i].lastAt,
+          now,
+        });
+      }
       if (stage == null || lastInbound == null) return;
       eligible.push({ c: x.c, stage, lastInboundAt: lastInbound.createdAt, touchAts: touches[i].ats, lastMessageText: x.lastMsg?.content ?? "" });
     });
@@ -154,7 +174,8 @@ export const stampFollowUp = internalMutation({
   args: { conversationId: v.id("conversations"), stage: v.number(), at: v.number(),
           orderId: v.string(), customerPhone: v.string(), content: v.string() },
   handler: async (ctx, a) => {
-    await ctx.db.patch(a.conversationId, { followUpStage: a.stage, followUpStageAt: a.at, updatedAt: a.at });
+    // Feature #8: clear override after send; auto-staging resumes next check.
+    await ctx.db.patch(a.conversationId, { followUpStage: a.stage, followUpStageAt: a.at, followUpStageOverride: undefined, updatedAt: a.at });
     await ctx.db.insert("messages", {
       conversationId: a.conversationId, orderId: a.orderId, customerPhone: a.customerPhone,
       role: "cs", direction: "outbound", content: a.content, messageType: "template",
@@ -232,7 +253,166 @@ export const archiveFollowUp = mutation({
     }
     const c = await ctx.db.get(args.conversationId);
     if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
-    await ctx.db.patch(args.conversationId, { status: "closed", updatedAt: Date.now() });
+    const now = Date.now();
+    await ctx.db.patch(args.conversationId, { status: "closed", followUpArchivedAt: now, updatedAt: now });
     return { ok: true };
+  },
+});
+
+// Feature #8: manual stage override
+export const setFollowUpStage = mutation({
+  args: { conversationId: v.id("conversations"), stage: v.number(), authSecret: v.string() },
+  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
+    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
+      return { ok: false, error: "unauthorized" };
+    }
+    if (![1, 2, 3].includes(args.stage)) {
+      return { ok: false, error: "Stage must be 1, 2, or 3." };
+    }
+    const c = await ctx.db.get(args.conversationId);
+    if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
+    const now = Date.now();
+    await ctx.db.patch(args.conversationId, { followUpStageOverride: args.stage, updatedAt: now });
+    return { ok: true };
+  },
+});
+
+// Feature #2: undo archive
+export const unarchiveFollowUp = mutation({
+  args: { conversationId: v.id("conversations"), authSecret: v.string() },
+  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
+    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
+      return { ok: false, error: "unauthorized" };
+    }
+    const c = await ctx.db.get(args.conversationId);
+    if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
+    const now = Date.now();
+    await ctx.db.patch(args.conversationId, { status: "active", followUpArchivedAt: undefined, updatedAt: now });
+    return { ok: true };
+  },
+});
+
+export const getArchivedFollowUps = query({
+  args: { csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const DAY = 86_400_000;
+    const since = now - 14 * DAY;
+    const csKeyMemo = args.csName ? csKey(args.csName) : null;
+
+    // Conversations with followUpArchivedAt set, recent, scoped by csName.
+    const archived = await ctx.db
+      .query("conversations")
+      .filter((q: any) =>
+        q.and(
+          q.neq(q.field("followUpArchivedAt"), undefined),
+          q.gte(q.field("updatedAt"), since),
+        )
+      )
+      .collect();
+
+    const filtered = archived
+      .filter((c) => !isInternalTestPhone(c.customerPhone))
+      .filter((c) => (csKeyMemo ? csKey(c.assignedCsName) === csKeyMemo : true));
+
+    type ArchivedRow = {
+      conversationId: typeof archived[0]["_id"];
+      customerName: string;
+      customerPhone: string;
+      orderId: string;
+      csName: string;
+      followUpArchivedAt: number;
+    };
+    const result: ArchivedRow[] = filtered.map((c) => ({
+      conversationId: c._id,
+      customerName: c.customerName,
+      customerPhone: c.customerPhone,
+      orderId: c.orderId,
+      csName: c.assignedCsName,
+      followUpArchivedAt: c.followUpArchivedAt!,
+    }));
+
+    result.sort((a, b) => b.followUpArchivedAt - a.followUpArchivedAt);
+    return result;
+  },
+});
+
+// Feature #5b: auto-send toggle
+export const setAutoFollowUp = mutation({
+  args: { csName: v.string(), enabled: v.boolean(), authSecret: v.string() },
+  handler: async (ctx, args): Promise<{ ok: boolean; enabled?: boolean; error?: string }> => {
+    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
+      return { ok: false, error: "unauthorized" };
+    }
+    const now = Date.now();
+    const normalizedName = normalizeCsName(args.csName);
+    const existing = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", normalizedName))
+      .unique();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, { autoFollowUpEnabled: args.enabled, updatedAt: now });
+    } else {
+      // Insert minimal config if not found (mirror upsert defaults from csConfigs.ts).
+      await ctx.db.insert("csConfigs", {
+        normalizedName,
+        csName: args.csName,
+        orderAutomationEnabled: false,
+        aiAssistantEnabled: false,
+        reportingEnabled: true,
+        autoFollowUpEnabled: args.enabled,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    return { ok: true, enabled: args.enabled };
+  },
+});
+
+export const getAutoFollowUp = query({
+  args: { csName: v.string() },
+  handler: async (ctx, args): Promise<{ enabled: boolean }> => {
+    const normalizedName = normalizeCsName(args.csName);
+    const config = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", normalizedName))
+      .unique();
+    const enabled = config?.autoFollowUpEnabled ?? false;
+    return { enabled };
+  },
+});
+
+// Feature #10: KPI — follow-up effectiveness
+export const getFollowUpEffectiveness = query({
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const csKeyMemo = args.csName ? csKey(args.csName) : null;
+    const recaps = await ctx.db
+      .query("shippingRecaps")
+      .withIndex("by_closedAt", (q: any) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
+      .collect();
+
+    // Exclude cancelled, internal-test, scope by csName.
+    const filtered = recaps
+      .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export")
+      .filter((r) => !isInternalTestPhone(r.customerPhone))
+      .filter((r) => (csKeyMemo ? csKey(r.csName) === csKeyMemo : true));
+
+    const totalClosings = filtered.length;
+    const fromFollowUp = filtered.filter((r) => (r.followUpTouchesAtClose ?? 0) >= 1).length;
+    const byTouches = filtered.reduce(
+      (acc, r) => {
+        const touches = r.followUpTouchesAtClose ?? 0;
+        if (touches === 1) acc.h1++;
+        else if (touches === 2) acc.h2++;
+        else if (touches >= 3) acc.h3++;
+        return acc;
+      },
+      { h1: 0, h2: 0, h3: 0 }
+    );
+
+    return { totalClosings, fromFollowUp, byStage: byTouches };
   },
 });
