@@ -6,6 +6,7 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 
 type Candidate = {
@@ -21,10 +22,24 @@ type Candidate = {
 };
 type Staged = Candidate & { stage: 1 | 2 | 3 };
 
-type Tab = 'all' | 'stage1' | 'stage2' | 'stage3';
+type Tab = 'all' | 'stage1' | 'stage2' | 'stage3' | 'archived';
+
+type ArchivedRow = {
+  conversationId: string;
+  customerName: string;
+  customerPhone: string;
+  orderId: string;
+  csName: string;
+  followUpArchivedAt: number;
+};
 
 const STAGE_LABEL: Record<1 | 2 | 3, string> = { 1: 'H+1', 2: 'H+2', 3: 'H+3' };
 const STAGE_NAMES = ['H+1', 'H+2', 'H+3'];
+const STAGE_TEMPLATE_LABELS: Record<1 | 2 | 3, string> = {
+  1: 'H+1 · Tindak lanjut pertama',
+  2: 'H+2 · Pengingat',
+  3: 'H+3 · Penawaran terakhir (penutup)',
+};
 
 const formatRelativeTime = (ms: number): string => {
   const now = Date.now();
@@ -98,6 +113,57 @@ function ChatListItem({
   );
 }
 
+// Feature #2: Archived list item with restore button
+function ArchivedListItem({
+  archived,
+  isSelected,
+  onClick,
+  onRestore,
+  isRestoring,
+}: {
+  archived: ArchivedRow;
+  isSelected: boolean;
+  onClick: () => void;
+  onRestore: () => Promise<void>;
+  isRestoring: boolean;
+}) {
+  return (
+    <div
+      className={`flex cursor-pointer gap-3 border-b border-border p-3 transition-colors hover:bg-accent ${
+        isSelected ? 'bg-blue-50 dark:bg-blue-950' : ''
+      }`}
+    >
+      <Avatar name={archived.customerName} />
+      <div className="flex-1 min-w-0" onClick={onClick}>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-bold text-foreground truncate">{archived.customerName || 'Unknown'}</h3>
+          <span className="text-xs text-muted-foreground whitespace-nowrap">
+            {formatRelativeTime(archived.followUpArchivedAt)}
+          </span>
+        </div>
+        <div className="flex items-center justify-between gap-2 mt-1">
+          <span className="text-xs bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-200 px-2 py-0.5 rounded">
+            Diarsipkan
+          </span>
+          <span className="text-xs text-muted-foreground">{archived.orderId}</span>
+        </div>
+      </div>
+      <Button
+        onClick={(e) => {
+          e.stopPropagation();
+          onRestore();
+        }}
+        disabled={isRestoring}
+        variant="ghost"
+        size="sm"
+        className="shrink-0"
+      >
+        {isRestoring ? 'Pulih...' : 'Pulihkan'}
+      </Button>
+    </div>
+  );
+}
+
 // WhatsApp-style message bubble
 function MessageBubble({ message }: { message: any }) {
   const isOutbound = message.direction === 'outbound';
@@ -133,6 +199,7 @@ function ConversationPane({
   const [selectedStage, setSelectedStage] = useState<1 | 2 | 3>(1);
   const [sending, setSending] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [movingStage, setMovingStage] = useState(false);
   const [status, setStatus] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -213,10 +280,34 @@ function ConversationPane({
     }
   }
 
+  async function handleMoveStage(newStage: 1 | 2 | 3) {
+    if (!candidate || candidate.stage === newStage) return;
+    setMovingStage(true);
+    setStatus(null);
+    try {
+      const r = await fetch('/api/follow-up/set-stage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: candidate.conversationId, stage: newStage }),
+      }).then((x) => x.json());
+
+      if (r.ok) {
+        setStatus({ type: 'ok', message: `Dipindah ke ${STAGE_LABEL[newStage]}` });
+        setTimeout(() => setStatus(null), 2000);
+      } else {
+        setStatus({ type: 'error', message: r.error || 'Gagal memindah tahap' });
+      }
+    } catch (e) {
+      setStatus({ type: 'error', message: 'Gagal menghubungi server' });
+    } finally {
+      setMovingStage(false);
+    }
+  }
+
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
-      <div className="border-b border-border p-4 bg-card">
+      <div className="border-b border-border p-4 bg-card space-y-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-3 flex-1">
             {onBack && (
@@ -230,6 +321,27 @@ function ConversationPane({
             </div>
           </div>
           <ProgressDots touchAts={candidate.touchAts} />
+        </div>
+        {/* Feature #8: Move stage control */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-muted-foreground">Pindah ke:</span>
+          <div className="flex gap-1">
+            {(([1, 2, 3] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => handleMoveStage(s)}
+                disabled={movingStage || sending || archiving}
+                title="Geser manual kalau deteksi otomatis kurang pas"
+                className={`px-2 py-1 text-xs font-medium rounded transition-colors ${
+                  candidate.stage === s
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-accent'
+                }`}
+              >
+                {STAGE_LABEL[s]}
+              </button>
+            )))}
+          </div>
         </div>
       </div>
 
@@ -271,18 +383,18 @@ function ConversationPane({
           <select
             value={selectedStage}
             onChange={(e) => setSelectedStage(parseInt(e.target.value) as 1 | 2 | 3)}
-            disabled={sending || archiving}
+            disabled={sending || archiving || movingStage}
             className="flex-1 px-3 py-2 rounded border border-input bg-background text-foreground text-sm"
           >
-            <option value={1}>H+1</option>
-            <option value={2}>H+2</option>
-            <option value={3}>H+3</option>
+            <option value={1}>{STAGE_TEMPLATE_LABELS[1]}</option>
+            <option value={2}>{STAGE_TEMPLATE_LABELS[2]}</option>
+            <option value={3}>{STAGE_TEMPLATE_LABELS[3]}</option>
           </select>
         </div>
         <div className="flex gap-2">
           <Button
             onClick={handleSend}
-            disabled={sending || archiving || isStageDone}
+            disabled={sending || archiving || movingStage || isStageDone}
             className="flex-1 bg-green-600 hover:bg-green-700 text-white"
             size="sm"
           >
@@ -290,7 +402,7 @@ function ConversationPane({
           </Button>
           <Button
             onClick={handleArchive}
-            disabled={sending || archiving}
+            disabled={sending || archiving || movingStage}
             variant="outline"
             size="sm"
           >
@@ -310,6 +422,9 @@ export function FollowUpDashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showConvOnMobile, setShowConvOnMobile] = useState(false);
   const [sortBy, setSortBy] = useState<'oldest' | 'newest'>('oldest'); // by day: most overdue first (default)
+  const [autoSendEnabled, setAutoSendEnabled] = useState(false);
+  const [togglingAutoSend, setTogglingAutoSend] = useState(false);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/me')
@@ -322,7 +437,34 @@ export function FollowUpDashboard() {
   const csName = me?.role === 'cs' ? me.name : (cs && cs !== 'all' ? cs : undefined);
   const data = useQuery(api.followUp.getFollowUpCandidates, me ? { csName } : 'skip');
 
-  const isLoading = data === undefined;
+  // Feature #2: Load archived follow-ups when Arsip tab is active
+  const archivedData = useQuery(
+    api.followUp.getArchivedFollowUps,
+    me && activeTab === 'archived' ? { csName } : 'skip'
+  );
+
+  // Feature #5b: Load auto-send status
+  const autoFollowUpData = useQuery(
+    api.followUp.getAutoFollowUp,
+    me && csName ? { csName } : 'skip'
+  );
+
+  // Feature #10: Load KPI effectiveness
+  const now = Date.now();
+  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+  const kpiData = useQuery(
+    api.followUp.getFollowUpEffectiveness,
+    me ? { startAt: thirtyDaysAgo, endAt: now, csName } : 'skip'
+  );
+
+  // Sync auto-send state
+  useEffect(() => {
+    if (autoFollowUpData && typeof autoFollowUpData === 'object' && 'enabled' in autoFollowUpData) {
+      setAutoSendEnabled(autoFollowUpData.enabled);
+    }
+  }, [autoFollowUpData]);
+
+  const isLoading = data === undefined || (activeTab === 'archived' && archivedData === undefined);
 
   const withStage: Staged[] = [
     ...(data?.stage1 ?? []).map((c) => ({ ...c, stage: 1 as const })),
@@ -330,8 +472,14 @@ export function FollowUpDashboard() {
     ...(data?.stage3 ?? []).map((c) => ({ ...c, stage: 3 as const })),
   ];
 
-  const want = activeTab === 'stage1' ? 1 : activeTab === 'stage2' ? 2 : activeTab === 'stage3' ? 3 : null;
-  let candidates = want ? withStage.filter((c) => c.stage === want) : withStage;
+  // Feature #2: Handle Arsip tab separately
+  let candidates: (Staged | ArchivedRow)[] = [];
+  if (activeTab === 'archived') {
+    candidates = archivedData ?? [];
+  } else {
+    const want = activeTab === 'stage1' ? 1 : activeTab === 'stage2' ? 2 : activeTab === 'stage3' ? 3 : null;
+    candidates = want ? withStage.filter((c) => c.stage === want) : withStage;
+  }
 
   // Client-side search by name or phone
   if (searchQuery.trim()) {
@@ -342,46 +490,120 @@ export function FollowUpDashboard() {
   }
 
   // Sort by day: most overdue first (oldest last-chat) by default, or newest first.
-  candidates = [...candidates].sort((a, b) =>
-    sortBy === 'oldest' ? a.lastInboundAt - b.lastInboundAt : b.lastInboundAt - a.lastInboundAt,
-  );
+  // For archived, sort by followUpArchivedAt; for active, by lastInboundAt
+  candidates = [...candidates].sort((a, b) => {
+    const timeA = 'followUpArchivedAt' in a ? a.followUpArchivedAt : a.lastInboundAt;
+    const timeB = 'followUpArchivedAt' in b ? b.followUpArchivedAt : b.lastInboundAt;
+    return sortBy === 'oldest' ? timeA - timeB : timeB - timeA;
+  });
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: 'all', label: 'Semua', count: withStage.length },
     { key: 'stage1', label: 'H+1', count: data?.stage1.length ?? 0 },
     { key: 'stage2', label: 'H+2', count: data?.stage2.length ?? 0 },
     { key: 'stage3', label: 'H+3', count: data?.stage3.length ?? 0 },
+    { key: 'archived', label: 'Arsip', count: archivedData?.length ?? 0 },
   ];
 
-  const selected = candidates.find((c) => c.conversationId === selectedId) || null;
+  const selected =
+    activeTab === 'archived'
+      ? (candidates as ArchivedRow[]).find((c) => c.conversationId === selectedId) || null
+      : (candidates as Staged[]).find((c) => c.conversationId === selectedId) || null;
 
   const handleBack = () => {
     setShowConvOnMobile(false);
     setSelectedId(null);
   };
 
+  // Feature #5b: Handle auto-send toggle
+  async function handleAutoSendToggle(newState: boolean) {
+    if (!csName) return;
+    setTogglingAutoSend(true);
+    try {
+      const r = await fetch('/api/follow-up/auto-toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csName, enabled: newState }),
+      }).then((x) => x.json());
+
+      if (r.ok) {
+        setAutoSendEnabled(newState);
+      }
+    } catch (e) {
+      console.error('Failed to toggle auto-send:', e);
+    } finally {
+      setTogglingAutoSend(false);
+    }
+  }
+
+  // Feature #2: Handle restore from archive
+  async function handleRestoreArchived(conversationId: string) {
+    setRestoringId(conversationId);
+    try {
+      const r = await fetch('/api/follow-up/unarchive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId }),
+      }).then((x) => x.json());
+
+      if (r.ok) {
+        // The conversation will reappear in the funnel via Convex reactivity
+        setSelectedId(null);
+      }
+    } catch (e) {
+      console.error('Failed to restore:', e);
+    } finally {
+      setRestoringId(null);
+    }
+  }
+
   return (
     <div className="h-screen flex flex-col bg-background">
-      {/* Header with tabs */}
+      {/* KPI strip - Feature #10 */}
+      {kpiData && typeof kpiData === 'object' && 'totalClosings' in kpiData && (
+        <div className="border-b border-border px-4 py-2 bg-muted/40 text-xs text-muted-foreground">
+          <div className="flex items-center justify-between">
+            <span>
+              30 hari: <strong>{kpiData.totalClosings}</strong> closing ·{' '}
+              <strong>{kpiData.fromFollowUp}</strong> dari follow-up ({kpiData.totalClosings > 0 ? Math.round((kpiData.fromFollowUp / kpiData.totalClosings) * 100) : 0}%) — H+1: {kpiData.byStage.h1} ·
+              H+2: {kpiData.byStage.h2} · H+3: {kpiData.byStage.h3}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Header with tabs and controls */}
       <div className="border-b border-border p-4 bg-card space-y-3">
-        <div className="flex flex-wrap gap-2">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => {
-                setActiveTab(t.key);
-                setSelectedId(null);
-              }}
-              className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
-                activeTab === t.key
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent'
-              }`}
-            >
-              {t.label} ({t.count})
-            </button>
-          ))}
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-2 flex-1">
+            {tabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => {
+                  setActiveTab(t.key);
+                  setSelectedId(null);
+                }}
+                className={`px-3 py-2 text-sm font-medium rounded-lg transition-colors ${
+                  activeTab === t.key
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-accent'
+                }`}
+              >
+                {t.label} ({t.count})
+              </button>
+            ))}
+          </div>
+          {/* Feature #5b: Auto-send toggle */}
+          <div className="flex items-center gap-2 shrink-0">
+            <label className="text-xs font-medium text-muted-foreground">Auto-send:</label>
+            <Switch
+              checked={autoSendEnabled}
+              onCheckedChange={handleAutoSendToggle}
+              disabled={!csName || togglingAutoSend}
+              title={!csName ? 'Pilih CS dulu' : 'Toggle auto-send 08-14 WIB'}
+            />
+          </div>
         </div>
         <div className="flex gap-2">
           <input
@@ -422,10 +644,24 @@ export function FollowUpDashboard() {
             </div>
           ) : candidates.length === 0 ? (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-              Tidak ada yang perlu di-follow-up
+              {activeTab === 'archived' ? 'Belum ada yang diarsipkan' : 'Tidak ada yang perlu di-follow-up'}
             </div>
+          ) : activeTab === 'archived' ? (
+            (candidates as ArchivedRow[]).map((c) => (
+              <ArchivedListItem
+                key={c.conversationId}
+                archived={c}
+                isSelected={selectedId === c.conversationId}
+                onClick={() => {
+                  setSelectedId(c.conversationId);
+                  setShowConvOnMobile(true);
+                }}
+                onRestore={() => handleRestoreArchived(c.conversationId)}
+                isRestoring={restoringId === c.conversationId}
+              />
+            ))
           ) : (
-            candidates.map((c) => (
+            (candidates as Staged[]).map((c) => (
               <ChatListItem
                 key={c.conversationId}
                 candidate={c}
@@ -445,9 +681,9 @@ export function FollowUpDashboard() {
             showConvOnMobile ? 'block' : 'hidden md:block'
           }`}
         >
-          {selected ? (
+          {selected && activeTab !== 'archived' ? (
             <ConversationPane
-              candidate={selected}
+              candidate={selected as Staged}
               onBack={handleBack}
             />
           ) : (
