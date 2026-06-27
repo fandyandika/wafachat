@@ -439,6 +439,7 @@ export const getClosedFollowUps = query({
       .filter((r) => (csKeyMemo ? csKey(r.csName) === csKeyMemo : true));
 
     type ClosedRow = {
+      conversationId: typeof filtered[number]["conversationId"];
       customerName: string;
       customerPhone: string;
       csName: string;
@@ -451,6 +452,7 @@ export const getClosedFollowUps = query({
     const rows: ClosedRow[] = filtered.map((r) => {
       const touches = r.followUpTouchesAtClose ?? 0;
       return {
+        conversationId: r.conversationId, // for "view chat history" on a closed lead
         customerName: r.customerName,
         customerPhone: r.customerPhone,
         csName: r.csName,

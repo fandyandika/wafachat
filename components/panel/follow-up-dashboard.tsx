@@ -34,6 +34,7 @@ type ArchivedRow = {
 };
 
 type ClosedRow = {
+  conversationId?: string;
   customerName: string;
   customerPhone: string;
   csName: string;
@@ -202,10 +203,14 @@ function ArchivedListItem({
   );
 }
 
-// Closing row — where a lead WENT after dropping out of the funnel. Read-only.
-function ClosingListItem({ row }: { row: ClosedRow }) {
+// Closing row — where a lead WENT after dropping out of the funnel. Clickable to view chat history.
+function ClosingListItem({ row, isSelected, onClick }: { row: ClosedRow; isSelected: boolean; onClick?: () => void }) {
+  const clickable = !!onClick;
   return (
-    <div className="flex items-center gap-3 border-b border-border px-3 py-3">
+    <div
+      onClick={onClick}
+      className={`flex items-center gap-3 border-b border-border px-3 py-2.5 ${clickable ? 'cursor-pointer transition-colors hover:bg-accent' : ''} ${isSelected ? 'bg-emerald-50 dark:bg-emerald-950/40' : ''}`}
+    >
       <Avatar name={row.customerName} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
@@ -232,14 +237,14 @@ function MessageBubble({ message }: { message: any }) {
   const isOutbound = message.direction === 'outbound';
   const timeStr = new Date(message.createdAt).toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit' });
   return (
-    <div className={`mb-2.5 flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
+    <div className={`mb-1.5 flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`max-w-[75%] rounded-2xl px-3.5 py-2 shadow-sm ${
+        className={`max-w-[82%] rounded-xl px-2.5 py-1.5 shadow-sm ${
           isOutbound ? 'bg-[#dcf8c6] text-[#111b21]' : 'bg-white text-foreground dark:bg-muted'
         }`}
       >
-        <p className="whitespace-pre-wrap break-words text-sm">{message.content || `[${message.messageType}]`}</p>
-        <p className="mt-1 text-right text-[10px] opacity-60">{timeStr}</p>
+        <p className="whitespace-pre-wrap break-words text-[13px] leading-snug">{message.content || `[${message.messageType}]`}</p>
+        <p className="mt-0.5 text-right text-[10px] opacity-60">{timeStr}</p>
       </div>
     </div>
   );
@@ -350,46 +355,44 @@ function ConversationPane({ candidate, onBack }: { candidate: Staged | null; onB
 
   return (
     <div className="flex h-full flex-col bg-background">
-      {/* Header */}
-      <div className="shrink-0 space-y-2.5 border-b border-border bg-card p-3 md:p-4">
+      {/* Header — compact (WhatsApp-like) */}
+      <div className="shrink-0 space-y-1.5 border-b border-border bg-card p-2.5">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-1 items-center gap-2.5">
+          <div className="flex flex-1 items-center gap-2">
             {onBack && (
-              <button onClick={onBack} className="text-lg text-muted-foreground hover:text-foreground" aria-label="Kembali">
+              <button onClick={onBack} className="text-xl leading-none text-muted-foreground hover:text-foreground" aria-label="Kembali">
                 ←
               </button>
             )}
             <Avatar name={candidate.customerName} />
             <div className="min-w-0">
-              <h2 className="truncate font-semibold text-foreground">{candidate.customerName || candidate.customerPhone}</h2>
+              <h2 className="truncate text-sm font-semibold text-foreground">{candidate.customerName || candidate.customerPhone}</h2>
               <p className="truncate text-xs text-muted-foreground">{candidate.customerPhone}</p>
             </div>
           </div>
           <ProgressDots touchAts={candidate.touchAts} />
         </div>
         {/* Manual stage move */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-muted-foreground">Pindah ke:</span>
-          <div className="flex gap-1">
-            {([1, 2, 3] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => handleMoveStage(s)}
-                disabled={busy}
-                title="Geser manual kalau deteksi otomatis kurang pas"
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                  candidate.stage === s ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'
-                }`}
-              >
-                {STAGE_LABEL[s]}
-              </button>
-            ))}
-          </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[11px] font-medium text-muted-foreground">Pindah:</span>
+          {([1, 2, 3] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => handleMoveStage(s)}
+              disabled={busy}
+              title="Geser manual kalau deteksi otomatis kurang pas"
+              className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                candidate.stage === s ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'
+              }`}
+            >
+              {STAGE_LABEL[s]}
+            </button>
+          ))}
         </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 space-y-1 overflow-y-auto bg-muted/20 p-3 md:p-4">
+      <div className="flex-1 overflow-y-auto bg-muted/20 p-2.5">
         {messages === undefined ? (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-muted-foreground">Memuat…</p>
@@ -422,12 +425,12 @@ function ConversationPane({ candidate, onBack }: { candidate: Staged | null; onB
       )}
 
       {/* Composer */}
-      <div className="shrink-0 space-y-2.5 border-t border-border bg-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] md:p-4">
+      <div className="shrink-0 space-y-1.5 border-t border-border bg-card p-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
         <select
           value={selectedStage}
           onChange={(e) => setSelectedStage(parseInt(e.target.value) as 1 | 2 | 3)}
           disabled={busy}
-          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground"
+          className="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground"
         >
           <option value={1}>{STAGE_TEMPLATE_LABELS[1]}</option>
           <option value={2}>{STAGE_TEMPLATE_LABELS[2]}</option>
@@ -437,14 +440,67 @@ function ConversationPane({ candidate, onBack }: { candidate: Staged | null; onB
           <Button
             onClick={handleSend}
             disabled={busy || isStageDone}
-            className="h-11 flex-1 bg-emerald-600 text-base font-semibold text-white shadow-sm hover:bg-emerald-700"
+            className="h-10 flex-1 bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-700"
           >
             {sending ? 'Mengirim…' : isStageDone ? `${STAGE_LABEL[selectedStage]} sudah dikirim` : `Kirim ${STAGE_LABEL[selectedStage]}`}
           </Button>
-          <Button onClick={handleArchive} disabled={busy} variant="outline" className="h-11 px-4">
+          <Button onClick={handleArchive} disabled={busy} variant="outline" className="h-10 px-4">
             {archiving ? '…' : 'Arsip'}
           </Button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Read-only chat history for a CLOSED lead (Closing tab) — no composer/stage controls.
+function ReadOnlyConversation({ row, onBack }: { row: ClosedRow; onBack?: () => void }) {
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messages = useQuery(
+    api.messages.listMessages,
+    row.conversationId ? { conversationId: row.conversationId as Id<'conversations'>, limit: 50 } : 'skip',
+  );
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  return (
+    <div className="flex h-full flex-col bg-background">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card p-2.5">
+        {onBack && (
+          <button onClick={onBack} className="text-xl leading-none text-muted-foreground hover:text-foreground" aria-label="Kembali">
+            ←
+          </button>
+        )}
+        <Avatar name={row.customerName} />
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold text-foreground">{row.customerName || row.customerPhone}</h2>
+          <p className="truncate text-xs text-muted-foreground">{row.customerPhone}</p>
+        </div>
+        <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100">
+          ✓ Closing
+        </span>
+      </div>
+      <div className="flex-1 overflow-y-auto bg-muted/20 p-2.5">
+        {messages === undefined ? (
+          <div className="flex h-full items-center justify-center">
+            <p className="text-sm text-muted-foreground">Memuat…</p>
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <p className="text-sm text-muted-foreground">Belum ada pesan</p>
+          </div>
+        ) : (
+          <>
+            {messages.map((msg) => (
+              <MessageBubble key={msg._id} message={msg} />
+            ))}
+            <div ref={messagesEndRef} />
+          </>
+        )}
+      </div>
+      <div className="shrink-0 border-t border-border bg-card p-2.5 text-center text-xs text-muted-foreground">
+        Sudah closing — riwayat hanya bisa dilihat.
       </div>
     </div>
   );
@@ -542,6 +598,7 @@ export function FollowUpDashboard() {
   ];
 
   const selected = selectable ? activeList.find((c) => c.conversationId === selectedId) ?? null : null;
+  const selectedClosing = activeTab === 'closing' ? closingList.find((c) => c.conversationId === selectedId) ?? null : null;
 
   const switchTab = (key: Tab) => {
     setActiveTab(key);
@@ -652,7 +709,7 @@ export function FollowUpDashboard() {
     <div className="flex h-[calc(100dvh-8.5rem)] min-h-[24rem] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm md:h-[calc(100dvh-5rem)]">
       {/* KPI — compact one-liner */}
       {kpiData && typeof kpiData === 'object' && 'totalClosings' in kpiData && (
-        <div className="shrink-0 border-b border-border bg-emerald-50/60 px-3 py-1.5 dark:bg-emerald-950/20">
+        <div className={`shrink-0 border-b border-border bg-emerald-50/60 px-3 py-1.5 dark:bg-emerald-950/20 ${showConvOnMobile ? 'hidden md:block' : ''}`}>
           <p className="truncate text-xs">
             <span className="font-semibold text-emerald-700 dark:text-emerald-400">
               {kpiData.fromFollowUp} closing dari follow-up ({kpiPct}%)
@@ -664,8 +721,8 @@ export function FollowUpDashboard() {
         </div>
       )}
 
-      {/* Controls — compact: row 1 = search + sort + CS filter, row 2 = tabs + auto-send */}
-      <div className="shrink-0 space-y-2 border-b border-border bg-card p-2.5">
+      {/* Controls — compact; hidden on mobile while a chat is open (WhatsApp behavior) */}
+      <div className={`shrink-0 space-y-2 border-b border-border bg-card p-2.5 ${showConvOnMobile ? 'hidden md:block' : ''}`}>
         <div className="flex gap-2">
           <input
             type="text"
@@ -789,7 +846,21 @@ export function FollowUpDashboard() {
               closingList.length === 0 ? (
                 <EmptyState text="Belum ada closing 7 hari terakhir" />
               ) : (
-                closingList.map((c, i) => <ClosingListItem key={`${c.orderId}-${c.customerPhone}-${i}`} row={c} />)
+                closingList.map((c, i) => (
+                  <ClosingListItem
+                    key={`${c.orderId}-${c.customerPhone}-${i}`}
+                    row={c}
+                    isSelected={selectedId === c.conversationId}
+                    onClick={
+                      c.conversationId
+                        ? () => {
+                            setSelectedId(c.conversationId!);
+                            setShowConvOnMobile(true);
+                          }
+                        : undefined
+                    }
+                  />
+                ))
               )
             ) : activeList.length === 0 ? (
               <EmptyState text="Tidak ada yang perlu di-follow-up" />
@@ -838,7 +909,13 @@ export function FollowUpDashboard() {
 
         {/* Conversation pane */}
         <div className={`flex-1 ${showConvOnMobile ? 'block' : 'hidden md:block'}`}>
-          {selected ? <ConversationPane candidate={selected} onBack={handleBack} /> : <ConversationPane candidate={null} />}
+          {selected ? (
+            <ConversationPane candidate={selected} onBack={handleBack} />
+          ) : selectedClosing ? (
+            <ReadOnlyConversation row={selectedClosing} onBack={handleBack} />
+          ) : (
+            <ConversationPane candidate={null} />
+          )}
         </div>
       </div>
     </div>
