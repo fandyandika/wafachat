@@ -29,9 +29,9 @@ const STAGE_NAMES = ['H+1', 'H+2', 'H+3'];
 const formatRelativeTime = (ms: number): string => {
   const now = Date.now();
   const diffH = Math.round((now - ms) / 3.6e6);
-  if (diffH < 1) return '<1j';
-  if (diffH < 24) return `${diffH}j`;
-  return `${Math.round(diffH / 24)}h`;
+  if (diffH < 1) return 'baru';
+  if (diffH < 24) return `${diffH} jam`;
+  return `${Math.round(diffH / 24)} hari`;
 };
 
 // Avatar with customer initial
@@ -309,6 +309,7 @@ export function FollowUpDashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showConvOnMobile, setShowConvOnMobile] = useState(false);
+  const [sortBy, setSortBy] = useState<'oldest' | 'newest'>('oldest'); // by day: most overdue first (default)
 
   useEffect(() => {
     fetch('/api/me')
@@ -339,6 +340,11 @@ export function FollowUpDashboard() {
       (c) => c.customerName.toLowerCase().includes(q) || c.customerPhone.includes(q)
     );
   }
+
+  // Sort by day: most overdue first (oldest last-chat) by default, or newest first.
+  candidates = [...candidates].sort((a, b) =>
+    sortBy === 'oldest' ? a.lastInboundAt - b.lastInboundAt : b.lastInboundAt - a.lastInboundAt,
+  );
 
   const tabs: Array<{ key: Tab; label: string; count: number }> = [
     { key: 'all', label: 'Semua', count: withStage.length },
@@ -377,16 +383,27 @@ export function FollowUpDashboard() {
             </button>
           ))}
         </div>
-        <input
-          type="text"
-          placeholder="Cari nama atau nomor..."
-          value={searchQuery}
-          onChange={(e) => {
-            setSearchQuery(e.target.value);
-            setSelectedId(null);
-          }}
-          className="w-full px-3 py-2 rounded border border-input bg-background text-foreground text-sm placeholder-muted-foreground"
-        />
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Cari nama atau nomor..."
+            value={searchQuery}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setSelectedId(null);
+            }}
+            className="flex-1 px-3 py-2 rounded border border-input bg-background text-foreground text-sm placeholder-muted-foreground"
+          />
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as 'oldest' | 'newest')}
+            title="Urutkan berdasarkan lama ghosting"
+            className="px-2 py-2 rounded border border-input bg-background text-foreground text-sm"
+          >
+            <option value="oldest">Paling lama</option>
+            <option value="newest">Paling baru</option>
+          </select>
+        </div>
       </div>
 
       {/* Two-pane layout */}
