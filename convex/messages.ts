@@ -5,6 +5,7 @@ import { normalizePhone } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 import { messageMatchesPhrase, upsertRecapFromMessage } from "./shippingRecaps";
 import { getActiveClosingPhrases } from "./closingRules";
+import { messageHasDoneMarker } from "./followUpMath";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
   if (args.orderId) {
@@ -239,6 +240,13 @@ export const appendMessageFromN8n = mutation({
           });
         }
       }
+    }
+
+    // Funnel-exclude markers (shopee / bonus / review / testi / feedback / cod diproses): the lead is
+    // post-sale or handled elsewhere → close it in REAL TIME so it drops out of the follow-up funnel
+    // immediately (same idea as closing detection above; the daily sweep is the backstop). Reversible.
+    if (conversation.status !== "closed" && messageHasDoneMarker(args.content, args.direction)) {
+      await ctx.db.patch(conversation._id, { status: "closed", updatedAt: createdAt });
     }
 
     return {

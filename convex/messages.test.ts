@@ -48,6 +48,29 @@ test("appendMessageFromN8n: inbound with phrase -> NO recap", async () => {
   expect(recaps.length).toBe(0);
 });
 
+test("appendMessageFromN8n: outbound 'cod diproses' marker -> conversation closed LIVE", async () => {
+  const t = convexTest(schema);
+  await t.mutation(api.messages.appendMessageFromN8n, {
+    phone: "62844", order_id: "O-44", customerName: "A", csName: "CS Aisyah",
+    role: "cs", direction: "outbound", content: "*PESANAN COD DIPROSES* ya kak",
+    messageType: "text", externalMessageId: "mk1", createdAt: 5000,
+  });
+  const conv = await t.run(async (ctx) =>
+    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62844")).first());
+  expect(conv?.status).toBe("closed");
+});
+
+test("appendMessageFromN8n: ordinary inbound -> conversation NOT closed", async () => {
+  const t = convexTest(schema);
+  await t.mutation(api.messages.appendMessageFromN8n, {
+    phone: "62845", order_id: "O-45", role: "customer", direction: "inbound",
+    content: "halo kak mau tanya", messageType: "text", externalMessageId: "ord1", createdAt: 5000,
+  });
+  const conv = await t.run(async (ctx) =>
+    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62845")).first());
+  expect(conv?.status).not.toBe("closed");
+});
+
 test("appendMessageFromN8n: heals 'Unknown' conversation csName when a known CS arrives", async () => {
   const t = convexTest(schema);
   // 1. Inbound with no csName -> fallback conversation assignedCsName "Unknown"

@@ -32,8 +32,8 @@ test("1 touch but only 40h old -> null (H+2 needs >=48h)", () => {
   expect(eligibleStage(base({ touchCount: 1, lastTouchAt: 25 * HOUR, now: 40 * HOUR }))).toBeNull();
 });
 
-test("1 touch, 50h old, but only 8h since the touch -> null (needs >=12h gap)", () => {
-  expect(eligibleStage(base({ touchCount: 1, lastTouchAt: 42 * HOUR, now: 50 * HOUR }))).toBeNull();
+test("1 touch, 50h old -> stage 2 (age >=48h is enough; no min-gap)", () => {
+  expect(eligibleStage(base({ touchCount: 1, lastTouchAt: 42 * HOUR, now: 50 * HOUR }))).toBe(2);
 });
 
 test("2 touches, 80h old, 30h since touch -> stage 3 (H+3, goodbye)", () => {

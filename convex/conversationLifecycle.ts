@@ -10,30 +10,22 @@
 import { action, internalAction, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { messageHasDoneMarker } from "./followUpMath";
 
 // 5 days — same ceiling the follow-up funnel uses (followUpMath). Past this, a silent lead is dead.
 export const ARCHIVE_AFTER_MS = 5 * 24 * 60 * 60 * 1000;
 const BATCH = 25; // small: each non-closed row also scans its recent messages for "done" markers
 
-// "Done" markers in the chat → the lead already bought / is post-sale, so it leaves the funnel.
-// A shopee link/word can appear in either direction; the post-sale CS messages are outbound only.
-// NB: "cod diproses" = a COD order was confirmed (a won lead) — it leaves the funnel but is NOT a
-// "closing" (CR stays locked to the PEMESANAN BERHASIL recap), exactly as requested.
-const MARKER_ANY = ["shopee", "shp.ee"];
-const MARKER_OUT = ["aksesbonus", "review", "testi", "feedback", "cod diproses"];
-
+// "Done" markers are shared with the live hook in messages.ts (via followUpMath.messageHasDoneMarker),
+// so the keyword list never drifts. New markers close a conversation in REAL TIME on message insert;
+// this sweep is the BACKSTOP that catches any that pre-date the hook.
 async function hasDoneMarker(ctx: { db: any }, conversationId: any): Promise<boolean> {
   const msgs = await ctx.db
     .query("messages")
     .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversationId))
     .order("desc")
     .take(120); // latest 120 only — markers are recent; bounds reads per row
-  for (const m of msgs) {
-    const text = (m.content ?? "").toLowerCase();
-    if (MARKER_ANY.some((k) => text.includes(k))) return true;
-    if (m.direction === "outbound" && MARKER_OUT.some((k) => text.includes(k))) return true;
-  }
-  return false;
+  return msgs.some((m: any) => messageHasDoneMarker(m.content ?? "", m.direction));
 }
 
 // Process one page of conversations: close the WON + STALE ones (unless dryRun). Returns a cursor.

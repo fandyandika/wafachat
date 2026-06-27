@@ -23,12 +23,24 @@ export const FOLLOWUP_STAGES: FollowUpStageConfig[] = [
   { stage: 1, label: "H+1", templateName: "followup_h1", language: "id",
     minHoursSinceLastInbound: 24 },                                                    // >=24h, 0 touches
   { stage: 2, label: "H+2", templateName: "followup_h2", language: "id",
-    requiresPrevStage: 1, minHoursSinceLastInbound: 48, minHoursSincePrevStage: 12 }, // >=48h, 1 touch, >=12h since it
+    requiresPrevStage: 1, minHoursSinceLastInbound: 48 }, // >=48h (day 2), 1 touch already sent
   { stage: 3, label: "H+3", templateName: "followup_h3", language: "id",
-    requiresPrevStage: 2, minHoursSinceLastInbound: 72, minHoursSincePrevStage: 12 }, // >=72h (day 3), 2 touches -> goodbye -> archive
+    requiresPrevStage: 2, minHoursSinceLastInbound: 72 }, // >=72h (day 3), 2 touches -> goodbye -> archive
 ];
 
 const HOUR = 3_600_000;
+
+// "Done" markers — a chat with any of these is post-sale/handled, so it must leave the follow-up
+// funnel. shopee link/word counts in either direction; the rest are CS post-sale messages (outbound).
+// Used both live (on message insert, messages.ts) and by the daily sweep (conversationLifecycle.ts).
+export const FU_MARKER_ANY = ["shopee", "shp.ee"];
+export const FU_MARKER_OUT = ["aksesbonus", "review", "testi", "feedback", "cod diproses"];
+export function messageHasDoneMarker(content: string, direction: "inbound" | "outbound"): boolean {
+  const t = (content ?? "").toLowerCase();
+  if (FU_MARKER_ANY.some((k) => t.includes(k))) return true;
+  if (direction === "outbound" && FU_MARKER_OUT.some((k) => t.includes(k))) return true;
+  return false;
+}
 
 export type CandidacyInput = {
   lastInboundAt: number | null;   // customer's most recent inbound message
