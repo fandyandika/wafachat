@@ -145,6 +145,11 @@ function ConversationPane({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Default the template picker to the lead's CURRENT stage (the next touch due) when it changes.
+  useEffect(() => {
+    if (candidate) setSelectedStage(candidate.stage);
+  }, [candidate?.conversationId, candidate?.stage]);
+
   if (!candidate) {
     return (
       <div className="hidden md:flex flex-col items-center justify-center h-full bg-muted/30">
