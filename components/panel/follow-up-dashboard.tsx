@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
+import type { Id } from '@/convex/_generated/dataModel';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
@@ -29,12 +30,49 @@ const formatRelativeTime = (ms: number): string => {
   return `${diffD}d lalu`;
 };
 
+// Lazy chat preview: only queried when its row is expanded (one conversation at a time), so it adds
+// no load to the candidate list. Shows the last few messages so a CS can eyeball whether the lead was
+// already followed up (and is genuinely ghosted) before sending — the raw evidence, not a guess.
+function ChatPreview({ conversationId }: { conversationId: string }) {
+  const msgs = useQuery(api.messages.listMessages, {
+    conversationId: conversationId as Id<'conversations'>,
+    limit: 6,
+  });
+  if (msgs === undefined)
+    return <div className="px-4 py-3 text-xs text-muted-foreground">Memuat chat…</div>;
+  if (msgs.length === 0)
+    return <div className="px-4 py-3 text-xs text-muted-foreground">Belum ada pesan.</div>;
+  return (
+    <div className="space-y-2 bg-muted/30 px-4 py-3">
+      {msgs.map((m) => {
+        const inbound = m.direction === 'inbound';
+        return (
+          <div key={m._id} className="text-xs">
+            <span className={`font-medium ${inbound ? 'text-foreground' : 'text-blue-600'}`}>
+              {inbound ? '← Customer' : '→ CS'}
+            </span>
+            <span className="ml-2 text-muted-foreground">
+              {new Date(m.createdAt).toLocaleString('id-ID', {
+                day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+              })}
+            </span>
+            <div className="ml-4 whitespace-pre-wrap break-words text-foreground/90">
+              {m.content || `[${m.messageType}]`}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function FollowUpDashboard() {
   const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs' } | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('stage1');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState<Record<string, boolean>>({});
   const [result, setResult] = useState<Record<string, 'ok' | string>>({});
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/me')
@@ -180,7 +218,8 @@ export function FollowUpDashboard() {
                 const isSending = sending[c.conversationId];
                 const stage = activeTab === 'stage1' ? 1 : 2;
                 return (
-                  <tr key={c.conversationId} className="hover:bg-accent/30">
+                  <Fragment key={c.conversationId}>
+                  <tr className="hover:bg-accent/30">
                     <td className="px-4 py-3">
                       <input
                         type="checkbox"
@@ -191,11 +230,20 @@ export function FollowUpDashboard() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-foreground">
-                        {c.customerName}
+                        {c.customerName || '—'}
                       </div>
                       <div className="text-xs text-muted-foreground">
                         {c.customerPhone}
                       </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpanded((e) => (e === c.conversationId ? null : c.conversationId))
+                        }
+                        className="mt-1 text-xs text-blue-600 hover:underline"
+                      >
+                        {expanded === c.conversationId ? '▲ Tutup chat' : '👁 Lihat chat'}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
                       {c.productName}
@@ -232,6 +280,17 @@ export function FollowUpDashboard() {
                       )}
                     </td>
                   </tr>
+                  {expanded === c.conversationId && (
+                    <tr>
+                      <td
+                        colSpan={me?.role === 'admin' ? 7 : 6}
+                        className="border-t border-border/50 p-0"
+                      >
+                        <ChatPreview conversationId={c.conversationId} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
