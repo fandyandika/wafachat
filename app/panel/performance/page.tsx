@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
+import { useResponseTimes } from '@/components/panel/use-response-times';
 import { PerformancePanel } from '@/components/panel/performance-panel';
 import type { PerformanceData } from '@/components/panel/types';
 
@@ -22,7 +23,7 @@ export default function PerformancePage() {
     csName,
   });
 
-  const responseTimes = useQuery(api.responseTime.getResponseTimes, { startAt, endAt });
+  const responseTimes = useResponseTimes({ startAt, endAt });
 
   const performance = performanceData as PerformanceData | undefined;
 

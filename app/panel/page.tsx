@@ -32,6 +32,7 @@ import { api } from '@/convex/_generated/api';
 import type { Stats, PerformanceData } from '@/components/panel/types';
 import { fmtTime, formatRupiah, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
+import { useResponseTimes } from '@/components/panel/use-response-times';
 
 export default function DashboardPage() {
   const { startAt, endAt, csName, jakartaDate, range } = usePanelFilters();
@@ -58,7 +59,7 @@ export default function DashboardPage() {
     csName,
   });
 
-  const respData = useQuery(api.responseTime.getResponseTimes, { startAt, endAt, csName });
+  const respData = useResponseTimes({ startAt, endAt, csName });
 
   const trendData = useQuery(api.metrics.getTrend, { startAt, endAt, bucket: 'day' });
 

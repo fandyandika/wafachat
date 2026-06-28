@@ -13,6 +13,7 @@ import { AnimatedNumber } from '@/components/ui/animated-number';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
 import { formatRupiahShort } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
+import { useResponseTimes } from '@/components/panel/use-response-times';
 import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/panel/report-card';
 import {
   JAK_MS, DATA_CUTOFF_MS, clampStartToCutoff, currentReportLabelDate, reportWindowForLabelDate, wibDateParts,
@@ -56,7 +57,7 @@ export function DailyReportDashboard() {
   const isCurrent = current.y === labelDate.y && current.m === labelDate.m && current.d === labelDate.d;
 
   const report = useQuery(api.analytics.getDailyReport, { startAt, endAt });
-  const respData = useQuery(api.responseTime.getResponseTimes, { startAt, endAt });
+  const respData = useResponseTimes({ startAt, endAt });
   // Previous window (same 24h length, one day earlier) for ▲▼ deltas. Skipped when
   // the prior period falls before the data cutoff (no reliable comparison).
   const prevStart = rawWindow.startAt - 86_400_000;
