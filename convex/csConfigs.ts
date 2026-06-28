@@ -14,7 +14,7 @@ export type CsFeatureConfig = {
   isActive: boolean;
 };
 
-const DEFAULT_CONFIGS: CsFeatureConfig[] = [
+export const DEFAULT_CONFIGS: CsFeatureConfig[] = [
   {
     csName: "CS Aisyah",
     orderAutomationEnabled: true,

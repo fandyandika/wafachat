@@ -1,8 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { csKey, normalizeCsName, isInternalTestPhone } from "./lib";
-
-const NINETY_DAYS = 90 * 24 * 60 * 60 * 1000;
+import { csKey, normalizeCsName } from "./lib";
+import { DEFAULT_CONFIGS } from "./csConfigs";
 
 type CsRow = {
   csName: string; normalizedName: string; key: string; avatarUrl: string | null;
@@ -13,37 +12,48 @@ type CsRow = {
 export const listCs = query({
   args: {},
   handler: async (ctx): Promise<CsRow[]> => {
-    const since = Date.now() - NINETY_DAYS;
-    const orders = await ctx.db.query("orders")
-      .withIndex("by_createdAt", (q) => q.gte("createdAt", since)).collect();
+    // CS registry comes from csConfigs (~6 rows) + built-in DEFAULT_CONFIGS — NOT from a
+    // 90-day scan of the orders table (that read ~18k docs on every render, on every page,
+    // and was the single biggest avoidable DB I/O cost). New CS are registered in Settings.
+    const stored = await ctx.db.query("csConfigs").collect();
 
-    const dataName = new Map<string, string>(); // key -> first-seen display name
-    for (const o of orders) {
-      if (isInternalTestPhone(o.customerPhone)) continue;
-      const raw = (o.assignedCsName ?? "").trim();
-      const k = csKey(raw);
+    type Entry = {
+      csName: string; isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
+      reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string; avatarStorageId?: typeof stored[number]["avatarStorageId"];
+    };
+    const byKey = new Map<string, Entry>();
+    // Built-in defaults first…
+    for (const d of DEFAULT_CONFIGS) {
+      const k = csKey(d.csName);
       if (!k || k === "unknown") continue;
-      if (!dataName.has(k)) dataName.set(k, raw);
+      byKey.set(k, {
+        csName: d.csName, isActive: d.isActive, orderAutomationEnabled: d.orderAutomationEnabled,
+        aiAssistantEnabled: d.aiAssistantEnabled, reportingEnabled: d.reportingEnabled,
+        autoFollowUpEnabled: d.autoFollowUpEnabled, csPhone: d.csPhone,
+      });
+    }
+    // …then stored configs override.
+    for (const c of stored) {
+      const k = csKey(c.csName);
+      if (!k || k === "unknown") continue;
+      byKey.set(k, {
+        csName: c.csName, isActive: c.isActive, orderAutomationEnabled: c.orderAutomationEnabled,
+        aiAssistantEnabled: c.aiAssistantEnabled, reportingEnabled: c.reportingEnabled,
+        autoFollowUpEnabled: c.autoFollowUpEnabled, csPhone: c.csPhone, avatarStorageId: c.avatarStorageId,
+      });
     }
 
-    const configs = await ctx.db.query("csConfigs").collect();
-    const configByKey = new Map(configs.map((c) => [csKey(c.csName), c]));
-    const keys = Array.from(new Set<string>([...Array.from(dataName.keys()), ...Array.from(configByKey.keys())].filter(Boolean)));
-
     const rows: CsRow[] = [];
-    for (const k of keys) {
-      if (!k || k === "unknown") continue;
-      const cfg = configByKey.get(k);
-      const display = cfg?.csName ?? dataName.get(k) ?? k;
-      const avatarUrl = cfg?.avatarStorageId ? await ctx.storage.getUrl(cfg.avatarStorageId) : null;
+    for (const [k, e] of byKey) {
+      const avatarUrl = e.avatarStorageId ? await ctx.storage.getUrl(e.avatarStorageId) : null;
       rows.push({
-        csName: display, normalizedName: normalizeCsName(display), key: k, avatarUrl,
-        isActive: cfg?.isActive ?? true,
-        orderAutomationEnabled: cfg?.orderAutomationEnabled ?? false,
-        aiAssistantEnabled: cfg?.aiAssistantEnabled ?? false,
-        reportingEnabled: cfg?.reportingEnabled ?? true,
-        autoFollowUpEnabled: cfg?.autoFollowUpEnabled,
-        csPhone: cfg?.csPhone,
+        csName: e.csName, normalizedName: normalizeCsName(e.csName), key: k, avatarUrl,
+        isActive: e.isActive,
+        orderAutomationEnabled: e.orderAutomationEnabled,
+        aiAssistantEnabled: e.aiAssistantEnabled,
+        reportingEnabled: e.reportingEnabled,
+        autoFollowUpEnabled: e.autoFollowUpEnabled,
+        csPhone: e.csPhone,
       });
     }
     rows.sort((a, b) => a.csName.localeCompare(b.csName));

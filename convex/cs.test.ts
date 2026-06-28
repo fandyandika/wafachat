@@ -6,22 +6,30 @@ import { Id } from "./_generated/dataModel";
 
 const t0 = Date.now() - 86_400_000;
 
-test("listCs unions data CS + config CS and dedupes via csKey", async () => {
+test("listCs derives from csConfigs + DEFAULT_CONFIGS, NOT from orders (no 90-day scan)", async () => {
   const t = convexTest(schema);
   await t.run(async (ctx) => {
-    await ctx.db.insert("orders", { orderId: "O1", customerPhone: "62811", customerName: "A", productName: "X", products: "X", assignedCsName: "Aisyah", productsSubtotal: "100", shippingCost: "10", total: "110", shippingAddress: "Addr", shippingDistrict: "Dist", shippingCity: "City", source: "berdu", aiEligible: true, createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { orderId: "O2", customerPhone: "62822", customerName: "B", productName: "X", products: "X", assignedCsName: "Risma", productsSubtotal: "100", shippingCost: "10", total: "110", shippingAddress: "Addr", shippingDistrict: "Dist", shippingCity: "City", source: "berdu", aiEligible: true, createdAt: t0, updatedAt: t0 });
+    // An order whose CS has no config: must NOT appear (order-scan discovery is removed).
+    await ctx.db.insert("orders", { orderId: "O1", customerPhone: "62811", customerName: "A", productName: "X", products: "X", assignedCsName: "Ghost", productsSubtotal: "100", shippingCost: "10", total: "110", shippingAddress: "Addr", shippingDistrict: "Dist", shippingCity: "City", source: "berdu", aiEligible: true, createdAt: t0, updatedAt: t0 });
+    // A stored config that isn't a built-in default.
     await ctx.db.insert("csConfigs", {
-      normalizedName: "csaisyah", csName: "CS Aisyah",
-      orderAutomationEnabled: true, aiAssistantEnabled: true, reportingEnabled: true, isActive: true,
+      normalizedName: "nabila", csName: "Nabila",
+      orderAutomationEnabled: false, aiAssistantEnabled: false, reportingEnabled: true, isActive: true,
       createdAt: t0, updatedAt: t0,
     });
   });
   const rows = await t.query(api.cs.listCs, {});
-  expect(rows.map((r) => r.key).sort()).toEqual(["aisyah", "risma"]);
-  const aisyah = rows.find((r) => r.key === "aisyah")!;
-  expect(aisyah.orderAutomationEnabled).toBe(true);
-  expect(aisyah.avatarUrl).toBeNull();
+  const keys = rows.map((r) => r.key);
+  // Built-in defaults always present:
+  expect(keys).toContain("aisyah");
+  expect(keys).toContain("risma");
+  // Stored extra present:
+  expect(keys).toContain("nabila");
+  // Order-only CS is NOT discovered anymore:
+  expect(keys).not.toContain("ghost");
+  // Default flags surface for a default-only CS (CS Aisyah default orderAutomationEnabled = true):
+  expect(rows.find((r) => r.key === "aisyah")!.orderAutomationEnabled).toBe(true);
+  expect(rows.find((r) => r.key === "aisyah")!.avatarUrl).toBeNull();
 });
 
 test("setCsAvatar stores avatarStorageId and replacing removes the old file", async () => {
