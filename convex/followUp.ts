@@ -308,18 +308,16 @@ export const getArchivedFollowUps = query({
     const since = now - 14 * DAY;
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
 
-    // Conversations with followUpArchivedAt set, recent, scoped by csName.
+    // Manual archive sets status="closed" + followUpArchivedAt, so read only recently-closed
+    // conversations via the index (NOT a full-table .filter().collect() scan) then keep the
+    // ones that were actually archived. Bounds reads to recent closed convs.
     const archived = await ctx.db
       .query("conversations")
-      .filter((q: any) =>
-        q.and(
-          q.neq(q.field("followUpArchivedAt"), undefined),
-          q.gte(q.field("updatedAt"), since),
-        )
-      )
+      .withIndex("by_status_updatedAt", (q) => q.eq("status", "closed").gte("updatedAt", since))
       .collect();
 
     const filtered = archived
+      .filter((c) => c.followUpArchivedAt != null)
       .filter((c) => !isInternalTestPhone(c.customerPhone))
       .filter((c) => (csKeyMemo ? csKey(c.assignedCsName) === csKeyMemo : true));
 

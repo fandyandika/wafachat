@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
@@ -251,7 +251,7 @@ function MessageBubble({ message }: { message: any }) {
 }
 
 // Conversation pane (single lead)
-function ConversationPane({ candidate, onBack }: { candidate: Staged | null; onBack?: () => void }) {
+function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged | null; onBack?: () => void; onChanged?: () => void }) {
   const [selectedStage, setSelectedStage] = useState<1 | 2 | 3>(1);
   const [sending, setSending] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -295,6 +295,7 @@ function ConversationPane({ candidate, onBack }: { candidate: Staged | null; onB
       }).then((x) => x.json());
       if (r.ok) {
         setStatus({ type: 'ok', message: `Follow-up ${STAGE_LABEL[selectedStage]} terkirim!` });
+        onChanged?.();
         setTimeout(() => setStatus(null), 2000);
       } else {
         setStatus({ type: 'error', message: r.error || 'Gagal mengirim' });
@@ -319,6 +320,7 @@ function ConversationPane({ candidate, onBack }: { candidate: Staged | null; onB
       }).then((x) => x.json());
       if (r.ok) {
         setStatus({ type: 'ok', message: 'Chat diarsipkan!' });
+        onChanged?.();
         setTimeout(() => onBack?.(), 800);
       } else {
         setStatus({ type: 'error', message: r.error || 'Gagal mengarsipkan' });
@@ -342,6 +344,7 @@ function ConversationPane({ candidate, onBack }: { candidate: Staged | null; onB
       }).then((x) => x.json());
       if (r.ok) {
         setStatus({ type: 'ok', message: `Dipindah ke ${STAGE_LABEL[newStage]}` });
+        onChanged?.();
         setTimeout(() => setStatus(null), 2000);
       } else {
         setStatus({ type: 'error', message: r.error || 'Gagal memindah tahap' });
@@ -538,14 +541,45 @@ export function FollowUpDashboard() {
   const [csFilter, setCsFilter] = useState<string>(cs && cs !== 'all' ? cs : 'all');
   const csName = isCs ? me!.name : csFilter !== 'all' ? csFilter : undefined;
 
-  const data = useQuery(api.followUp.getFollowUpCandidates, me ? { csName } : 'skip');
+  // Candidates + KPI are the always-on heavy queries. Fetch them ON DEMAND (page load /
+  // filter change / after an action / manual Refresh) instead of a live subscription —
+  // a live subscription re-read the whole conversations table on every inbound message,
+  // which is what blew the DB I/O budget. (Also fails gracefully if Convex is down.)
+  type CandidatesData = { stage1: Candidate[]; stage2: Candidate[]; stage3: Candidate[] };
+  type KpiData = { totalClosings: number; fromFollowUp: number; byStage: { h1: number; h2: number; h3: number } };
+  const [data, setData] = useState<CandidatesData | undefined>(undefined);
+  const [kpiData, setKpiData] = useState<KpiData | undefined>(undefined);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const loadSnapshot = useCallback(async () => {
+    if (!me) return;
+    setRefreshing(true);
+    try {
+      const r = await fetch('/api/follow-up/snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csName }),
+      }).then((x) => x.json());
+      if (r.ok) {
+        setData(r.candidates);
+        setKpiData(r.kpi);
+      }
+    } catch {
+      /* keep last data on failure */
+    } finally {
+      setRefreshing(false);
+    }
+  }, [me, csName]);
+
+  useEffect(() => {
+    loadSnapshot();
+  }, [loadSnapshot]);
+
+  // Archived + Closing are tab-gated (only run when that tab is open) and read indexed,
+  // bounded ranges — fine to keep reactive.
   const archivedData = useQuery(api.followUp.getArchivedFollowUps, me && activeTab === 'archived' ? { csName } : 'skip');
   const closingData = useQuery(api.followUp.getClosedFollowUps, me && activeTab === 'closing' ? { csName, sinceDays: 7 } : 'skip');
   const autoFollowUpData = useQuery(api.followUp.getAutoFollowUp, me && csName ? { csName } : 'skip');
-
-  const now = Date.now();
-  const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
-  const kpiData = useQuery(api.followUp.getFollowUpEffectiveness, me ? { startAt: thirtyDaysAgo, endAt: now, csName } : 'skip');
 
   useEffect(() => {
     if (autoFollowUpData && typeof autoFollowUpData === 'object' && 'enabled' in autoFollowUpData) {
@@ -662,6 +696,7 @@ export function FollowUpDashboard() {
     setBulkProgress(null);
     setBulkBusy(false);
     setSelectedIds(new Set());
+    loadSnapshot();
     setBulkStatus(`${action === 'kirim' ? 'Kirim massal' : 'Arsip massal'}: ${ok} berhasil${fail ? `, ${fail} gagal` : ''}.`);
     setTimeout(() => setBulkStatus(null), 5000);
   }
@@ -691,7 +726,10 @@ export function FollowUpDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversationId }),
       }).then((x) => x.json());
-      if (r.ok) setSelectedId(null);
+      if (r.ok) {
+        setSelectedId(null);
+        loadSnapshot();
+      }
     } catch (e) {
       console.error('Failed to restore:', e);
     } finally {
@@ -743,6 +781,15 @@ export function FollowUpDashboard() {
             <option value="oldest">Lama</option>
             <option value="newest">Baru</option>
           </select>
+          <button
+            type="button"
+            onClick={loadSnapshot}
+            disabled={refreshing}
+            title="Muat ulang daftar"
+            className="shrink-0 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+          >
+            {refreshing ? '…' : '↻'}
+          </button>
           {!isCs && (
             <select
               value={csFilter}
@@ -910,7 +957,7 @@ export function FollowUpDashboard() {
         {/* Conversation pane */}
         <div className={`flex-1 ${showConvOnMobile ? 'block' : 'hidden md:block'}`}>
           {selected ? (
-            <ConversationPane candidate={selected} onBack={handleBack} />
+            <ConversationPane candidate={selected} onBack={handleBack} onChanged={loadSnapshot} />
           ) : selectedClosing ? (
             <ReadOnlyConversation row={selectedClosing} onBack={handleBack} />
           ) : (
