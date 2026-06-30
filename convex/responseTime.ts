@@ -24,7 +24,10 @@ export const getResponseTimes = query({
       let arr = byConv.get(key);
       if (!arr) { arr = []; byConv.set(key, arr); convOrder.push(key); convIdByKey.set(key, m.conversationId); }
       arr.push({ direction: m.direction, messageType: m.messageType, role: m.role, createdAt: m.createdAt });
-      if (m.direction === "outbound" && m.role === "cs") {
+      // A "reply" = outbound that isn't an automated template (order-notif/follow-up) or a
+      // system message — same definition as pairResponseEvents. role may be "cs" (sent from the
+      // dashboard) OR "ai" (CS replied from their own WhatsApp), so do NOT filter on role.
+      if (m.direction === "outbound" && m.messageType !== "template" && m.role !== "system") {
         const prev = lastReplyByConv.get(key) ?? 0;
         if (m.createdAt > prev) lastReplyByConv.set(key, m.createdAt);
       }
