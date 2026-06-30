@@ -15,6 +15,7 @@ export type ResponseTimesResult = {
     ongoingMedianMs: number | null;
     ongoingCount: number;
     slaBreaches: number;
+    lastReplyAt: number | null;
   }>;
 };
 

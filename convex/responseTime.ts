@@ -18,11 +18,16 @@ export const getResponseTimes = query({
     const byConv = new Map<string, RtMessage[]>();
     const convOrder: string[] = [];
     const convIdByKey = new Map<string, any>();
+    const lastReplyByConv = new Map<string, number>(); // max human-CS outbound (a real "CS online" signal) per conv
     for (const m of msgs) {
       const key = String(m.conversationId);
       let arr = byConv.get(key);
       if (!arr) { arr = []; byConv.set(key, arr); convOrder.push(key); convIdByKey.set(key, m.conversationId); }
       arr.push({ direction: m.direction, messageType: m.messageType, role: m.role, createdAt: m.createdAt });
+      if (m.direction === "outbound" && m.role === "cs") {
+        const prev = lastReplyByConv.get(key) ?? 0;
+        if (m.createdAt > prev) lastReplyByConv.set(key, m.createdAt);
+      }
     }
 
     // Join conversation -> raw assignedCsName. Fetch ALL conversations in parallel
@@ -30,6 +35,14 @@ export const getResponseTimes = query({
     const convDocs = await Promise.all(convOrder.map((key) => ctx.db.get(convIdByKey.get(key))));
     const csByKey = new Map<string, string>();
     convOrder.forEach((key, i) => csByKey.set(key, (convDocs[i] as any)?.assignedCsName || "Unknown"));
+
+    // Last time each CS replied to a customer (max human-CS outbound), aggregated by csKey.
+    const lastReplyByCs = new Map<string, number>();
+    for (const [convKey, ts] of lastReplyByConv) {
+      const ck = csKey(csByKey.get(convKey) || "Unknown");
+      const prev = lastReplyByCs.get(ck) ?? 0;
+      if (ts > prev) lastReplyByCs.set(ck, ts);
+    }
 
     // Aggregate by csKey so name-forms ("Risma" / "CS Risma") merge into one CS.
     const agg = new Map<string, { rawCounts: Map<string, number>; first: number[]; all: number[]; slaBreaches: number }>();
@@ -54,7 +67,7 @@ export const getResponseTimes = query({
       a.all.push(...allReplyMs);
     }
 
-    let cs = Array.from(agg.values()).map((a) => {
+    let cs = Array.from(agg.entries()).map(([ck, a]) => {
       // Display under the dominant raw name-form for this CS.
       const raw = Array.from(a.rawCounts.entries()).sort((x, y) => y[1] - x[1])[0][0];
       return {
@@ -66,6 +79,7 @@ export const getResponseTimes = query({
         ongoingMedianMs: median(a.all),
         ongoingCount: a.all.length,
         slaBreaches: a.slaBreaches,
+        lastReplyAt: lastReplyByCs.get(ck) ?? null,
       };
     });
     if (args.csName) {

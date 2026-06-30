@@ -16,7 +16,17 @@ import { csKey } from '@/lib/cs-key';
 
 export type ReportCardData = ReportCsCard & { duplicates: number; revenue: number };
 
-export type RespStat = { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number; slaBreaches: number };
+export type RespStat = { firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number; slaBreaches: number; lastReplyAt?: number | null };
+
+// "Terakhir online" relative label — minute granularity so a fresh reply reads as live.
+function timeAgo(ms: number): string {
+  const mins = Math.round((Date.now() - ms) / 60_000);
+  if (mins < 1) return 'barusan';
+  if (mins < 60) return `${mins} mnt lalu`;
+  const h = Math.round(mins / 60);
+  if (h < 24) return `${h} jam lalu`;
+  return `${Math.round(h / 24)} hari lalu`;
+}
 
 export type ReportDelta = { leads: number; closings: number; cr: number };
 
@@ -52,6 +62,9 @@ export function ReportCard({
     }
   };
 
+  const lastReplyAt = resp?.lastReplyAt ?? null;
+  const recentlyOnline = lastReplyAt != null && Date.now() - lastReplyAt < 30 * 60_000;
+
   return (
     <Card className={cn(
       'transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30',
@@ -68,7 +81,7 @@ export function ReportCard({
               {rank}
             </span>
           )}
-          <CsAvatar name={card.csName} size="md" online src={avatarByKey?.get(csKey(card.csName)) ?? undefined} />
+          <CsAvatar name={card.csName} size="md" online={recentlyOnline} src={avatarByKey?.get(csKey(card.csName)) ?? undefined} />
           <span className="truncate text-base font-semibold tracking-tight">{card.csName}</span>
           {isCurrent ? (
             <Badge className="shrink-0 gap-1.5 bg-positive-soft text-positive">
@@ -173,6 +186,19 @@ export function ReportCard({
             <span className="flex items-center gap-1.5 text-muted-foreground"><Zap className="size-3.5 text-primary" /> Balas chat baru</span>
             <span className="font-medium tabular-nums text-foreground">
               {formatDuration(resp.firstReplyMedianMs)} <span className="font-normal text-muted-foreground">· {resp.firstReplyCount} chat</span>
+            </span>
+          </div>
+        )}
+
+        {/* Terakhir online = terakhir CS membalas customer (max outbound manual). Dot hijau hanya jika ≤30 mnt. */}
+        {lastReplyAt != null && (
+          <div className="flex items-center justify-between gap-2 border-t pt-3 text-sm">
+            <span className="flex items-center gap-1.5 text-muted-foreground">
+              <span className={cn('size-2 rounded-full', recentlyOnline ? 'bg-positive' : 'bg-muted-foreground/40')} />
+              Terakhir online
+            </span>
+            <span className={cn('font-medium tabular-nums', recentlyOnline ? 'text-positive' : 'text-foreground')}>
+              {timeAgo(lastReplyAt)}
             </span>
           </div>
         )}

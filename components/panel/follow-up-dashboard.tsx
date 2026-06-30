@@ -60,12 +60,6 @@ const formatRelativeTime = (ms: number): string => {
   return `${Math.round(diffH / 24)} hari`;
 };
 
-// Friendly "last customer reply" label. Pure render from lastInboundAt (already loaded) — no extra read.
-const lastReplyLabel = (ms: number): string => {
-  const t = formatRelativeTime(ms);
-  return t === 'baru' ? 'Balas terakhir barusan' : `Balas terakhir ${t} lalu`;
-};
-
 // Deterministic, desaturated avatar color per name (subtle variety, not a rainbow).
 const AVATAR_COLORS = [
   'bg-rose-500', 'bg-amber-500', 'bg-emerald-500',
@@ -162,7 +156,6 @@ function ChatListItem({
           <h3 className="truncate font-semibold text-foreground">{candidate.customerName || candidate.customerPhone || 'Unknown'}</h3>
           <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelativeTime(candidate.lastInboundAt)}</span>
         </div>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">⏱ {lastReplyLabel(candidate.lastInboundAt)}</p>
         <div className="mt-1 flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800 dark:bg-sky-900 dark:text-sky-100">
