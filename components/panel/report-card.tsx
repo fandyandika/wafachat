@@ -82,7 +82,15 @@ export function ReportCard({
             </span>
           )}
           <CsAvatar name={card.csName} size="md" online={recentlyOnline} src={avatarByKey?.get(csKey(card.csName)) ?? undefined} />
-          <span className="truncate text-base font-semibold tracking-tight">{card.csName}</span>
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-base font-semibold leading-tight tracking-tight">{card.csName}</span>
+            {/* WhatsApp-style presence line under the name */}
+            {lastReplyAt != null && (
+              <span className={cn('truncate text-[11px] leading-tight', recentlyOnline ? 'font-medium text-positive' : 'text-muted-foreground')}>
+                {recentlyOnline ? 'online' : `terakhir online ${timeAgo(lastReplyAt)}`}
+              </span>
+            )}
+          </div>
           {isCurrent ? (
             <Badge className="shrink-0 gap-1.5 bg-positive-soft text-positive">
               <span className="size-1.5 animate-pulse rounded-full bg-positive" /> Live
@@ -186,19 +194,6 @@ export function ReportCard({
             <span className="flex items-center gap-1.5 text-muted-foreground"><Zap className="size-3.5 text-primary" /> Balas chat baru</span>
             <span className="font-medium tabular-nums text-foreground">
               {formatDuration(resp.firstReplyMedianMs)} <span className="font-normal text-muted-foreground">· {resp.firstReplyCount} chat</span>
-            </span>
-          </div>
-        )}
-
-        {/* Terakhir online = terakhir CS membalas customer (max outbound manual). Dot hijau hanya jika ≤30 mnt. */}
-        {lastReplyAt != null && (
-          <div className="flex items-center justify-between gap-2 border-t pt-3 text-sm">
-            <span className="flex items-center gap-1.5 text-muted-foreground">
-              <span className={cn('size-2 rounded-full', recentlyOnline ? 'bg-positive' : 'bg-muted-foreground/40')} />
-              Terakhir online
-            </span>
-            <span className={cn('font-medium tabular-nums', recentlyOnline ? 'text-positive' : 'text-foreground')}>
-              {timeAgo(lastReplyAt)}
             </span>
           </div>
         )}
