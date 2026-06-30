@@ -62,7 +62,7 @@ export function ReportCard({
   };
 
   const lastReplyAt = resp?.lastReplyAt ?? null;
-  const recentlyOnline = lastReplyAt != null && Date.now() - lastReplyAt < 30 * 60_000;
+  const recentlyOnline = lastReplyAt != null && Date.now() - lastReplyAt < 10 * 60_000; // WhatsApp-style: "online" only if a reply within 10 min
 
   return (
     <Card className={cn(
