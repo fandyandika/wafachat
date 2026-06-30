@@ -62,7 +62,6 @@ export function ReportCard({
   };
 
   const lastReplyAt = resp?.lastReplyAt ?? null;
-  const recentlyOnline = lastReplyAt != null && Date.now() - lastReplyAt < 10 * 60_000; // WhatsApp-style: "online" only if a reply within 10 min
 
   return (
     <Card className={cn(
@@ -80,7 +79,7 @@ export function ReportCard({
               {rank}
             </span>
           )}
-          <CsAvatar name={card.csName} size="md" online={recentlyOnline} src={avatarByKey?.get(csKey(card.csName)) ?? undefined} />
+          <CsAvatar name={card.csName} size="md" src={avatarByKey?.get(csKey(card.csName)) ?? undefined} />
           <div className="flex min-w-0 flex-col">
             <div className="flex min-w-0 items-center gap-1.5">
               <span className="truncate text-base font-semibold leading-tight tracking-tight">{card.csName}</span>
@@ -89,10 +88,10 @@ export function ReportCard({
                 <span className="size-2 shrink-0 animate-pulse rounded-full bg-positive" title="Live — data hari ini" aria-label="Live" />
               )}
             </div>
-            {/* WhatsApp-style presence line under the name */}
+            {/* Factual: kapan CS terakhir balas chat — bukan klaim online/offline (adil buat CS yang lagi sepi leads) */}
             {lastReplyAt != null && (
-              <span className={cn('truncate text-[11px] leading-tight', recentlyOnline ? 'font-medium text-positive' : 'text-muted-foreground')}>
-                {recentlyOnline ? 'online' : `terakhir online ${timeAgo(lastReplyAt)}`}
+              <span className="truncate text-[11px] leading-tight text-muted-foreground">
+                terakhir balas chat {timeAgo(lastReplyAt)}
               </span>
             )}
           </div>
