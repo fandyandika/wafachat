@@ -113,22 +113,22 @@ export function ReportCard({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {isQueen && (
-          <div className="flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1 text-xs font-bold text-accent-foreground ring-1 ring-primary/30">
-            <Crown className="size-4 text-gold" /> Queen CS · juara umum
-          </div>
-        )}
-        {/* Gamification: badge penghargaan untuk juara hari itu */}
-        {rewards && rewards.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {rewards.map((r) => {
+        {/* Gamification — compact chips in one wrapped row (Queen + per-category juara) */}
+        {(isQueen || (rewards && rewards.length > 0)) && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {isQueen && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-accent-foreground ring-1 ring-primary/30">
+                <Crown className="size-3 text-gold" /> Queen CS
+              </span>
+            )}
+            {rewards?.map((r) => {
               const Icon = REWARD_ICON[r] ?? Trophy;
               return (
                 <span
                   key={r}
-                  className="inline-flex items-center gap-1 rounded-full bg-gold-soft/60 px-2.5 py-1 text-[11px] font-semibold text-gold-foreground ring-1 ring-gold/20"
+                  className="inline-flex items-center gap-1 rounded-full bg-gold-soft/60 px-2 py-0.5 text-[10px] font-semibold text-gold-foreground ring-1 ring-gold/20"
                 >
-                  <Icon className="size-3.5 text-gold" /> {r}
+                  <Icon className="size-3 text-gold" /> {r}
                 </span>
               );
             })}
