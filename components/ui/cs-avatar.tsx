@@ -1,23 +1,5 @@
 import { cn } from "@/lib/utils"
 
-// Deterministic, calm tints — one per CS, derived from the name so it stays stable.
-const AVATAR_COLORS = [
-  "bg-indigo-100 text-indigo-700",
-  "bg-emerald-100 text-emerald-700",
-  "bg-rose-100 text-rose-700",
-  "bg-amber-100 text-amber-700",
-  "bg-sky-100 text-sky-700",
-  "bg-violet-100 text-violet-700",
-  "bg-teal-100 text-teal-700",
-  "bg-fuchsia-100 text-fuchsia-700",
-]
-
-function colorFor(name: string): string {
-  let h = 0
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
-  return AVATAR_COLORS[h % AVATAR_COLORS.length]
-}
-
 function initialsOf(name: string): string {
   const clean = name.replace(/^CS\s+/i, "").trim()
   if (!clean) return "?"
@@ -33,7 +15,7 @@ const SIZES = {
 } as const
 
 /**
- * Colored initials chip (or a profile photo if `src` is set) — the professional
+ * Neutral initials chip (or a profile photo if `src` is set) — the professional
  * stand-in for the old 🟠 / medal emoji. `online` adds a presence dot.
  */
 export function CsAvatar({
@@ -57,7 +39,7 @@ export function CsAvatar({
         <img src={src} alt={name} className="size-full rounded-full object-cover" />
       ) : (
         <span
-          className={cn("flex size-full items-center justify-center rounded-full font-semibold", s.text, colorFor(name))}
+          className={cn("flex size-full items-center justify-center rounded-full bg-muted font-semibold text-muted-foreground", s.text)}
           aria-hidden
         >
           {initialsOf(name)}
