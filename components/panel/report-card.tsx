@@ -88,8 +88,9 @@ export function ReportCard({
                 <span className="size-2 shrink-0 animate-pulse rounded-full bg-positive" title="Live — data hari ini" aria-label="Live" />
               )}
             </div>
-            {/* Factual: kapan CS terakhir balas chat — bukan klaim online/offline (adil buat CS yang lagi sepi leads) */}
-            {lastReplyAt != null && (
+            {/* "terakhir balas chat" relatif ke sekarang → cuma relevan di laporan Live (hari ini),
+                bukan di periode yang sudah Selesai/final. */}
+            {isCurrent && lastReplyAt != null && (
               <span className="truncate text-[11px] leading-tight text-muted-foreground">
                 terakhir balas chat {timeAgo(lastReplyAt)}
               </span>
