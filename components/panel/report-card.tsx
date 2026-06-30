@@ -4,7 +4,6 @@ import { useState, type ComponentType } from 'react';
 import { Copy, Check, Zap, Trophy, Crown, Clock } from 'lucide-react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { AnimatedNumber } from '@/components/ui/animated-number';
 import { DeltaPill } from '@/components/ui/metric-card';
@@ -83,7 +82,13 @@ export function ReportCard({
           )}
           <CsAvatar name={card.csName} size="md" online={recentlyOnline} src={avatarByKey?.get(csKey(card.csName)) ?? undefined} />
           <div className="flex min-w-0 flex-col">
-            <span className="truncate text-base font-semibold leading-tight tracking-tight">{card.csName}</span>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-base font-semibold leading-tight tracking-tight">{card.csName}</span>
+              {/* Live = laporan hari ini → cukup titik berdenyut, bukan badge */}
+              {isCurrent && (
+                <span className="size-2 shrink-0 animate-pulse rounded-full bg-positive" title="Live — data hari ini" aria-label="Live" />
+              )}
+            </div>
             {/* WhatsApp-style presence line under the name */}
             {lastReplyAt != null && (
               <span className={cn('truncate text-[11px] leading-tight', recentlyOnline ? 'font-medium text-positive' : 'text-muted-foreground')}>
@@ -91,25 +96,21 @@ export function ReportCard({
               </span>
             )}
           </div>
-          {isCurrent ? (
-            <Badge className="shrink-0 gap-1.5 bg-positive-soft text-positive">
-              <span className="size-1.5 animate-pulse rounded-full bg-positive" /> Live
-            </Badge>
-          ) : (
-            <Badge variant="secondary" className="shrink-0">Selesai</Badge>
-          )}
+        </div>
+        {/* Right cluster: SLA + copy, dempet & minimalis */}
+        <div className="flex shrink-0 items-center gap-0.5">
           {resp && resp.slaBreaches > 0 && (
             <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-semibold text-destructive"
+              className="inline-flex items-center gap-0.5 text-[11px] font-semibold tabular-nums text-destructive"
               title={`${resp.slaBreaches} chat lewat SLA (>15m)`}
             >
               <Clock className="size-3.5" /> {resp.slaBreaches}
             </span>
           )}
+          <Button size="icon-sm" variant="ghost" onClick={onCopy} aria-label="Copy teks WA" className="size-7 text-muted-foreground/50 hover:text-foreground">
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+          </Button>
         </div>
-        <Button size="icon-sm" variant="ghost" onClick={onCopy} aria-label="Copy teks WA" className="shrink-0 text-muted-foreground hover:text-foreground">
-          {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-        </Button>
       </CardHeader>
       <CardContent className="space-y-4">
         {isQueen && (
