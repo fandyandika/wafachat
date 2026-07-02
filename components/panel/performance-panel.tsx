@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { useQuery } from 'convex/react';
+import { useMemo, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 
 import {
   Card,
@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { api } from '@/convex/_generated/api';
+import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
 import type { PerformanceData } from '@/components/panel/types';
 import { formatRupiah, formatDuration } from '@/lib/format';
 import { CsAvatar } from '@/components/ui/cs-avatar';
@@ -32,6 +33,10 @@ function fmtPeriodRange(startMs?: number, endMs?: number): string {
   return sm === em
     ? `${sd}–${ed} ${MONTHS_ID[em]} ${ey}`
     : `${sd} ${MONTHS_ID[sm]} – ${ed} ${MONTHS_ID[em]} ${ey}`;
+}
+function fmtUpdatedAt(ms: number | null): string {
+  if (!ms) return 'Belum dimuat';
+  return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
 }
 
 export function PerformancePanel({
@@ -55,7 +60,25 @@ export function PerformancePanel({
   const deltaTag = (d: number, suffix = '') => <DeltaPill value={d} suffix={suffix} />;
   const [perfTab, setPerfTab] = useState<'summary' | 'cs' | 'product'>('summary');
   const [reportPeriod, setReportPeriod] = useState<'week' | 'month'>('week');
-  const report = useQuery(api.analytics.getPeriodReport, { period: reportPeriod });
+  const reportArgs = useMemo(() => ({ period: reportPeriod }), [reportPeriod]);
+  const {
+    data: report,
+    loading: reportLoading,
+    lastUpdatedAt: reportLastUpdatedAt,
+    refresh: refreshReport,
+  } = useConvexSnapshotQuery<{
+    rangeStart: number;
+    rangeEnd: number;
+    leads: number;
+    closings: number;
+    cr: number;
+    revenue: number;
+    cancelled: number;
+    prevLeads: number;
+    prevClosings: number;
+    prevCr: number;
+    perCs: Array<{ csName: string; leads: number; closings: number; cr: number; revenue: number }>;
+  }>(api.analytics.getPeriodReport, reportArgs);
 
   const tabs = [
     { key: 'summary' as const, label: 'Ringkasan' },
@@ -86,7 +109,7 @@ export function PerformancePanel({
             key={tab.key}
             onClick={() => setPerfTab(tab.key)}
             className={cn(
-              'rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
+              'cursor-pointer rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
               perfTab === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
             )}
             type="button"
@@ -253,11 +276,20 @@ export function PerformancePanel({
                   key={p}
                   type="button"
                   onClick={() => setReportPeriod(p)}
-                  className={cn('rounded-md px-3 py-1 text-xs font-medium transition-colors', reportPeriod === p ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+                  className={cn('cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition-colors', reportPeriod === p ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
                 >
                   {p === 'week' ? 'Pekanan' : 'Bulanan'}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => void refreshReport()}
+                disabled={reportLoading}
+                aria-label="Refresh laporan periode"
+                className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RefreshCw className={`size-3.5 ${reportLoading ? 'animate-spin' : ''}`} />
+              </button>
             </div>
           </div>
         </CardHeader>
@@ -266,6 +298,7 @@ export function PerformancePanel({
             <p className="text-sm text-muted-foreground">Memuat…</p>
           ) : (
             <div className="space-y-3 text-sm">
+              <div className="text-xs text-muted-foreground">Snapshot · update {fmtUpdatedAt(reportLastUpdatedAt)}</div>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <div><div className="text-xs text-muted-foreground">Leads</div><div className="font-semibold">{report.leads} {deltaTag(report.leads - report.prevLeads)}</div></div>
                 <div><div className="text-xs text-muted-foreground">Closing</div><div className="font-semibold">{report.closings} {deltaTag(report.closings - report.prevClosings)}</div></div>

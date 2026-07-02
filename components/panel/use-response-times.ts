@@ -24,8 +24,8 @@ export type ResponseTimesResult = {
 // subscription. getResponseTimes scans the messages table, so a live subscription
 // re-read the whole window on every new message — fetching once is far cheaper.
 // Returns undefined while loading (same contract as useQuery).
-export function useResponseTimes(args: { startAt: number; endAt: number; csName?: string }): ResponseTimesResult | undefined {
-  const { startAt, endAt, csName } = args;
+export function useResponseTimes(args: { startAt: number; endAt: number; csName?: string; refreshKey?: number }): ResponseTimesResult | undefined {
+  const { startAt, endAt, csName, refreshKey = 0 } = args;
   const [data, setData] = useState<ResponseTimesResult | undefined>(undefined);
 
   useEffect(() => {
@@ -46,7 +46,7 @@ export function useResponseTimes(args: { startAt: number; endAt: number; csName?
     return () => {
       cancelled = true;
     };
-  }, [startAt, endAt, csName]);
+  }, [startAt, endAt, csName, refreshKey]);
 
   return data;
 }

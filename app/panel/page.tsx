@@ -8,6 +8,7 @@ import {
   Wallet,
   Clock,
   CircleAlert,
+  RefreshCw,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -33,66 +34,90 @@ import type { Stats, PerformanceData } from '@/components/panel/types';
 import { fmtTime, formatRupiah, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { useResponseTimes } from '@/components/panel/use-response-times';
+import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
+
+function fmtUpdatedAt(ms: number | null): string {
+  if (!ms) return 'Belum dimuat';
+  return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
+}
 
 export default function DashboardPage() {
   const { startAt, endAt, csName, jakartaDate, range } = usePanelFilters();
+  const [respRefreshKey, setRespRefreshKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
   const periodLabel = ({ today: 'hari ini', yesterday: 'kemarin', '7d': '7 hari', '30d': '30 hari', month: 'bulan ini', custom: 'tanggal dipilih' } as const)[range];
 
-  const summaryData = useQuery(api.metrics.getDashboardSummary, {
-    startAt,
-    endAt,
-    csName,
-  });
-
-  const duplicateOrders = useQuery(api.metrics.getDuplicateOrders, {
-    startAt,
-    endAt,
-    csName,
-  });
-
-  const performanceData = useQuery(api.shippingRecaps.getPerformance, {
+  const filteredRangeArgs = useMemo(() => ({ startAt, endAt, csName }), [csName, endAt, startAt]);
+  const performanceArgs = useMemo(() => ({
     startAt,
     endAt,
     includeInferredDiscount: false,
     csName,
-  });
+  }), [csName, endAt, startAt]);
+  const trendArgs = useMemo(() => ({ startAt, endAt, bucket: 'day' as const }), [endAt, startAt]);
 
-  const respData = useResponseTimes({ startAt, endAt, csName });
+  const summaryData = useConvexSnapshotQuery<{
+    leads: number;
+    closings: number;
+    manualClosings: number;
+    cancelled: number;
+    handovers: number;
+    revenue: number;
+  }>(api.metrics.getDashboardSummary, filteredRangeArgs);
 
-  const trendData = useQuery(api.metrics.getTrend, { startAt, endAt, bucket: 'day' });
+  const duplicateOrders = useConvexSnapshotQuery<Array<{
+    phone: string;
+    customerName: string;
+    csName: string;
+    count: number;
+    likelyAccidental: boolean;
+    orders: Array<{ orderId: string; productName: string; total: string; createdAt: number }>;
+  }>>(api.metrics.getDuplicateOrders, filteredRangeArgs);
+
+  const performanceData = useConvexSnapshotQuery<PerformanceData>(api.shippingRecaps.getPerformance, performanceArgs);
+  const trendData = useConvexSnapshotQuery<Array<{ bucket: string; leads: number; closings: number; cr: number }>>(api.metrics.getTrend, trendArgs);
+  const respData = useResponseTimes({ startAt, endAt, csName, refreshKey: respRefreshKey });
 
   const [dupOpen, setDupOpen] = useState(false);
-  const dupCount = duplicateOrders?.length ?? 0;
+  const dupCount = duplicateOrders.data?.length ?? 0;
 
-  const performance = performanceData as PerformanceData | undefined;
+  const summary = summaryData.data;
+  const performance = performanceData.data;
   const stats: Stats = {
-    orders: summaryData?.leads ?? 0,
-    closings: summaryData?.closings ?? 0,
-    ai_closings: Math.max((summaryData?.closings ?? 0) - (summaryData?.manualClosings ?? 0), 0),
-    manual_closings: summaryData?.manualClosings ?? 0,
-    cancelled: summaryData?.cancelled ?? 0,
-    handovers: summaryData?.handovers ?? 0,
+    orders: summary?.leads ?? 0,
+    closings: summary?.closings ?? 0,
+    ai_closings: Math.max((summary?.closings ?? 0) - (summary?.manualClosings ?? 0), 0),
+    manual_closings: summary?.manualClosings ?? 0,
+    cancelled: summary?.cancelled ?? 0,
+    handovers: summary?.handovers ?? 0,
     closed_today: 0,
     date: jakartaDate,
   };
 
-  const loading = summaryData === undefined || performanceData === undefined;
+  const loading = summaryData.loading || performanceData.loading || refreshing;
+  const lastUpdatedAt = Math.max(
+    summaryData.lastUpdatedAt ?? 0,
+    duplicateOrders.lastUpdatedAt ?? 0,
+    performanceData.lastUpdatedAt ?? 0,
+    trendData.lastUpdatedAt ?? 0,
+  ) || null;
+  const error = summaryData.error || duplicateOrders.error || performanceData.error || trendData.error;
 
   // Dashboard-only derivations
   const totalClosing = performance?.totalClosing ?? 0;
   const crPerf = performance?.overallCr ?? 0;
   const handoverTodayCount = stats.handovers;
   const handoverRate = stats.orders > 0 ? Math.round((handoverTodayCount / stats.orders) * 100) : 0;
-  const revenue = summaryData?.revenue ?? 0;
+  const revenue = summary?.revenue ?? 0;
 
   const topCs = [...(performance?.cs ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
   const topProducts = [...(performance?.products ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
-  const trendPoints = (trendData ?? []).map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }));
+  const trendPoints = (trendData.data ?? []).map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }));
   const leadsSeries = trendPoints.map((p) => p.leads);
   const closingSeries = trendPoints.map((p) => p.closings);
-  const crSeries = (trendData ?? []).map((b) => b.cr);
+  const crSeries = (trendData.data ?? []).map((b) => b.cr);
   // Momentum = second half vs first half of the period (a real signal, not vs a phantom prev query).
   const momentum = (s: number[]): number | null => {
     if (s.length < 4) return null;
@@ -131,24 +156,53 @@ export default function DashboardPage() {
     ],
     [performance, revenue, stats],
   );
+  const refreshAll = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        summaryData.refresh(),
+        duplicateOrders.refresh(),
+        performanceData.refresh(),
+        trendData.refresh(),
+      ]);
+      setRespRefreshKey((n) => n + 1);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-muted-foreground">
-          Metrik <span className="font-medium text-foreground">{periodLabel}</span>
-        </p>
-        <Button
-          variant="outline"
-          onClick={() => setDupOpen(true)}
-          disabled={dupCount === 0}
-          className="gap-2"
-        >
-          <CircleAlert className="size-4" />
-          Order Double
-          <Badge variant={dupCount > 0 ? 'warning' : 'secondary'}>{dupCount}</Badge>
-        </Button>
+        <div>
+          <p className="text-sm text-muted-foreground">
+            Metrik <span className="font-medium text-foreground">{periodLabel}</span>
+          </p>
+          <p className="text-xs text-muted-foreground">Snapshot analytics · update {fmtUpdatedAt(lastUpdatedAt)}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" variant="outline" className="h-9 gap-2" onClick={refreshAll} disabled={loading}>
+            <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => setDupOpen(true)}
+            disabled={dupCount === 0}
+            className="gap-2"
+          >
+            <CircleAlert className="size-4" />
+            Order Double
+            <Badge variant={dupCount > 0 ? 'warning' : 'secondary'}>{dupCount}</Badge>
+          </Button>
+        </div>
       </div>
+
+      {error && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      )}
 
       {/* Hero stats — figure + momentum + sparkline */}
       <section className="grid gap-4 sm:grid-cols-3">
@@ -195,7 +249,7 @@ export default function DashboardPage() {
             <CardDescription>Closing terbanyak · {periodLabel}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {performanceData === undefined ? (
+            {performanceData.data === undefined ? (
               <p className="text-sm text-muted-foreground">Memuat…</p>
             ) : topCs.length === 0 ? (
               <p className="text-sm text-muted-foreground">Belum ada data.</p>
@@ -221,7 +275,7 @@ export default function DashboardPage() {
             <CardDescription>Closing terbanyak · {periodLabel}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {performanceData === undefined ? (
+            {performanceData.data === undefined ? (
               <p className="text-sm text-muted-foreground">Memuat…</p>
             ) : topProducts.length === 0 ? (
               <p className="text-sm text-muted-foreground">Belum ada data.</p>
@@ -245,18 +299,18 @@ export default function DashboardPage() {
       <Sheet open={dupOpen} onOpenChange={setDupOpen}>
         <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
           <SheetHeader>
-            <SheetTitle>⚠️ Order Double</SheetTitle>
+            <SheetTitle>Order Double</SheetTitle>
             <SheetDescription>
               Customer dengan ≥2 order di periode ini — kroscek di Berdu, cancel jika dobel tak sengaja.
             </SheetDescription>
           </SheetHeader>
           <div className="mt-4 space-y-3">
-            {duplicateOrders === undefined ? (
+            {duplicateOrders.data === undefined ? (
               <p className="text-sm text-muted-foreground">Memuat…</p>
-            ) : duplicateOrders.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Tidak ada order double di periode ini ✅</p>
+            ) : duplicateOrders.data.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Tidak ada order double di periode ini.</p>
             ) : (
-              duplicateOrders.map((d) => (
+              duplicateOrders.data.map((d) => (
                 <div key={d.phone} className="rounded-xl border border-border bg-card p-4 text-sm shadow-sm">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium text-foreground">{d.customerName || 'Tanpa Nama'}</span>
@@ -264,7 +318,7 @@ export default function DashboardPage() {
                     <span className="text-muted-foreground">· {d.csName || '—'}</span>
                     <Badge variant="secondary">{d.count}× order</Badge>
                     {d.likelyAccidental ? (
-                      <Badge variant="warning">⚠ kemungkinan accidental</Badge>
+                      <Badge variant="warning">kemungkinan accidental</Badge>
                     ) : (
                       <Badge variant="secondary">repeat customer</Badge>
                     )}
