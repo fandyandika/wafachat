@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useQuery } from 'convex/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info, Clock, Crown } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info, Clock, Crown, RefreshCw, ImageDown } from 'lucide-react';
+import { shareNodeAsPng } from '@/lib/capture';
 import { api } from '@/convex/_generated/api';
 import { csKey } from '@/lib/cs-key';
 import { Button } from '@/components/ui/button';
@@ -14,6 +15,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import { formatRupiahShort } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { useResponseTimes } from '@/components/panel/use-response-times';
+import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
 import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/panel/report-card';
 import {
   JAK_MS, DATA_CUTOFF_MS, clampStartToCutoff, currentReportLabelDate, reportWindowForLabelDate, wibDateParts,
@@ -31,12 +33,20 @@ function fmtBoundary(ms: number): string {
   return `${p.d} ${MONTHS_SHORT[p.m]} ${hh}:${mm}`;
 }
 function pad(n: number) { return String(n).padStart(2, '0'); }
+function fmtUpdatedAt(ms: number | null): string {
+  if (!ms) return 'Belum dimuat';
+  return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
+}
 
 export function DailyReportDashboard() {
   const sp = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const { csName } = usePanelFilters();
+  const [respRefreshKey, setRespRefreshKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [sharingBoard, setSharingBoard] = useState(false);
+  const boardRef = useRef<HTMLDivElement>(null);
   const dayParam = sp.get('day');
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
@@ -56,16 +66,34 @@ export function DailyReportDashboard() {
   const endAt = rawWindow.endAt;
   const isCurrent = current.y === labelDate.y && current.m === labelDate.m && current.d === labelDate.d;
 
-  const report = useQuery(api.analytics.getDailyReport, { startAt, endAt });
-  const respData = useResponseTimes({ startAt, endAt });
+  const reportArgs = useMemo(() => ({ startAt, endAt }), [startAt, endAt]);
+  const {
+    data: report,
+    loading: reportLoading,
+    error: reportError,
+    lastUpdatedAt,
+    refresh: refreshReport,
+  } = useConvexSnapshotQuery<{
+    totals: { leads: number; closings: number; cr: number; revenue: number; discount: number; cpDiscount: number };
+    cs: ReportCardData[];
+  }>(api.analytics.getDailyReport, reportArgs);
+  const respData = useResponseTimes({ startAt, endAt, refreshKey: respRefreshKey });
   // Previous window (same 24h length, one day earlier) for ▲▼ deltas. Skipped when
   // the prior period falls before the data cutoff (no reliable comparison).
   const prevStart = rawWindow.startAt - 86_400_000;
   const prevValid = prevStart >= DATA_CUTOFF_MS;
-  const prevReport = useQuery(
-    api.analytics.getDailyReport,
-    prevValid ? { startAt: prevStart, endAt: rawWindow.startAt } : 'skip',
+  const prevReportArgs = useMemo(
+    () => (prevValid ? { startAt: prevStart, endAt: rawWindow.startAt } : 'skip' as const),
+    [prevStart, prevValid, rawWindow.startAt],
   );
+  const {
+    data: prevReport,
+    loading: prevReportLoading,
+    refresh: refreshPrevReport,
+  } = useConvexSnapshotQuery<{
+    totals: { leads: number; closings: number; cr: number };
+    cs: Array<{ csName: string; leads: number; closings: number; cr: number }>;
+  }>(api.analytics.getDailyReport, prevReportArgs);
   // cs is sorted by firstReplyCount desc; keep the FIRST (dominant) row per display name —
   // conversation.assignedCsName has mixed forms ("Aisyah"/"CS Aisyah") that normalize equal,
   // so a tiny straggler row must not overwrite the real one.
@@ -98,6 +126,15 @@ export function DailyReportDashboard() {
   const onPick = (value: string) => {
     const [y, m, d] = value.split('-').map(Number);
     if (y && m && d) goTo({ y, m: m - 1, d });
+  };
+  const refreshAll = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([refreshReport(), prevValid ? refreshPrevReport() : Promise.resolve()]);
+      setRespRefreshKey((n) => n + 1);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const cards = ((report?.cs ?? []) as ReportCardData[]).filter((c) => !csName || c.csName === csName);
@@ -163,6 +200,18 @@ export function DailyReportDashboard() {
     };
   };
 
+  const onShareBoard = async () => {
+    if (!boardRef.current || sharingBoard) return;
+    setSharingBoard(true);
+    try {
+      await shareNodeAsPng(boardRef.current, `laporan-${dateInputValue}.png`);
+    } catch {
+      /* capture failed (very old browser) — silently ignore */
+    } finally {
+      setSharingBoard(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-2">
@@ -180,18 +229,45 @@ export function DailyReportDashboard() {
         </Button>
         <div className="ml-1 text-base font-semibold tracking-tight">Laporan {titleDate}</div>
         <PeriodStatusPill isCurrent={isCurrent} endAt={endAt} now={now} />
+        <Button
+          size="sm"
+          variant="outline"
+          className="ml-auto h-9 gap-2"
+          onClick={refreshAll}
+          disabled={refreshing || reportLoading || prevReportLoading}
+        >
+          <RefreshCw className={`size-4 ${refreshing ? 'animate-spin' : ''}`} />
+          Refresh
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-9 gap-2"
+          onClick={onShareBoard}
+          disabled={sharingBoard || report === undefined}
+          title="Simpan/share laporan sebagai gambar (siap kirim WA)"
+        >
+          <ImageDown className={`size-4 ${sharingBoard ? 'animate-pulse' : ''}`} />
+          Share PNG
+        </Button>
       </div>
 
       <div className="text-xs text-muted-foreground">
         {windowLabel}
         {isCurrent && ' · berjalan'}
         {clamped && ' · data dari 22 Jun 00:00 (sebelumnya belum akurat)'}
+        {' · update '}
+        {fmtUpdatedAt(lastUpdatedAt)}
       </div>
 
-      {report === undefined ? (
+      {reportError ? (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {reportError}
+        </div>
+      ) : report === undefined ? (
         <div className="text-sm text-muted-foreground">Memuat…</div>
       ) : (
-        <>
+        <div ref={boardRef} className="space-y-6">
           <GrandStrip totals={report.totals} prev={prevValid ? (prevReport?.totals ?? null) : null} />
           {queen && queenCard && (
             <QueenHero name={queenCard.csName} closings={queenCard.closings} cr={queenCard.cr} avatarByKey={avatarByKey} />
@@ -224,7 +300,7 @@ export function DailyReportDashboard() {
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

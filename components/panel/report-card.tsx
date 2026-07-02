@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, type ComponentType } from 'react';
-import { Copy, Check, Zap, Trophy, Crown, Clock } from 'lucide-react';
+import { useRef, useState, type ComponentType } from 'react';
+import { Copy, Check, Zap, Trophy, Crown, Clock, ImageDown } from 'lucide-react';
+import { shareNodeAsPng } from '@/lib/capture';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { CsAvatar } from '@/components/ui/cs-avatar';
@@ -51,6 +52,20 @@ export function ReportCard({
 }) {
   const [copied, setCopied] = useState(false);
   const [productsExpanded, setProductsExpanded] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const captureRef = useRef<HTMLDivElement>(null);
+  const onShare = async () => {
+    if (!captureRef.current || sharing) return;
+    setSharing(true);
+    try {
+      const date = `${label.y}-${String(label.m + 1).padStart(2, '0')}-${String(label.d).padStart(2, '0')}`;
+      await shareNodeAsPng(captureRef.current, `laporan-${csKey(card.csName)}-${date}.png`);
+    } catch {
+      /* capture failed (very old browser) — silently ignore, same policy as copy */
+    } finally {
+      setSharing(false);
+    }
+  };
   const onCopy = async () => {
     try {
       await navigator.clipboard.writeText(reportText(card, label));
@@ -64,8 +79,9 @@ export function ReportCard({
   const lastReplyAt = resp?.lastReplyAt ?? null;
 
   return (
+    <div ref={captureRef} className="h-full">
     <Card className={cn(
-      'transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30',
+      'h-full transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30',
       rank === 1 && 'ring-1 ring-primary/20',
       isQueen && 'ring-2 ring-primary/50',
     )}>
@@ -107,7 +123,18 @@ export function ReportCard({
               <Clock className="size-3.5" /> {resp.slaBreaches}
             </span>
           )}
-          <Button size="icon-sm" variant="ghost" onClick={onCopy} aria-label="Copy teks WA" className="size-7 text-muted-foreground/50 hover:text-foreground">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            onClick={onShare}
+            disabled={sharing}
+            aria-label="Share gambar card"
+            data-nocapture
+            className="size-7 text-muted-foreground/50 hover:text-foreground"
+          >
+            <ImageDown className={cn('size-4', sharing && 'animate-pulse')} />
+          </Button>
+          <Button size="icon-sm" variant="ghost" onClick={onCopy} aria-label="Copy teks WA" data-nocapture className="size-7 text-muted-foreground/50 hover:text-foreground">
             {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
           </Button>
         </div>
@@ -215,6 +242,7 @@ export function ReportCard({
         </div>
       </CardContent>
     </Card>
+    </div>
   );
 }
 
