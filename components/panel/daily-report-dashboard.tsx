@@ -215,22 +215,27 @@ export function DailyReportDashboard() {
     setSharingBoard(true);
     // Capture a clone forced to the desktop layout (fixed width + multi-column
     // grids) rather than the live board, so a phone export looks like the desktop
-    // panel instead of the 1-column mobile stack. The clone renders off-screen so
-    // the visible page never shifts.
+    // panel instead of the 1-column mobile stack. The off-screen positioning MUST
+    // live on a wrapper, not the captured node itself: html-to-image copies the
+    // captured root's computed styles into the snapshot, so position:fixed;
+    // left:-10000px on the clone shoved the content out of the SVG frame — that
+    // was the "blank background-only PNG" bug.
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'fixed';
+    wrapper.style.top = '0';
+    wrapper.style.left = '-12000px';
+    wrapper.style.zIndex = '-1';
     const clone = boardRef.current.cloneNode(true) as HTMLElement;
     clone.classList.add('capture-desktop');
-    clone.style.position = 'fixed';
-    clone.style.top = '0';
-    clone.style.left = '-10000px';
-    clone.style.zIndex = '-1';
-    document.body.appendChild(clone);
+    wrapper.appendChild(clone);
+    document.body.appendChild(wrapper);
     try {
       void clone.offsetWidth; // force reflow at the desktop width before capture
       await shareNodeAsPng(clone, `laporan-${dateInputValue}.png`);
     } catch {
       /* capture failed (very old browser) — silently ignore */
     } finally {
-      clone.remove();
+      wrapper.remove();
       setSharingBoard(false);
     }
   };
