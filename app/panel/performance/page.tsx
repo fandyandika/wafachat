@@ -24,7 +24,9 @@ export default function PerformancePage() {
   const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
 
   const rangeArgs = useMemo(() => ({ startAt, endAt }), [startAt, endAt]);
-  const trendArgs = useMemo(() => ({ startAt, endAt, bucket: 'day' as const }), [startAt, endAt]);
+  // Trend Harian tetap window 7 hari (anchored ke endAt, bukan Date.now) walau range default
+  // "hari ini" — biar chart tetap berguna. 1 query ~2 MB.
+  const trendArgs = useMemo(() => ({ startAt: endAt - 7 * 24 * 60 * 60 * 1000, endAt, bucket: 'day' as const }), [endAt]);
   const performanceArgs = useMemo(() => ({
     startAt,
     endAt,

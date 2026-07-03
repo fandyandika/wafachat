@@ -250,7 +250,7 @@ export function PerformancePanel({
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Trend Harian</CardTitle>
-          <CardDescription>Leads & closing per hari di periode terpilih.</CardDescription>
+          <CardDescription>Leads & closing per hari · 7 hari terakhir.</CardDescription>
         </CardHeader>
         <CardContent>
           {trendData === undefined ? (

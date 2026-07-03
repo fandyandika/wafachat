@@ -37,7 +37,9 @@ const VALID_RANGES: DateRangeKey[] = ['today', 'yesterday', '7d', '30d', 'month'
 export function usePanelFilters() {
   const sp = useSearchParams();
   const rawRange = sp.get('range');
-  const range: DateRangeKey = VALID_RANGES.includes(rawRange as DateRangeKey) ? (rawRange as DateRangeKey) : '7d';
+  // Default "hari ini" — the cheapest window (reads ~today's recaps/orders vs a full week) and
+  // what you glance at most. Trend charts anchor their own 7-day window so they stay useful.
+  const range: DateRangeKey = VALID_RANGES.includes(rawRange as DateRangeKey) ? (rawRange as DateRangeKey) : 'today';
   const cs = sp.get('cs') || 'all';
   const customDate = sp.get('date') || '';
   const { startAt: rawStartAt, endAt } = useMemo(() => resolveRange(range, customDate), [range, customDate]);

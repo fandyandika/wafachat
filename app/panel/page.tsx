@@ -56,7 +56,9 @@ export default function DashboardPage() {
     includeInferredDiscount: false,
     csName,
   }), [csName, endAt, startAt]);
-  const trendArgs = useMemo(() => ({ startAt, endAt, bucket: 'day' as const }), [endAt, startAt]);
+  // Trend Harian butuh beberapa hari → kunci window 7 hari (anchored ke endAt yang memoized,
+  // BUKAN Date.now) walau range default sekarang "hari ini". Tetap ringan: 1 query ~2 MB.
+  const trendArgs = useMemo(() => ({ startAt: endAt - 7 * 24 * 60 * 60 * 1000, endAt, bucket: 'day' as const }), [endAt]);
 
   const summaryData = useConvexSnapshotQuery<{
     leads: number;
@@ -236,7 +238,7 @@ export default function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Trend Harian</CardTitle>
-            <CardDescription>Leads &amp; closing per hari · {periodLabel}</CardDescription>
+            <CardDescription>Leads &amp; closing per hari · 7 hari terakhir</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="max-w-2xl">
