@@ -3,7 +3,7 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings } from 'lucide-react';
+import { Bot, LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings, LogOut } from 'lucide-react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
@@ -38,10 +38,17 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   const me = useMe();
   // CS staff only get Laporan + Follow-up in the menu; admins get everything. Middleware
   // enforces the same server-side — this just hides links CS can't reach anyway.
-  const navItems = me?.role === 'cs'
+  const isCs = me?.role === 'cs';
+  const navItems = isCs
     ? NAV.filter((n) => n.href === '/panel/laporan' || n.href === '/panel/follow-up')
     : NAV;
   const isFollowUp = pathname === '/panel/follow-up'; // CRM page: hide header filters + tighten padding for more room.
+
+  // CS have no Settings access (where the admin logout lives) — give them one here.
+  const logout = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    router.push('/login');
+  };
 
   const setParam = (key: string, value: string | undefined) => {
     const next = new URLSearchParams(sp.toString());
@@ -84,6 +91,18 @@ function PanelShell({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
+          {isCs && (
+            <div className="px-4 pb-6">
+              <button
+                type="button"
+                onClick={logout}
+                className="flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                <LogOut className="size-4" />
+                <span>Keluar</span>
+              </button>
+            </div>
+          )}
         </aside>
 
         <main className="min-w-0 flex-1">
@@ -162,6 +181,18 @@ function PanelShell({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
+          {isCs && (
+            <button
+              type="button"
+              onClick={logout}
+              className="flex flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium text-muted-foreground transition-colors active:scale-95"
+            >
+              <span className="flex size-9 items-center justify-center rounded-xl">
+                <LogOut className="size-5" />
+              </span>
+              Keluar
+            </button>
+          )}
         </div>
       </nav>
     </div>
