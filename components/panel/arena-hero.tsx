@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Crown, Medal, PartyPopper, Rocket, ShieldAlert, Swords, Target, Timer } from 'lucide-react';
+import { Crown, Medal, PartyPopper, Rocket, ShieldAlert, Swords, Target, Timer, TrendingUp, Trophy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { QUEEN_MIN_LEADS, type QueenScoreRow } from '@/lib/queen';
@@ -77,7 +77,7 @@ function MedalChips({ medals }: { medals: string[] }) {
 function RankPill({ rank, total }: { rank: number; total: number }) {
   return (
     <span className="inline-flex items-center rounded-full bg-background/70 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground ring-1 ring-border">
-      🏆 #{rank} Leaderboard · {total} CS
+      <Trophy className="mr-1 size-3 text-gold" /> #{rank} Leaderboard · {total} CS
     </span>
   );
 }
@@ -151,12 +151,14 @@ export function ArenaHero({
 
   const countdown = live ? (
     <span className="inline-flex items-center gap-1 text-[11px] font-medium tabular-nums text-muted-foreground">
-      <Timer className="size-3.5" /> {fmtRemain(remainMs)} lagi · papan dikunci 16:00 WIB
+      <Timer className="size-3.5" /> Penobatan Queen {fmtRemain(remainMs)} lagi · 16:00 WIB
     </span>
   ) : null;
 
   const paceLine = deltaClosings != null && deltaClosings > 0 ? (
-    <div className="text-xs font-medium text-positive">📈 +{deltaClosings} closing dibanding kemarin — ritme naik!</div>
+    <div className="flex items-center gap-1 text-xs font-medium text-positive">
+      <TrendingUp className="size-3.5 shrink-0" /> +{deltaClosings} closing dibanding kemarin — ritme naik
+    </div>
   ) : null;
 
   // ---- Live · not on the scoreboard yet ------------------------------------
@@ -169,7 +171,7 @@ export function ArenaHero({
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-bold uppercase tracking-wide text-accent-foreground">Gerbang Arena</div>
             <div className="text-sm font-bold text-foreground">
-              {own ? `${needLeads} leads lagi buat masuk papan skor Takhta 🚀` : 'Leads pertama membuka papan skor Takhta 🚀'}
+              {own ? `${needLeads} leads lagi buat masuk papan skor Takhta` : 'Leads pertama membuka papan skor Takhta'}
             </div>
             <div className="text-xs text-muted-foreground">Skor = CR (50) + closing (35) + kecepatan respon (15).</div>
           </div>
@@ -196,11 +198,11 @@ export function ArenaHero({
               <RankPill rank={1} total={eligible.length} />
             </div>
             <div className="text-base font-bold tracking-tight text-foreground">
-              Takhta belum dikunci — pertahankan, {stripCs(own.csName)}!
+              Menuju penobatan — takhta masih milikmu, {stripCs(own.csName)}
             </div>
             {tight ? (
               <div className="mt-0.5 flex items-center gap-1 text-xs font-semibold text-destructive">
-                <ShieldAlert className="size-3.5 shrink-0" /> {stripCs(runner!.csName)} tinggal {fmtPts(margin)} poin di belakang — jangan lengah!
+                <ShieldAlert className="size-3.5 shrink-0" /> {stripCs(runner!.csName)} menempel, selisih {fmtPts(margin)} poin — jaga ritme
               </div>
             ) : runner ? (
               <div className="text-xs text-muted-foreground">
@@ -225,17 +227,17 @@ export function ArenaHero({
     const gap = nextUp.score - own.score;
     const close = gap <= SENGGOL_GAP_PTS;
     const forThrone = rank === 2;
-    const header = forThrone ? (close ? 'Tinggal Senggol' : 'Pemburu Takhta') : 'Buruan Salip!';
+    const header = forThrone ? (close ? 'Tinggal Senggol' : 'Pemburu Takhta') : 'Buruan Salip';
     const headline = forThrone ? (
       close ? (
-        <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — rebut takhtanya! ⚔️</>
+        <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — takhta masih bisa direbut</>
       ) : (
-        <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — serang poin terbesarmu 🏹</>
+        <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — fokus di poin terbesarmu</>
       )
     ) : close ? (
-      <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — salip posisinya! ⚔️</>
+      <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — posisinya bisa disalip</>
     ) : (
-      <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — serang poin terbesarmu 🏹</>
+      <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — fokus di poin terbesarmu</>
     );
     return (
       <div
@@ -276,7 +278,7 @@ export function ArenaHero({
           <CsAvatar name={own.csName} size="md" src={avatarUrl} />
           <div className="min-w-0 flex-1">
             <div className="text-[11px] font-bold uppercase tracking-wide text-gold">Queen Hari Ini · {titleDate}</div>
-            <div className="text-base font-bold tracking-tight text-foreground">SAH! Takhta milik kamu, Queen {stripCs(own.csName)}! 🎉</div>
+            <div className="text-base font-bold tracking-tight text-foreground">Sah! Takhta milik kamu, Queen {stripCs(own.csName)}</div>
             <div className="text-xs tabular-nums text-muted-foreground">
               Skor {fmtPts(own.score)} · {own.closings} closing · CR {fmtPts(own.cr)}% — kombinasi terbaik hari itu.
             </div>
@@ -292,13 +294,13 @@ export function ArenaHero({
         <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground"><PartyPopper className="size-6" /></span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-wide text-accent-foreground">Papan dikunci · {titleDate}</span>
+            <span className="text-[11px] font-bold uppercase tracking-wide text-accent-foreground">Hasil final · {titleDate}</span>
             {rank > 0 && <RankPill rank={rank} total={eligible.length} />}
           </div>
           <div className="text-base font-bold tracking-tight text-foreground">
             {rank > 0
-              ? <>Finish #{rank} · skor {fmtPts(own.score)}. Besok takhtanya bisa milikmu 👑</>
-              : <>Papan skor butuh ≥{QUEEN_MIN_LEADS} leads — besok gas dari leads pertama 🚀</>}
+              ? <>Finish #{rank} · skor {fmtPts(own.score)}. Besok takhta terbuka lagi</>
+              : <>Papan skor butuh ≥{QUEEN_MIN_LEADS} leads — mulai lagi besok</>}
           </div>
           {queenName && (
             <div className="text-xs text-muted-foreground">

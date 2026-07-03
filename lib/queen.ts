@@ -1,7 +1,15 @@
-// Pure "Queen CS" scorer — the overall best CS for a period. ABSOLUTE SCORECARD: each metric
-// is scored against a FIXED target (0..100), not against teammates. So a decent value earns
-// real points (a 56% CR isn't crushed to 0 just for being lowest in the team), the score is
-// stable/transparent (a CS knows the target to chase), and CR stays decisive via a tuned band.
+// Pure "Queen CS" scorer — the overall best CS for a period.
+// HYBRID SCORECARD (2026-07-03, supersedes the all-absolute 06-25 version):
+//   - CR (50): ABSOLUTE band 40%..80% — a rate, comparable across days, fully in the
+//     CS's control. A decent value earns real points (56% CR isn't crushed to 0).
+//   - Closing (35): RELATIVE to the day's best eligible CS — a fixed target (was 40)
+//     saturated once daily volume grew (everyone maxed 35/35, so closing stopped
+//     differentiating and the race collapsed to CR-only). Proportional-to-best is
+//     self-tuning at any volume, always rewards the top closer fully, and never
+//     zeroes anyone.
+//   - Speed (15): ABSOLUTE band 0..15 min (was 30) — the whole team now answers in
+//     2-3 min, which saturated the old band; the tighter band keeps fast-vs-faster
+//     worth racing while a 10-min median still earns points.
 // No framework imports -> runs plain in vitest.
 
 export type QueenInput = {
@@ -16,12 +24,12 @@ export type QueenInput = {
 export const QUEEN_WEIGHTS = { closing: 0.35, cr: 0.5, speed: 0.15 };
 export const QUEEN_MIN_LEADS = 10; // eligibility: enough workload to judge "overall best"
 export const QUEEN_MIN_RESP = 5; //  enough first-replies for a fair speed score
-// Fixed absolute targets (score vs these, NOT vs teammates) — tunable.
+// Fixed bands for the absolute components (CR + speed) — tunable. Closing has no
+// fixed target: it is scored relative to the day's best (see computeQueenScores).
 export const QUEEN_TARGETS = {
   crFloor: 40, // CR%: <=40 -> 0 pts
   crCeil: 80, //  CR%: >=80 -> 100 pts
-  speedCeilMin: 30, // active-hours median minutes: 0 -> 100 pts, >=30 -> 0 pts
-  closingsTarget: 40, // closings: >=40 -> 100 pts
+  speedCeilMin: 15, // active-hours median minutes: 0 -> 100 pts, >=15 -> 0 pts
 };
 
 const clamp100 = (x: number) => Math.max(0, Math.min(100, x));
@@ -47,9 +55,14 @@ export function computeQueenScores(
   minRespCount = QUEEN_MIN_RESP,
 ): QueenScoreRow[] {
   const T = QUEEN_TARGETS;
+  // Closing benchmark = the day's best among ELIGIBLE CS (an ineligible outlier with
+  // 5 leads must not deflate everyone else's closing points). Fallback to all rows
+  // when nobody qualifies yet (early in the window) so the bars still mean something.
+  const benchPool = rows.some((r) => r.leads >= minLeads) ? rows.filter((r) => r.leads >= minLeads) : rows;
+  const closeBench = benchPool.reduce((m, r) => Math.max(m, r.closings), 0);
   const scored = rows.map((r) => {
     const crPts = clamp100(((r.cr - T.crFloor) / (T.crCeil - T.crFloor)) * 100);
-    const closePts = clamp100((r.closings / T.closingsTarget) * 100);
+    const closePts = closeBench > 0 ? clamp100((r.closings / closeBench) * 100) : 0;
     // No/low speed sample -> 0 speed points (can't credit unmeasured responsiveness).
     const hasSpeed = r.respCount >= minRespCount && r.respMedianMs != null;
     const speedMin = hasSpeed ? (r.respMedianMs as number) / 60000 : T.speedCeilMin;
