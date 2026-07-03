@@ -226,11 +226,12 @@ export function ReportCard({
           </div>
         )}
 
-        {/* Potensi mis-rep: double orders inflate the lead list */}
+        {/* Reconcile the CS's raw Berdu count with the panel's unique-customer leads:
+            Berdu order rows = leads + duplicates; duplicates = repeat-customer orders. */}
         {card.duplicates > 0 && (
           <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
             <Copy className="size-3.5 shrink-0" />
-            <span>{card.duplicates} order double — tidak dihitung dobel di CR</span>
+            <span>{card.leads + card.duplicates} order Berdu → {card.leads} pelanggan unik ({card.duplicates} order dobel)</span>
           </div>
         )}
 
