@@ -14,30 +14,26 @@ export type CsFeatureConfig = {
   isActive: boolean;
 };
 
+// Names match the actual data (assignedCsName from Berdu/n8n is prefix-less: "Aisyah", not
+// "CS Aisyah"), so normalizeCsName lines up config <-> data. "CS Azela" was a typo phantom
+// (0 closings) — the real CS is the stored "Azelia" config.
 export const DEFAULT_CONFIGS: CsFeatureConfig[] = [
   {
-    csName: "CS Aisyah",
+    csName: "Aisyah",
     orderAutomationEnabled: true,
     aiAssistantEnabled: true,
     reportingEnabled: true,
     isActive: true,
   },
   {
-    csName: "CS Risma",
+    csName: "Risma",
     orderAutomationEnabled: true,
     aiAssistantEnabled: false,
     reportingEnabled: true,
     isActive: true,
   },
   {
-    csName: "CS Lila",
-    orderAutomationEnabled: false,
-    aiAssistantEnabled: false,
-    reportingEnabled: false,
-    isActive: false,
-  },
-  {
-    csName: "CS Azela",
+    csName: "Lila",
     orderAutomationEnabled: false,
     aiAssistantEnabled: false,
     reportingEnabled: false,
@@ -152,5 +148,46 @@ export const upsert = mutation({
 
     await ctx.db.insert("csConfigs", { ...payload, createdAt: now });
     return { success: true, action: "inserted", csName: args.csName };
+  },
+});
+
+// Rename a CS's display name in place (patches the stored config's csName + normalizedName).
+// Historical orders/recaps keep their raw name but still group under this CS via csKey on the
+// panel, so no data migration is needed for a cosmetic rename (e.g. "CS Aisyah" -> "Aisyah").
+export const renameCs = mutation({
+  args: { fromCsName: v.string(), toCsName: v.string() },
+  handler: async (ctx, args) => {
+    const to = args.toCsName.trim();
+    if (!to) return { ok: false as const, error: "nama baru kosong" };
+    const fromNorm = normalizeCsName(args.fromCsName);
+    const toNorm = normalizeCsName(to);
+    const stored = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", fromNorm))
+      .unique();
+    if (!stored) return { ok: false as const, error: `tidak ada config tersimpan untuk "${args.fromCsName}" (CS bawaan)` };
+    if (toNorm !== fromNorm) {
+      const clash = await ctx.db
+        .query("csConfigs")
+        .withIndex("by_normalizedName", (q) => q.eq("normalizedName", toNorm))
+        .unique();
+      if (clash) return { ok: false as const, error: `sudah ada CS "${to}"` };
+    }
+    await ctx.db.patch(stored._id, { csName: to, normalizedName: toNorm, updatedAt: Date.now() });
+    return { ok: true as const, from: args.fromCsName, to };
+  },
+});
+
+// Delete a stored CS config entirely (only stored records; built-in defaults have no row).
+export const deleteCsConfig = mutation({
+  args: { csName: v.string() },
+  handler: async (ctx, args) => {
+    const stored = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizeCsName(args.csName)))
+      .unique();
+    if (!stored) return { ok: false as const, error: "tidak ada config tersimpan (mungkin CS bawaan — pakai toggle Aktif)" };
+    await ctx.db.delete(stored._id);
+    return { ok: true as const };
   },
 });

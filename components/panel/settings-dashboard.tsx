@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQuery } from 'convex/react';
-import { Upload, Trash2, Zap, MessageSquare, TrendingUp, Power, LogOut } from 'lucide-react';
+import { Upload, Trash2, Zap, MessageSquare, TrendingUp, Power, LogOut, Pencil } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -112,6 +112,8 @@ export function SettingsDashboard() {
   const setAvatar = useMutation(api.cs.setCsAvatar);
   const clearAvatar = useMutation(api.cs.clearCsAvatar);
   const upsert = useMutation(api.csConfigs.upsert);
+  const renameCs = useMutation(api.csConfigs.renameCs);
+  const deleteCsConfig = useMutation(api.csConfigs.deleteCsConfig);
 
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -151,6 +153,35 @@ export function SettingsDashboard() {
     setErr(null);
     try {
       await clearAvatar({ csName });
+    } catch (e) {
+      setErr(`${csName}: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onRename(csName: string) {
+    const next = window.prompt(`Ganti nama "${csName}" menjadi:`, csName)?.trim();
+    if (!next || next === csName) return;
+    setBusy(csName);
+    setErr(null);
+    try {
+      const res = await renameCs({ fromCsName: csName, toCsName: next });
+      if (!res.ok) setErr(res.error);
+    } catch (e) {
+      setErr(`${csName}: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onDelete(csName: string) {
+    if (!window.confirm(`Hapus CS "${csName}" dari registry? Data laporan lama tidak terhapus, hanya kartu pengaturan ini.`)) return;
+    setBusy(csName);
+    setErr(null);
+    try {
+      const res = await deleteCsConfig({ csName });
+      if (!res.ok) setErr(res.error);
     } catch (e) {
       setErr(`${csName}: ${(e as Error).message}`);
     } finally {
@@ -205,6 +236,28 @@ export function SettingsDashboard() {
                 <CsAvatar name={c.csName} size="md" src={c.avatarUrl ?? undefined} />
                 <div className="min-w-0 flex-1">
                   <CardTitle className="text-base truncate">{c.csName}</CardTitle>
+                </div>
+                <div className="flex shrink-0 items-center gap-0.5">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy === c.csName}
+                    onClick={() => onRename(c.csName)}
+                    aria-label={`Ganti nama ${c.csName}`}
+                    className="size-8 p-0 text-muted-foreground hover:text-foreground"
+                  >
+                    <Pencil className="size-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy === c.csName}
+                    onClick={() => onDelete(c.csName)}
+                    aria-label={`Hapus ${c.csName}`}
+                    className="size-8 p-0 text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
                 </div>
               </div>
             </CardHeader>
