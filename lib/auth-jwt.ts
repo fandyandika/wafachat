@@ -34,7 +34,13 @@ export function routeGuard(pathname: string, session: Session | null): { redirec
   if (pathname === "/") return { redirect: session ? "/panel" : "/login" };
   if (pathname.startsWith("/panel")) {
     if (!session) return { redirect: "/login" };
-    if (pathname.startsWith("/panel/settings") && session.role !== "admin") return { redirect: "/panel" };
+    // CS staff are scoped to their own Laporan + Follow-up only — no Dashboard/Performance/
+    // Settings (hides total-business figures like omzet and the heaviest reads). Anything else
+    // redirects to Laporan. Admins fall through with full access.
+    if (session.role === "cs") {
+      const allowed = pathname.startsWith("/panel/laporan") || pathname.startsWith("/panel/follow-up");
+      return { redirect: allowed ? null : "/panel/laporan" };
+    }
   }
   return { redirect: null };
 }

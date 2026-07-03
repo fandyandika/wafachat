@@ -15,6 +15,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip
 import { formatRupiahShort } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { useResponseTimes } from '@/components/panel/use-response-times';
+import { useMe } from '@/components/panel/use-me';
 import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
 import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/panel/report-card';
 import {
@@ -50,6 +51,7 @@ export function DailyReportDashboard() {
   const dayParam = sp.get('day');
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
+  const isCs = useMe()?.role === 'cs'; // hide total-business omzet from CS staff
 
   const now = Date.now();
   const current = useMemo(() => currentReportLabelDate(now), [now]);
@@ -268,7 +270,7 @@ export function DailyReportDashboard() {
         <div className="text-sm text-muted-foreground">Memuat…</div>
       ) : (
         <div ref={boardRef} className="space-y-6">
-          <GrandStrip totals={report.totals} prev={prevValid ? (prevReport?.totals ?? null) : null} />
+          <GrandStrip totals={report.totals} prev={prevValid ? (prevReport?.totals ?? null) : null} hideRevenue={isCs} />
           {queen && queenCard && (
             <QueenHero name={queenCard.csName} closings={queenCard.closings} cr={queenCard.cr} avatarByKey={avatarByKey} />
           )}
@@ -387,9 +389,11 @@ function QueenHero({ name, closings, cr, avatarByKey }: { name: string; closings
 function GrandStrip({
   totals,
   prev,
+  hideRevenue,
 }: {
   totals: { leads: number; closings: number; cr: number; revenue: number; discount: number; cpDiscount: number };
   prev?: { leads: number; closings: number; cr: number } | null;
+  hideRevenue?: boolean;
 }) {
   const dLeads = prev ? totals.leads - prev.leads : null;
   const dClosings = prev ? totals.closings - prev.closings : null;
@@ -409,7 +413,7 @@ function GrandStrip({
     { label: 'Omzet', node: <AnimatedNumber value={totals.revenue} format={formatRupiahShort} /> },
     { label: 'Diskon', node: <AnimatedNumber value={totals.discount} format={formatRupiahShort} /> },
     { label: 'CP Diskon', node: <AnimatedNumber value={totals.cpDiscount} format={formatRupiahShort} /> },
-  ];
+  ].filter((it) => !(hideRevenue && it.label === 'Omzet')); // CS staff don't see total-business omzet
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
       {items.map((it) => (

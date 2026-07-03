@@ -9,6 +9,7 @@ import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePanelFilters, type DateRangeKey } from '@/components/panel/use-panel-filters';
+import { useMe } from '@/components/panel/use-me';
 
 const NAV = [
   { href: '/panel', label: 'Dashboard', icon: LayoutDashboard },
@@ -34,7 +35,12 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const title = NAV.find((n) => n.href === pathname)?.label ?? 'Dashboard';
   const [navHidden, setNavHidden] = useState(false);
-  const navItems = NAV; // Settings is visible to everyone; sign-out lives on the Settings page.
+  const me = useMe();
+  // CS staff only get Laporan + Follow-up in the menu; admins get everything. Middleware
+  // enforces the same server-side — this just hides links CS can't reach anyway.
+  const navItems = me?.role === 'cs'
+    ? NAV.filter((n) => n.href === '/panel/laporan' || n.href === '/panel/follow-up')
+    : NAV;
   const isFollowUp = pathname === '/panel/follow-up'; // CRM page: hide header filters + tighten padding for more room.
 
   const setParam = (key: string, value: string | undefined) => {
