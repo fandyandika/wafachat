@@ -77,7 +77,7 @@ function MedalChips({ medals }: { medals: string[] }) {
 function RankPill({ rank, total }: { rank: number; total: number }) {
   return (
     <span className="inline-flex items-center rounded-full bg-background/70 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground ring-1 ring-border">
-      #{rank} papan skor · {total} CS
+      🏆 #{rank} Leaderboard · {total} CS
     </span>
   );
 }
@@ -218,35 +218,44 @@ export function ArenaHero({
   }
 
   // ---- Live · chaser -----------------------------------------------------------
+  // Only #2 races for the THRONE (there is one takhta, at #1). Everyone below
+  // races the POSITION above them ("salip") — per owner: "#2 atau #3 ga pegang takhta".
   if (live && rank > 1) {
     const nextUp = eligible[rank - 2];
     const gap = nextUp.score - own.score;
-    const senggol = gap <= SENGGOL_GAP_PTS;
+    const close = gap <= SENGGOL_GAP_PTS;
+    const forThrone = rank === 2;
+    const header = forThrone ? (close ? 'Tinggal Senggol' : 'Pemburu Takhta') : 'Buruan Salip!';
+    const headline = forThrone ? (
+      close ? (
+        <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — rebut takhtanya! ⚔️</>
+      ) : (
+        <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — serang poin terbesarmu 🏹</>
+      )
+    ) : close ? (
+      <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — salip posisinya! ⚔️</>
+    ) : (
+      <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — serang poin terbesarmu 🏹</>
+    );
     return (
       <div
         className={cn(
           'relative overflow-hidden rounded-2xl border p-4 shadow-sm',
-          senggol ? 'border-amber-300/70 bg-gradient-to-r from-amber-50 via-card to-card' : 'border-border bg-card',
+          close ? 'border-amber-300/70 bg-gradient-to-r from-amber-50 via-card to-card' : 'border-border bg-card',
         )}
       >
         <div className="flex items-center gap-3">
-          <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-xl', senggol ? 'bg-amber-100 text-amber-600' : 'bg-accent text-accent-foreground')}>
-            {senggol ? <Swords className="size-6" /> : <Target className="size-6" />}
+          <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-xl', close ? 'bg-amber-100 text-amber-600' : 'bg-accent text-accent-foreground')}>
+            {close ? <Swords className="size-6" /> : <Target className="size-6" />}
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className={cn('text-[11px] font-bold uppercase tracking-wide', senggol ? 'text-amber-600' : 'text-accent-foreground')}>
-                {senggol ? 'Tinggal Senggol' : 'Pemburu Takhta'}
+              <span className={cn('text-[11px] font-bold uppercase tracking-wide', close ? 'text-amber-600' : 'text-accent-foreground')}>
+                {header}
               </span>
               <RankPill rank={rank} total={eligible.length} />
             </div>
-            <div className="text-base font-bold tracking-tight text-foreground">
-              {senggol ? (
-                <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — senggol takhtanya! ⚔️</>
-              ) : (
-                <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — serang poin terbesarmu 🏹</>
-              )}
-            </div>
+            <div className="text-base font-bold tracking-tight text-foreground">{headline}</div>
             {paceLine}
           </div>
         </div>
@@ -266,8 +275,8 @@ export function ArenaHero({
           <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-gold/25 text-gold"><Crown className="size-6" /></span>
           <CsAvatar name={own.csName} size="md" src={avatarUrl} />
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-bold uppercase tracking-wide text-gold">Ratu Hari Ini · {titleDate}</div>
-            <div className="text-base font-bold tracking-tight text-foreground">SAH! Takhta milik {stripCs(own.csName)} 🎉</div>
+            <div className="text-[11px] font-bold uppercase tracking-wide text-gold">Queen Hari Ini · {titleDate}</div>
+            <div className="text-base font-bold tracking-tight text-foreground">SAH! Takhta milik kamu, Queen {stripCs(own.csName)}! 🎉</div>
             <div className="text-xs tabular-nums text-muted-foreground">
               Skor {fmtPts(own.score)} · {own.closings} closing · CR {fmtPts(own.cr)}% — kombinasi terbaik hari itu.
             </div>
@@ -293,7 +302,7 @@ export function ArenaHero({
           </div>
           {queenName && (
             <div className="text-xs text-muted-foreground">
-              Takhta {titleDate} milik {stripCs(queenName)}. Hari baru, papan kosong — semua mulai dari 0.
+              Takhta {titleDate} milik Queen {stripCs(queenName)}. Hari baru, papan kosong — semua mulai dari 0.
             </div>
           )}
         </div>

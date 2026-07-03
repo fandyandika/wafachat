@@ -268,19 +268,18 @@ export function DailyReportDashboard() {
           <RefreshCw className={`size-4 ${refreshing ? 'animate-spin' : ''}`} />
           Refresh
         </Button>
-        {!isCs && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-9 gap-2"
-            onClick={onShareBoard}
-            disabled={sharingBoard || report === undefined}
-            title="Simpan/share laporan sebagai gambar (siap kirim WA)"
-          >
-            <ImageDown className={`size-4 ${sharingBoard ? 'animate-pulse' : ''}`} />
-            Share PNG
-          </Button>
-        )}
+        {/* CS get this too — dokumentasi pribadi / pamer hasil 😄 (per owner) */}
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-9 gap-2"
+          onClick={onShareBoard}
+          disabled={sharingBoard || report === undefined}
+          title="Simpan/share laporan sebagai gambar (siap kirim WA)"
+        >
+          <ImageDown className={`size-4 ${sharingBoard ? 'animate-pulse' : ''}`} />
+          Share PNG
+        </Button>
       </div>
 
       <div className="text-xs text-muted-foreground">
@@ -343,7 +342,6 @@ export function DailyReportDashboard() {
                     rewards={rewardsByCs.get(c.csName)}
                     avatarByKey={avatarByKey}
                     isQueen={c.csName === queenName}
-                    canShare={!isCs}
                   />
                 ))}
               </div>
