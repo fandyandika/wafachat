@@ -37,7 +37,7 @@ const REWARD_ICON: Record<string, ComponentType<{ className?: string }>> = {
 };
 
 export function ReportCard({
-  card, label, isCurrent, resp, rank, avgCr, delta, rewards, avatarByKey, isQueen,
+  card, label, isCurrent, resp, rank, avgCr, delta, rewards, avatarByKey, isQueen, canShare = true,
 }: {
   card: ReportCardData;
   label: { y: number; m: number; d: number; dow: number };
@@ -49,6 +49,7 @@ export function ReportCard({
   rewards?: string[];
   avatarByKey?: Map<string, string | null>;
   isQueen?: boolean;
+  canShare?: boolean; // share-PNG is admin-only; CS keep the copy-text button
 }) {
   const [copied, setCopied] = useState(false);
   const [productsExpanded, setProductsExpanded] = useState(false);
@@ -123,17 +124,19 @@ export function ReportCard({
               <Clock className="size-3.5" /> {resp.slaBreaches}
             </span>
           )}
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            onClick={onShare}
-            disabled={sharing}
-            aria-label="Share gambar card"
-            data-nocapture
-            className="size-7 text-muted-foreground/50 hover:text-foreground"
-          >
-            <ImageDown className={cn('size-4', sharing && 'animate-pulse')} />
-          </Button>
+          {canShare && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onShare}
+              disabled={sharing}
+              aria-label="Share gambar card"
+              data-nocapture
+              className="size-7 text-muted-foreground/50 hover:text-foreground"
+            >
+              <ImageDown className={cn('size-4', sharing && 'animate-pulse')} />
+            </Button>
+          )}
           <Button size="icon-sm" variant="ghost" onClick={onCopy} aria-label="Copy teks WA" data-nocapture className="size-7 text-muted-foreground/50 hover:text-foreground">
             {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
           </Button>

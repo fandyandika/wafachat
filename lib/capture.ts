@@ -7,14 +7,21 @@ export async function shareNodeAsPng(node: HTMLElement, filename: string): Promi
   const background = getComputedStyle(document.body).backgroundColor || '#ffffff';
   // Buttons and other chrome marked data-nocapture stay out of the image.
   const skipChrome = (el: HTMLElement) => !(el instanceof HTMLElement) || el.dataset?.nocapture === undefined;
+  // iOS Safari silently returns a BLANK canvas past ~16.7M pixels (width × height).
+  // The full-board export at desktop width is tall enough to blow that at 2× —
+  // scale the ratio down so the canvas stays inside a safe budget. Small nodes
+  // (single card) still get the crisp 2×.
+  const MAX_CANVAS_PIXELS = 12_000_000;
+  const area = Math.max(node.scrollWidth * node.scrollHeight, 1);
+  const pixelRatio = Math.min(2, Math.sqrt(MAX_CANVAS_PIXELS / area));
   let blob: Blob | null = null;
   try {
-    blob = await toBlob(node, { pixelRatio: 2, cacheBust: true, backgroundColor: background, filter: skipChrome });
+    blob = await toBlob(node, { pixelRatio, cacheBust: true, backgroundColor: background, filter: skipChrome });
   } catch {
     // Avatar <img> from another origin can fail CORS inlining — retry without images
     // (initials chips still render) rather than failing the whole capture.
     blob = await toBlob(node, {
-      pixelRatio: 2,
+      pixelRatio,
       cacheBust: true,
       backgroundColor: background,
       filter: (el) => skipChrome(el as HTMLElement) && (el as HTMLElement).tagName !== 'IMG',
