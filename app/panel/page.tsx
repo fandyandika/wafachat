@@ -78,7 +78,11 @@ export default function DashboardPage() {
 
   const performanceData = useConvexSnapshotQuery<PerformanceData>(api.shippingRecaps.getPerformance, performanceArgs);
   const trendData = useConvexSnapshotQuery<Array<{ bucket: string; leads: number; closings: number; cr: number }>>(api.metrics.getTrend, trendArgs);
-  const respData = useResponseTimes({ startAt, endAt, csName, refreshKey: respRefreshKey });
+  // "Respon CS" = seberapa cepat bales chat baru → cukup 24 jam terakhir (paling relevan) dan
+  // ini motong read messages paling berat (dulu ikut range 7 hari). Anchored ke endAt yang sudah
+  // memoized (BUKAN Date.now()) supaya args tetap stabil — ga refetch tiap render.
+  const respStartAt = endAt - 24 * 60 * 60 * 1000;
+  const respData = useResponseTimes({ startAt: respStartAt, endAt, csName, refreshKey: respRefreshKey });
 
   const [dupOpen, setDupOpen] = useState(false);
   const dupCount = duplicateOrders.data?.length ?? 0;
@@ -220,7 +224,7 @@ export default function DashboardPage() {
             <MetricCard
               label="Respon CS"
               value={respData?.overall.firstReplyMedianMs != null ? formatDuration(respData.overall.firstReplyMedianMs) : '–'}
-              hint={`balas chat baru · ${periodLabel}${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
+              hint={`balas chat baru · 24 jam${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
               icon={Clock}
               tone="default"
             />
