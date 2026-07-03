@@ -200,3 +200,27 @@ test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () =
   expect(rismaReport.perCs.length).toBe(1);
   expect(rismaReport.perCs[0].csName).toBe("Risma");
 });
+
+test("CR uses unique CUSTOMERS: an order-double closing twice does not inflate the rate", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    // CS A: 2 unique customers; customer 62811 double-orders and BOTH orders close.
+    await ctx.db.insert("orders", { ...ordBase, orderId: "D-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "D-2", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0 + 1000, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "D-3", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "D-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "D-2", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0 + 2000, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
+  });
+
+  // Daily report: closings stay order-level (volume: 2), CR is customer-level (1 of 2 leads = 50%).
+  const daily = await t.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
+  const a = daily.cs.find((c: { csName: string }) => c.csName === "CS A")!;
+  expect(a.leads).toBe(2);
+  expect(a.closings).toBe(2); // both orders count as volume + revenue
+  expect(a.cr).toBe(50); // NOT 100 — one unique customer closed out of two leads
+  expect(daily.totals.cr).toBe(50);
+
+  // Leaderboard mirrors the same CR semantics.
+  const rows = await t.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
+  expect(rows[0].cr).toBe(50);
+});

@@ -3,7 +3,11 @@ import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, csKey } from "./lib";
 import { normalizeCsName, canonicalizeProduct } from "./shippingRecaps";
 
-type CsAgg = { leads: Set<string>; closings: Set<string>; revenue: number };
+// leads/closedCust are keyed by customer PHONE (unique customers); closings by ORDER
+// (orderIdBerdu) — order-level is right for volume + revenue (a double-ordering customer
+// really did buy twice) but WRONG for CR: 2 closings over 1 lead inflates the rate. CR
+// must therefore use closedCust/leads (same unit: customers).
+type CsAgg = { leads: Set<string>; closings: Set<string>; closedCust: Set<string>; revenue: number };
 
 async function computeCsAgg(ctx: any, startAt: number, endAt: number, csName?: string): Promise<Map<string, CsAgg>> {
   const key = csName ? csKey(csName) : null;
@@ -17,13 +21,14 @@ async function computeCsAgg(ctx: any, startAt: number, endAt: number, csName?: s
   const map = new Map<string, CsAgg>();
   const get = (cs: string) => {
     let a = map.get(cs);
-    if (!a) { a = { leads: new Set(), closings: new Set(), revenue: 0 }; map.set(cs, a); }
+    if (!a) { a = { leads: new Set(), closings: new Set(), closedCust: new Set(), revenue: 0 }; map.set(cs, a); }
     return a;
   };
   for (const o of orders) get(o.assignedCsName).leads.add(normalizePhone(o.customerPhone));
   for (const r of recaps) {
     const a = get(r.csName);
     a.closings.add(r.orderIdBerdu || normalizePhone(r.customerPhone));
+    a.closedCust.add(normalizePhone(r.customerPhone));
     a.revenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
   }
   return map;
@@ -38,11 +43,13 @@ export const getCsLeaderboard = query({
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
     const names = Array.from(new Set(Array.from(cur.keys()).concat(Array.from(prev.keys()))));
     const rows = names.map((csName) => {
-      const c = cur.get(csName) ?? { leads: new Set(), closings: new Set(), revenue: 0 };
-      const p = prev.get(csName) ?? { leads: new Set(), closings: new Set(), revenue: 0 };
+      const empty = (): CsAgg => ({ leads: new Set(), closings: new Set(), closedCust: new Set(), revenue: 0 });
+      const c = cur.get(csName) ?? empty();
+      const p = prev.get(csName) ?? empty();
       const leads = c.leads.size, closings = c.closings.size;
       const prevLeads = p.leads.size, prevClosings = p.closings.size;
-      const crNow = cr(closings, leads), prevCr = cr(prevClosings, prevLeads);
+      // CR in customer units on both sides (order double must not inflate the rate).
+      const crNow = cr(c.closedCust.size, leads), prevCr = cr(p.closedCust.size, prevLeads);
       return {
         csName, leads, closings, cr: crNow, revenue: c.revenue,
         prevLeads, prevClosings, prevCr,
@@ -135,26 +142,27 @@ export const getPeriodReport = query({
     const cur = await computeCsAgg(ctx, start, end, args.csName);
     const prev = await computeCsAgg(ctx, prevStart, prevEnd, args.csName);
     const totals = (m: Map<string, CsAgg>) => {
-      const leads = new Set<string>(), closings = new Set<string>();
+      const leads = new Set<string>(), closings = new Set<string>(), closedCust = new Set<string>();
       let revenue = 0;
       m.forEach((a) => {
         a.leads.forEach((p) => leads.add(p));
         a.closings.forEach((c) => closings.add(c));
+        a.closedCust.forEach((p) => closedCust.add(p));
         revenue += a.revenue;
       });
-      return { leads: leads.size, closings: closings.size, revenue };
+      return { leads: leads.size, closings: closings.size, closedCust: closedCust.size, revenue };
     };
     const curT = totals(cur), prevT = totals(prev);
     const cancelled = (
       await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", start).lte("closedAt", end)).collect()
     ).filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && !isInternalTestPhone(r.customerPhone)).length;
     const perCs = Array.from(cur.entries())
-      .map(([csName, a]) => ({ csName, leads: a.leads.size, closings: a.closings.size, cr: cr(a.closings.size, a.leads.size), revenue: a.revenue }))
+      .map(([csName, a]) => ({ csName, leads: a.leads.size, closings: a.closings.size, cr: cr(a.closedCust.size, a.leads.size), revenue: a.revenue }))
       .sort((a, b) => b.closings - a.closings);
     return {
       label, rangeStart: start, rangeEnd: end,
-      leads: curT.leads, closings: curT.closings, cr: cr(curT.closings, curT.leads), revenue: curT.revenue, cancelled,
-      prevLeads: prevT.leads, prevClosings: prevT.closings, prevCr: cr(prevT.closings, prevT.leads), prevRevenue: prevT.revenue,
+      leads: curT.leads, closings: curT.closings, cr: cr(curT.closedCust, curT.leads), revenue: curT.revenue, cancelled,
+      prevLeads: prevT.leads, prevClosings: prevT.closings, prevCr: cr(prevT.closedCust, prevT.leads), prevRevenue: prevT.revenue,
       perCs,
     };
   },
@@ -162,7 +170,7 @@ export const getPeriodReport = query({
 
 type ProductAcc = { leads: Set<string>; closings: Set<string> };
 type CsReportAcc = {
-  leads: Set<string>; closings: Set<string>;
+  leads: Set<string>; closings: Set<string>; closedCust: Set<string>;
   revenue: number; discount: number; rawLeads: number;
   products: Map<string, ProductAcc>;
 };
@@ -223,7 +231,7 @@ export const getDailyReport = query({
     const map = new Map<string, CsReportAcc>();
     const getCs = (cs: string): CsReportAcc => {
       let a = map.get(cs);
-      if (!a) { a = { leads: new Set(), closings: new Set(), revenue: 0, discount: 0, rawLeads: 0, products: new Map() }; map.set(cs, a); }
+      if (!a) { a = { leads: new Set(), closings: new Set(), closedCust: new Set(), revenue: 0, discount: 0, rawLeads: 0, products: new Map() }; map.set(cs, a); }
       return a;
     };
     const getProd = (a: CsReportAcc, prod: string): ProductAcc => {
@@ -243,6 +251,7 @@ export const getDailyReport = query({
       const a = getCs(r.csName);
       const key = r.orderIdBerdu || normalizePhone(r.customerPhone);
       a.closings.add(key);
+      a.closedCust.add(normalizePhone(r.customerPhone));
       a.revenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
       a.discount += r.discount ?? 0;
       const cphone = normalizePhone(r.customerPhone);
@@ -262,7 +271,9 @@ export const getDailyReport = query({
           .sort((x, y) => y.leads - x.leads || x.product.localeCompare(y.product));
         return {
           csName: normalizeCsName(rawName),
-          leads, closings, cr: cr(closings, leads),
+          // CR in customer units (closedCust/leads) — an order double closing twice must
+          // not inflate the rate. closings stays order-level (volume + revenue).
+          leads, closings, cr: cr(a.closedCust.size, leads),
           revenue: a.revenue, discount: a.discount, cpDiscount: cpd(a.discount, closings),
           duplicates: a.rawLeads - leads,
           products,
@@ -272,11 +283,12 @@ export const getDailyReport = query({
       .sort((x, y) => y.closings - x.closings || y.leads - x.leads);
 
     // Grand totals: global union dedup (matches getPeriodReport totals semantics).
-    const gLeads = new Set<string>(), gClos = new Set<string>();
+    const gLeads = new Set<string>(), gClos = new Set<string>(), gClosedCust = new Set<string>();
     let gRevenue = 0, gDiscount = 0, gRawLeads = 0;
     for (const o of orders) { gRawLeads += 1; gLeads.add(normalizePhone(o.customerPhone)); }
     for (const r of recaps) {
       gClos.add(r.orderIdBerdu || normalizePhone(r.customerPhone));
+      gClosedCust.add(normalizePhone(r.customerPhone));
       gRevenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
       gDiscount += r.discount ?? 0;
     }
@@ -284,7 +296,7 @@ export const getDailyReport = query({
     return {
       windowStart: args.startAt, windowEnd: args.endAt,
       totals: {
-        leads: gLeads.size, closings: gClos.size, cr: cr(gClos.size, gLeads.size),
+        leads: gLeads.size, closings: gClos.size, cr: cr(gClosedCust.size, gLeads.size),
         revenue: gRevenue, discount: gDiscount, cpDiscount: cpd(gDiscount, gClos.size),
         duplicates: gRawLeads - gLeads.size,
       },

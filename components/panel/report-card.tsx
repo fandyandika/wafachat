@@ -230,7 +230,7 @@ export function ReportCard({
         {card.duplicates > 0 && (
           <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
             <Copy className="size-3.5 shrink-0" />
-            <span>{card.duplicates} order double — CR sudah dihitung dari leads unik</span>
+            <span>{card.duplicates} order double — tidak dihitung dobel di CR</span>
           </div>
         )}
 

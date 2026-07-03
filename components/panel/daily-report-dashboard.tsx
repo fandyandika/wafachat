@@ -368,7 +368,7 @@ function InfoStrip({ dup, sla, worstSla, loading }: { dup: number; sla: number; 
               <Info className="size-3.5" />
             </TooltipTrigger>
             <TooltipContent>
-              Pelanggan dengan ≥2 order di periode ini — calon mis-rep. CR sudah dihitung dari leads unik, jadi angkanya tetap akurat.
+              Pelanggan dengan ≥2 order di periode ini — calon mis-rep. CR dihitung dari pelanggan unik (leads maupun closing), jadi order double tidak menggelembungkan angka.
             </TooltipContent>
           </Tooltip>
         </span>

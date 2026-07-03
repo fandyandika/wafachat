@@ -1267,10 +1267,14 @@ export const getPerformance = query({
     );
     const totalRevenue = validClosings.reduce((sum, row) => sum + (row.total ?? row.codValue ?? row.nonCodItemPrice ?? 0), 0);
 
+    // CR in customer units: a double-ordering customer closing twice must not inflate
+    // the rate (totalClosing stays order-level for volume/revenue).
+    const closedCustomers = new Set(validClosings.map((r) => normalizePhone(r.customerPhone))).size;
+
     return {
       totalLeads,
       totalClosing,
-      overallCr: totalLeads > 0 ? Math.round((totalClosing / totalLeads) * 1000) / 10 : 0,
+      overallCr: totalLeads > 0 ? Math.round((closedCustomers / totalLeads) * 1000) / 10 : 0,
       totalCod: validClosings.filter((row) => row.paymentMethod === "cod").length,
       totalTransfer: validClosings.filter((row) => row.paymentMethod === "transfer").length,
       totalRevenue,
