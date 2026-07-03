@@ -76,3 +76,23 @@
     background: oklch(0.52 0.22 280 / 0.18);
   }
 }
+
+/* Share-as-image: force the desktop layout when exporting the Laporan board so
+   the PNG looks like the desktop panel even when captured on a phone. Tailwind's
+   md:/xl: breakpoints key off the viewport, so on a mobile screen the grids stay
+   1-column; here we override them explicitly on an off-screen clone at a fixed
+   desktop width. See onShareBoard in daily-report-dashboard.tsx. */
+.capture-desktop {
+  width: 1120px !important;
+  padding: 24px !important;
+  background: var(--background) !important;
+}
+.capture-desktop [data-capture-grid="cards"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+.capture-desktop [data-capture-grid="totals"] {
+  grid-template-columns: repeat(6, minmax(0, 1fr)) !important;
+}
+.capture-desktop [data-capture-sep] {
+  display: block !important;
+}

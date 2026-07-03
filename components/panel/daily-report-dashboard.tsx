@@ -213,11 +213,24 @@ export function DailyReportDashboard() {
   const onShareBoard = async () => {
     if (!boardRef.current || sharingBoard) return;
     setSharingBoard(true);
+    // Capture a clone forced to the desktop layout (fixed width + multi-column
+    // grids) rather than the live board, so a phone export looks like the desktop
+    // panel instead of the 1-column mobile stack. The clone renders off-screen so
+    // the visible page never shifts.
+    const clone = boardRef.current.cloneNode(true) as HTMLElement;
+    clone.classList.add('capture-desktop');
+    clone.style.position = 'fixed';
+    clone.style.top = '0';
+    clone.style.left = '-10000px';
+    clone.style.zIndex = '-1';
+    document.body.appendChild(clone);
     try {
-      await shareNodeAsPng(boardRef.current, `laporan-${dateInputValue}.png`);
+      void clone.offsetWidth; // force reflow at the desktop width before capture
+      await shareNodeAsPng(clone, `laporan-${dateInputValue}.png`);
     } catch {
       /* capture failed (very old browser) — silently ignore */
     } finally {
+      clone.remove();
       setSharingBoard(false);
     }
   };
@@ -302,7 +315,7 @@ export function DailyReportDashboard() {
           ) : (
             <div className="space-y-4">
               {!scopedView && <InfoStrip dup={totalDuplicates} sla={slaBreaches} worstSla={worstSla?.csName} loading={respData === undefined} />}
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              <div data-capture-grid="cards" className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((c) => (
                   <ReportCard
                     key={c.csName}
@@ -353,7 +366,7 @@ function InfoStrip({ dup, sla, worstSla, loading }: { dup: number; sla: number; 
       )}
       {!loading && (
         <>
-          <span className="hidden h-3 w-px bg-border sm:block" />
+          <span data-capture-sep className="hidden h-3 w-px bg-border sm:block" />
           {sla > 0 ? (
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
               <Clock className="size-3.5 shrink-0 text-destructive" />
@@ -434,7 +447,7 @@ function GrandStrip({
     { label: 'CP Diskon', node: <AnimatedNumber value={totals.cpDiscount} format={formatRupiahShort} /> },
   ].filter((it) => !(hideRevenue && it.label === 'Omzet')); // CS staff don't see total-business omzet
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
+    <div data-capture-grid="totals" className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
       {items.map((it) => (
         <MetricCard key={it.label} label={it.label} value={it.node} emphasis={it.emphasis} delta={it.delta} />
       ))}
