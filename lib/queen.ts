@@ -26,16 +26,28 @@ export const QUEEN_TARGETS = {
 
 const clamp100 = (x: number) => Math.max(0, Math.min(100, x));
 
-export function computeQueenCs(
+// Full per-CS scorecard, weighted points per component (0..50 CR / 0..35 closing /
+// 0..15 speed). Rows below the leads floor are scored too but flagged ineligible —
+// the Arena view uses them to show "how far until you're on the board".
+export type QueenScoreRow = {
+  csName: string;
+  score: number; // 0..100
+  eligible: boolean;
+  cr: number;
+  closings: number;
+  respMedianMs: number | null;
+  crWpts: number; // weighted CR points, 0..50
+  closeWpts: number; // weighted closing points, 0..35
+  speedWpts: number; // weighted speed points, 0..15
+};
+
+export function computeQueenScores(
   rows: QueenInput[],
   minLeads = QUEEN_MIN_LEADS,
   minRespCount = QUEEN_MIN_RESP,
-): { csName: string; score: number } | null {
-  const qualified = rows.filter((r) => r.leads >= minLeads);
-  if (qualified.length < 2) return null;
-
+): QueenScoreRow[] {
   const T = QUEEN_TARGETS;
-  const scored = qualified.map((r) => {
+  const scored = rows.map((r) => {
     const crPts = clamp100(((r.cr - T.crFloor) / (T.crCeil - T.crFloor)) * 100);
     const closePts = clamp100((r.closings / T.closingsTarget) * 100);
     // No/low speed sample -> 0 speed points (can't credit unmeasured responsiveness).
@@ -43,9 +55,32 @@ export function computeQueenCs(
     const speedMin = hasSpeed ? (r.respMedianMs as number) / 60000 : T.speedCeilMin;
     const speedPts = clamp100(((T.speedCeilMin - speedMin) / T.speedCeilMin) * 100);
     const score = QUEEN_WEIGHTS.closing * closePts + QUEEN_WEIGHTS.cr * crPts + QUEEN_WEIGHTS.speed * speedPts;
-    return { csName: r.csName, cr: r.cr, closings: r.closings, score };
+    return {
+      csName: r.csName,
+      score,
+      eligible: r.leads >= minLeads,
+      cr: r.cr,
+      closings: r.closings,
+      respMedianMs: r.respMedianMs,
+      crWpts: QUEEN_WEIGHTS.cr * crPts,
+      closeWpts: QUEEN_WEIGHTS.closing * closePts,
+      speedWpts: QUEEN_WEIGHTS.speed * speedPts,
+    };
   });
+  // Eligible first, then the same decisive ordering computeQueenCs always used.
+  scored.sort(
+    (a, b) =>
+      Number(b.eligible) - Number(a.eligible) || b.score - a.score || b.cr - a.cr || b.closings - a.closings,
+  );
+  return scored;
+}
 
-  scored.sort((a, b) => b.score - a.score || b.cr - a.cr || b.closings - a.closings);
-  return { csName: scored[0].csName, score: scored[0].score };
+export function computeQueenCs(
+  rows: QueenInput[],
+  minLeads = QUEEN_MIN_LEADS,
+  minRespCount = QUEEN_MIN_RESP,
+): { csName: string; score: number } | null {
+  const eligible = computeQueenScores(rows, minLeads, minRespCount).filter((r) => r.eligible);
+  if (eligible.length < 2) return null;
+  return { csName: eligible[0].csName, score: eligible[0].score };
 }

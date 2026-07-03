@@ -1,26 +1,33 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Crown, Flame, Medal, PartyPopper, Rocket, ShieldAlert, TrendingUp, Timer } from 'lucide-react';
+import { Crown, Medal, PartyPopper, Rocket, ShieldAlert, Swords, Target, Timer } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CsAvatar } from '@/components/ui/cs-avatar';
+import { QUEEN_MIN_LEADS, type QueenScoreRow } from '@/lib/queen';
 
-// Gamified hero for the CS-scoped Laporan view ("Arena Harian").
-// Pure presentation over data the dashboard already fetched — zero extra queries;
-// the countdown is a client-side ticker only.
+// "Arena Takhta" — gamified hero for the CS-scoped Laporan view. The race is the
+// REAL Queen scorecard (CR 50% + closing 35% + speed 15%), not raw closing count,
+// so the ladder always reflects what actually wins the crown. Pure presentation
+// over data the dashboard already fetched; the countdown is a client ticker only.
 //
-// Live states (before the 16:00 WIB cutoff):
-//   - ladder #1  -> gold "defend the crown" hero (margin vs runner-up, urgency when tight)
-//   - chaser, gap <= CHASE_GAP -> FOMO chase: "kurang N closing buat nyalip <name>" + race bar
-//   - chaser, gap besar -> personal-race mode (milestone + vs-yesterday) so a big gap
-//     never demoralizes — the mountain stays out of sight, progress stays in sight
-//   - no activity yet -> "first closing puts you on the board" starter
-// Final states (past periods): congrats hero for the Queen (confetti), medals +
-// encouraging comeback copy for everyone else.
+// Live states (before the 16:00 WIB lock):
+//   - score #1        -> 👑 PEMEGANG TAKHTA (gold): margin vs runner-up, urgency when tight
+//   - gap <= SENGGOL  -> ⚔️ TINGGAL SENGGOL: points needed to overtake + scoreboard
+//   - gap besar       -> 🏹 PEMBURU TAKHTA: gap + "attack your biggest lever" focus
+//   - not on board    -> 🚀 GERBANG ARENA: leads needed to qualify
+// Final states: 👑 RATU HARI INI + confetti for the Queen; rank + medals + comeback
+// copy for everyone else.
 
-const CHASE_GAP = 5;
+const SENGGOL_GAP_PTS = 10;
 
-type OwnStats = { csName: string; closings: number; cr: number; leads: number };
+function stripCs(name: string): string {
+  return name.replace(/^CS\s+/i, '');
+}
+
+function fmtPts(x: number): string {
+  return String(Math.round(x * 10) / 10).replace(/\.0$/, '');
+}
 
 function useCountdown(endAt: number, enabled: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -70,40 +77,77 @@ function MedalChips({ medals }: { medals: string[] }) {
 function RankPill({ rank, total }: { rank: number; total: number }) {
   return (
     <span className="inline-flex items-center rounded-full bg-background/70 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-muted-foreground ring-1 ring-border">
-      #{rank} dari {total} CS
+      #{rank} papan skor · {total} CS
     </span>
   );
 }
 
+// Mini scorecard: the three Queen components as weighted-point bars, with the
+// biggest remaining headroom flagged — "this is where the points are".
+function ScoreBars({ row, showHint }: { row: QueenScoreRow; showHint: boolean }) {
+  const items = [
+    { key: 'cr', label: `CR ${fmtPts(row.cr)}%`, pts: row.crWpts, max: 50 },
+    { key: 'close', label: `${row.closings} closing`, pts: row.closeWpts, max: 35 },
+    {
+      key: 'speed',
+      label: row.respMedianMs != null ? `Respon ${Math.max(1, Math.round(row.respMedianMs / 60000))}m` : 'Respon –',
+      pts: row.speedWpts,
+      max: 15,
+    },
+  ];
+  const biggest = items.reduce((best, it) => ((it.max - it.pts) > (best.max - best.pts) ? it : best), items[0]);
+  return (
+    <div className="space-y-1.5">
+      {items.map((it) => (
+        <div key={it.key} className="flex items-center gap-2">
+          <span className="w-24 shrink-0 truncate text-[11px] tabular-nums text-muted-foreground">{it.label}</span>
+          <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn('h-full rounded-full transition-all duration-700', showHint && it.key === biggest.key ? 'bg-amber-400' : 'bg-primary')}
+              style={{ width: `${Math.round((it.pts / it.max) * 100)}%` }}
+            />
+          </div>
+          <span className="w-14 shrink-0 text-right text-[11px] font-medium tabular-nums text-muted-foreground">
+            {fmtPts(it.pts)}/{it.max}
+          </span>
+          {showHint && it.key === biggest.key && (
+            <span className="shrink-0 text-[10px] font-bold uppercase text-amber-600">← poin</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ArenaHero({
-  rank,
-  totalCs,
-  own,
-  nextUp,
-  runnerUp,
-  queenName,
+  scores,
+  ownName,
+  ownLeads,
   medals,
   deltaClosings,
   isCurrent,
   endAt,
   titleDate,
   avatarUrl,
+  queenName,
 }: {
-  rank: number; // 0 when the CS has no row yet today
-  totalCs: number;
-  own: OwnStats | null;
-  nextUp: { csName: string; closings: number } | null; // one ladder rung above
-  runnerUp: { csName: string; closings: number } | null; // rank 2, when self is #1
-  queenName?: string; // scorecard Queen (closing+CR+speed) — the real crown
+  scores: QueenScoreRow[]; // sorted output of computeQueenScores (eligible first)
+  ownName: string | null; // raw csName matching a scores row; null = no activity yet
+  ownLeads: number;
   medals: string[];
   deltaClosings: number | null; // own closings vs yesterday (full day)
   isCurrent: boolean;
   endAt: number;
   titleDate: string;
   avatarUrl?: string;
+  queenName?: string; // final crown holder (undefined when the board didn't form)
 }) {
   const remainMs = useCountdown(endAt, isCurrent);
   const live = isCurrent && remainMs > 0;
+
+  const eligible = scores.filter((s) => s.eligible);
+  const own = ownName ? scores.find((s) => s.csName === ownName) ?? null : null;
+  const rank = own && own.eligible ? eligible.findIndex((s) => s.csName === own.csName) + 1 : 0;
 
   const countdown = live ? (
     <span className="inline-flex items-center gap-1 text-[11px] font-medium tabular-nums text-muted-foreground">
@@ -111,15 +155,23 @@ export function ArenaHero({
     </span>
   ) : null;
 
-  // ---- Starter: no activity yet today -------------------------------------
-  if (live && (!own || rank === 0)) {
+  const paceLine = deltaClosings != null && deltaClosings > 0 ? (
+    <div className="text-xs font-medium text-positive">📈 +{deltaClosings} closing dibanding kemarin — ritme naik!</div>
+  ) : null;
+
+  // ---- Live · not on the scoreboard yet ------------------------------------
+  if (live && (!own || !own.eligible)) {
+    const needLeads = Math.max(0, QUEEN_MIN_LEADS - ownLeads);
     return (
       <div className="relative overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm">
         <div className="flex items-center gap-3">
           <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground"><Rocket className="size-5" /></span>
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-bold text-foreground">Papan hari ini masih terbuka 🚀</div>
-            <div className="text-xs text-muted-foreground">1 closing pertama langsung menempatkanmu di klasemen.</div>
+            <div className="text-[11px] font-bold uppercase tracking-wide text-accent-foreground">Gerbang Arena</div>
+            <div className="text-sm font-bold text-foreground">
+              {own ? `${needLeads} leads lagi buat masuk papan skor Takhta 🚀` : 'Leads pertama membuka papan skor Takhta 🚀'}
+            </div>
+            <div className="text-xs text-muted-foreground">Skor = CR (50) + closing (35) + kecepatan respon (15).</div>
           </div>
         </div>
         {countdown && <div className="mt-2">{countdown}</div>}
@@ -128,10 +180,11 @@ export function ArenaHero({
   }
   if (!own) return null;
 
-  // ---- Live · ladder leader ------------------------------------------------
+  // ---- Live · throne holder --------------------------------------------------
   if (live && rank === 1) {
-    const margin = runnerUp ? own.closings - runnerUp.closings : own.closings;
-    const tight = runnerUp != null && margin <= 2;
+    const runner = eligible[1] ?? null;
+    const margin = runner ? own.score - runner.score : own.score;
+    const tight = runner != null && margin <= 3;
     return (
       <div className="relative overflow-hidden rounded-2xl border border-gold/40 bg-gradient-to-r from-gold/15 via-accent to-card p-4 shadow-sm ring-1 ring-gold/20">
         <div className="flex items-center gap-3">
@@ -139,88 +192,71 @@ export function ArenaHero({
           <CsAvatar name={own.csName} size="md" src={avatarUrl} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-bold uppercase tracking-wide text-gold">Pemimpin klasemen</span>
-              <RankPill rank={1} total={totalCs} />
-            </div>
-            <div className="text-base font-bold tracking-tight text-foreground">Pertahankan mahkotamu, {own.csName}!</div>
-            {tight ? (
-              <div className="mt-0.5 flex items-center gap-1 text-xs font-semibold text-destructive">
-                <ShieldAlert className="size-3.5 shrink-0" /> {runnerUp!.csName} tinggal selisih {margin} closing — jangan lengah!
-              </div>
-            ) : runnerUp ? (
-              <div className="text-xs text-muted-foreground">Unggul <span className="font-semibold text-foreground">{margin} closing</span> dari {runnerUp.csName}.</div>
-            ) : (
-              <div className="text-xs text-muted-foreground">{own.closings} closing sejauh ini — terus jaga ritme.</div>
-            )}
-          </div>
-        </div>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-          {countdown}
-          <span className="text-[11px] text-muted-foreground">Queen final dihitung dari closing + CR + speed saat papan dikunci.</span>
-        </div>
-      </div>
-    );
-  }
-
-  // ---- Live · chaser ---------------------------------------------------------
-  if (live && rank > 1 && nextUp) {
-    const gap = nextUp.closings - own.closings + 1; // closings needed to OVERTAKE
-    if (gap <= CHASE_GAP) {
-      const target = nextUp.closings + 1;
-      const pct = Math.min(100, Math.round((own.closings / target) * 100));
-      return (
-        <div className="relative overflow-hidden rounded-2xl border border-amber-300/70 bg-gradient-to-r from-amber-50 via-card to-card p-4 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-600"><Flame className="size-6" /></span>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-wide text-amber-600">Kejar mahkota</span>
-                <RankPill rank={rank} total={totalCs} />
-              </div>
-              <div className="text-base font-bold tracking-tight text-foreground">
-                Kurang <span className="text-amber-600">{gap} closing</span> buat nyalip {nextUp.csName}!
-              </div>
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="h-2 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-amber-500 transition-all duration-700" style={{ width: `${pct}%` }} />
-            </div>
-            <div className="mt-1 flex items-center justify-between text-[11px] tabular-nums text-muted-foreground">
-              <span>{own.closings} closing kamu</span>
-              <span>{target} = posisi #{rank - 1}</span>
-            </div>
-          </div>
-          {countdown && <div className="mt-2">{countdown}</div>}
-        </div>
-      );
-    }
-    // Big gap: race yourself, not the mountain.
-    const milestone = Math.max(5, Math.ceil((own.closings + 1) / 5) * 5);
-    const need = milestone - own.closings;
-    return (
-      <div className="relative overflow-hidden rounded-2xl border border-border bg-card p-4 shadow-sm">
-        <div className="flex items-center gap-3">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground"><TrendingUp className="size-6" /></span>
-          <div className="min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-bold uppercase tracking-wide text-accent-foreground">Race pribadi</span>
-              <RankPill rank={rank} total={totalCs} />
+              <span className="text-[11px] font-bold uppercase tracking-wide text-gold">Pemegang Takhta</span>
+              <RankPill rank={1} total={eligible.length} />
             </div>
             <div className="text-base font-bold tracking-tight text-foreground">
-              {need} closing lagi tembus <span className="text-primary">{milestone}</span> hari ini 💪
+              Takhta belum dikunci — pertahankan, {stripCs(own.csName)}!
             </div>
-            {deltaClosings != null && deltaClosings > 0 && (
-              <div className="text-xs font-medium text-positive">📈 +{deltaClosings} closing dibanding kemarin — ritme naik!</div>
+            {tight ? (
+              <div className="mt-0.5 flex items-center gap-1 text-xs font-semibold text-destructive">
+                <ShieldAlert className="size-3.5 shrink-0" /> {stripCs(runner!.csName)} tinggal {fmtPts(margin)} poin di belakang — jangan lengah!
+              </div>
+            ) : runner ? (
+              <div className="text-xs text-muted-foreground">
+                Skor <span className="font-semibold tabular-nums text-foreground">{fmtPts(own.score)}</span> · unggul {fmtPts(margin)} poin dari {stripCs(runner.csName)}.
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground">Skor {fmtPts(own.score)} — belum ada penantang di papan.</div>
             )}
           </div>
         </div>
+        <div className="mt-3"><ScoreBars row={own} showHint={false} /></div>
         {countdown && <div className="mt-2">{countdown}</div>}
       </div>
     );
   }
 
-  // ---- Final states (period closed / past dates) ----------------------------
+  // ---- Live · chaser -----------------------------------------------------------
+  if (live && rank > 1) {
+    const nextUp = eligible[rank - 2];
+    const gap = nextUp.score - own.score;
+    const senggol = gap <= SENGGOL_GAP_PTS;
+    return (
+      <div
+        className={cn(
+          'relative overflow-hidden rounded-2xl border p-4 shadow-sm',
+          senggol ? 'border-amber-300/70 bg-gradient-to-r from-amber-50 via-card to-card' : 'border-border bg-card',
+        )}
+      >
+        <div className="flex items-center gap-3">
+          <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-xl', senggol ? 'bg-amber-100 text-amber-600' : 'bg-accent text-accent-foreground')}>
+            {senggol ? <Swords className="size-6" /> : <Target className="size-6" />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={cn('text-[11px] font-bold uppercase tracking-wide', senggol ? 'text-amber-600' : 'text-accent-foreground')}>
+                {senggol ? 'Tinggal Senggol' : 'Pemburu Takhta'}
+              </span>
+              <RankPill rank={rank} total={eligible.length} />
+            </div>
+            <div className="text-base font-bold tracking-tight text-foreground">
+              {senggol ? (
+                <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — senggol takhtanya! ⚔️</>
+              ) : (
+                <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — serang poin terbesarmu 🏹</>
+              )}
+            </div>
+            {paceLine}
+          </div>
+        </div>
+        <div className="mt-3"><ScoreBars row={own} showHint /></div>
+        {countdown && <div className="mt-2">{countdown}</div>}
+      </div>
+    );
+  }
+
+  // ---- Final states (period locked / past dates) --------------------------------
   const isQueen = queenName != null && queenName === own.csName;
   if (isQueen) {
     return (
@@ -230,9 +266,11 @@ export function ArenaHero({
           <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-gold/25 text-gold"><Crown className="size-6" /></span>
           <CsAvatar name={own.csName} size="md" src={avatarUrl} />
           <div className="min-w-0 flex-1">
-            <div className="text-[11px] font-bold uppercase tracking-wide text-gold">Queen CS · {titleDate}</div>
-            <div className="text-base font-bold tracking-tight text-foreground">Selamat, {own.csName}! Mahkotanya milikmu 🎉</div>
-            <div className="text-xs tabular-nums text-muted-foreground">{own.closings} closing · CR {Math.round(own.cr * 10) / 10}% — kombinasi terbaik hari itu.</div>
+            <div className="text-[11px] font-bold uppercase tracking-wide text-gold">Ratu Hari Ini · {titleDate}</div>
+            <div className="text-base font-bold tracking-tight text-foreground">SAH! Takhta milik {stripCs(own.csName)} 🎉</div>
+            <div className="text-xs tabular-nums text-muted-foreground">
+              Skor {fmtPts(own.score)} · {own.closings} closing · CR {fmtPts(own.cr)}% — kombinasi terbaik hari itu.
+            </div>
           </div>
         </div>
         {medals.length > 0 && <div className="relative mt-2"><MedalChips medals={medals} /></div>}
@@ -245,16 +283,18 @@ export function ArenaHero({
         <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground"><PartyPopper className="size-6" /></span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-bold uppercase tracking-wide text-accent-foreground">Hasil final · {titleDate}</span>
-            <RankPill rank={rank} total={totalCs} />
+            <span className="text-[11px] font-bold uppercase tracking-wide text-accent-foreground">Papan dikunci · {titleDate}</span>
+            {rank > 0 && <RankPill rank={rank} total={eligible.length} />}
           </div>
           <div className="text-base font-bold tracking-tight text-foreground">
-            {rank === 1 && queenName
-              ? <>Closing kamu terbanyak 🏆 — mahkota ke {queenName} lewat CR+speed. Rebut lagi besok!</>
-              : <>Finish #{rank} dengan {own.closings} closing. Besok mahkotanya bisa milikmu 👑</>}
+            {rank > 0
+              ? <>Finish #{rank} · skor {fmtPts(own.score)}. Besok takhtanya bisa milikmu 👑</>
+              : <>Papan skor butuh ≥{QUEEN_MIN_LEADS} leads — besok gas dari leads pertama 🚀</>}
           </div>
-          {queenName && rank !== 1 && (
-            <div className="text-xs text-muted-foreground">Queen {titleDate}: {queenName}. Hari baru, papan kosong — semua mulai dari 0 lagi.</div>
+          {queenName && (
+            <div className="text-xs text-muted-foreground">
+              Takhta {titleDate} milik {stripCs(queenName)}. Hari baru, papan kosong — semua mulai dari 0.
+            </div>
           )}
         </div>
       </div>

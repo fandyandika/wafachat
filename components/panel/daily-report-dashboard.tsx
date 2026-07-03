@@ -22,7 +22,7 @@ import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/
 import {
   JAK_MS, DATA_CUTOFF_MS, clampStartToCutoff, currentReportLabelDate, reportWindowForLabelDate, wibDateParts,
 } from '@/components/panel/report-window';
-import { computeQueenCs } from '@/lib/queen';
+import { computeQueenCs, computeQueenScores } from '@/lib/queen';
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 const DAYS_SHORT = ['Ahad', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
@@ -165,22 +165,20 @@ export function DailyReportDashboard() {
     }
   }
   // Queen scorecard: team view AND the CS-scoped Arena (the crown is one truth
-  // everywhere; the scoped CS needs it for congrats/FOMO states).
-  const queen = scopedView || !csName
-    ? computeQueenCs(
-        allCs.map((c) => {
-          const r = respByCs.get(csKey(c.csName));
-          return {
-            csName: c.csName,
-            closings: c.closings,
-            cr: c.cr,
-            leads: c.leads,
-            respMedianMs: r?.firstReplyMedianMs ?? null,
-            respCount: r?.firstReplyCount ?? 0,
-          };
-        }),
-      )
-    : null;
+  // everywhere; the scoped CS races the same score that wins it).
+  const queenRows = allCs.map((c) => {
+    const r = respByCs.get(csKey(c.csName));
+    return {
+      csName: c.csName,
+      closings: c.closings,
+      cr: c.cr,
+      leads: c.leads,
+      respMedianMs: r?.firstReplyMedianMs ?? null,
+      respCount: r?.firstReplyCount ?? 0,
+    };
+  });
+  const queenScores = computeQueenScores(queenRows);
+  const queen = scopedView || !csName ? computeQueenCs(queenRows) : null;
   const queenName = queen?.csName;
   const queenCard = queenName ? allCs.find((c) => c.csName === queenName) : undefined;
 
@@ -303,11 +301,9 @@ export function DailyReportDashboard() {
         <div ref={boardRef} className="space-y-6">
           {scopedView && (
             <ArenaHero
-              rank={scopedRank}
-              totalCs={totalCsCount}
-              own={cards[0] ? { csName: cards[0].csName, closings: cards[0].closings, cr: cards[0].cr, leads: cards[0].leads } : null}
-              nextUp={scopedRank > 1 ? { csName: allCs[scopedRank - 2].csName.replace(/^CS\s+/i, ''), closings: allCs[scopedRank - 2].closings } : null}
-              runnerUp={scopedRank === 1 && allCs.length > 1 ? { csName: allCs[1].csName.replace(/^CS\s+/i, ''), closings: allCs[1].closings } : null}
+              scores={queenScores}
+              ownName={cards[0]?.csName ?? null}
+              ownLeads={cards[0]?.leads ?? 0}
               queenName={queenName}
               medals={cards[0] ? rewardsByCs.get(cards[0].csName) ?? [] : []}
               deltaClosings={cards[0] ? deltaFor(cards[0])?.closings ?? null : null}
