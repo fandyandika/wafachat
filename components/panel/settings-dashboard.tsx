@@ -24,10 +24,11 @@ type CsRow = {
 };
 
 function TeamSection() {
-  const [users, setUsers] = useState<Array<{ email: string; name: string; role: 'admin' | 'cs'; isActive: boolean }>>([]);
-  const [form, setForm] = useState<{ email: string; name: string; role: 'admin' | 'cs'; password: string }>({ email: '', name: '', role: 'cs', password: '' });
+  const [users, setUsers] = useState<Array<{ email: string; name: string; role: 'admin' | 'cs'; csName?: string; isActive: boolean }>>([]);
+  const [form, setForm] = useState<{ email: string; name: string; role: 'admin' | 'cs'; password: string; csName: string }>({ email: '', name: '', role: 'cs', password: '', csName: '' });
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const csOptions = (useQuery(api.cs.listCs, {}) ?? []).map((c) => c.csName);
 
   async function load() {
     const r = await fetch('/api/admin/users');
@@ -45,7 +46,8 @@ function TeamSection() {
   }
   async function addUser() {
     if (!form.email || !form.name || !form.password) { setErr('Lengkapi semua field'); return; }
-    if (await post({ action: 'create', ...form })) setForm({ email: '', name: '', role: 'cs', password: '' });
+    if (form.role === 'cs' && !form.csName) { setErr('Pilih CS untuk akun ini'); return; }
+    if (await post({ action: 'create', ...form })) setForm({ email: '', name: '', role: 'cs', password: '', csName: '' });
   }
 
   return (
@@ -55,14 +57,27 @@ function TeamSection() {
         {err && <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{err}</div>}
         <div className="space-y-2">
           {users.map((u) => (
-            <div key={u.email} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-foreground">{u.name} <span className="text-xs text-muted-foreground">({u.role})</span></div>
+            <div key={u.email} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-foreground">
+                  {u.name} <span className="text-xs text-muted-foreground">({u.role})</span>
+                  {u.role === 'cs' && (
+                    <span className={cn('ml-1 text-xs', u.csName ? 'text-primary' : 'text-amber-600')}>· {u.csName ? `CS ${u.csName}` : 'belum di-assign'}</span>
+                  )}
+                </div>
                 <div className="truncate text-xs text-muted-foreground">{u.email}{!u.isActive && ' — nonaktif'}</div>
               </div>
-              <div className="flex shrink-0 gap-2">
+              <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                {u.role === 'cs' && (
+                  <select className="rounded-md border border-input bg-background px-2 py-1 text-xs" value={u.csName ?? ''} disabled={busy} onChange={(e) => post({ action: 'update', email: u.email, csName: e.target.value })} title="Assign akun ini ke CS tertentu">
+                    <option value="">— pilih CS —</option>
+                    {csOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                )}
+                <Button variant="outline" size="sm" disabled={busy} onClick={() => { const n = prompt(`Nama baru untuk ${u.email}`, u.name); if (n && n.trim()) post({ action: 'update', email: u.email, name: n.trim() }); }}>Rename</Button>
                 <Button variant="outline" size="sm" disabled={busy} onClick={() => { const p = prompt(`Password baru untuk ${u.email}`); if (p) post({ action: 'reset', email: u.email, password: p }); }}>Reset</Button>
                 <Button variant="outline" size="sm" disabled={busy} onClick={() => post({ action: 'setActive', email: u.email, isActive: !u.isActive })}>{u.isActive ? 'Nonaktifkan' : 'Aktifkan'}</Button>
+                <Button variant="outline" size="sm" disabled={busy} className="text-destructive hover:text-destructive" onClick={() => { if (confirm(`Hapus user ${u.email}? Tidak bisa dibatalkan.`)) post({ action: 'delete', email: u.email }); }}>Hapus</Button>
               </div>
             </div>
           ))}
@@ -74,6 +89,14 @@ function TeamSection() {
             <option value="cs">CS</option>
             <option value="admin">Admin</option>
           </select>
+          {form.role === 'cs' ? (
+            <select className="rounded-lg border border-input bg-background px-3 py-2 text-sm" value={form.csName} onChange={(e) => setForm({ ...form, csName: e.target.value })} title="Akun ini cuma bisa liat CS ini">
+              <option value="">— assign ke CS —</option>
+              {csOptions.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          ) : (
+            <div />
+          )}
           <input className="rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Password awal" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           <Button disabled={busy} onClick={addUser} className="sm:col-span-2">Tambah user</Button>
         </div>

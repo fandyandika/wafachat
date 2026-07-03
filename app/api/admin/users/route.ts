@@ -22,7 +22,19 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const s = secret();
   if (body.action === 'create') {
-    const r = await convex.mutation(api.auth.createUser, { authSecret: s, email: String(body.email), name: String(body.name), role: body.role === 'admin' ? 'admin' : 'cs', password: String(body.password) });
+    const r = await convex.mutation(api.auth.createUser, { authSecret: s, email: String(body.email), name: String(body.name), role: body.role === 'admin' ? 'admin' : 'cs', password: String(body.password), csName: body.csName ? String(body.csName) : undefined });
+    return NextResponse.json(r, { status: r.ok ? 200 : 400 });
+  }
+  if (body.action === 'update') {
+    const r = await convex.mutation(api.auth.updateUser, {
+      authSecret: s, email: String(body.email),
+      name: body.name !== undefined ? String(body.name) : undefined,
+      csName: body.csName !== undefined ? String(body.csName) : undefined,
+    });
+    return NextResponse.json(r, { status: r.ok ? 200 : 400 });
+  }
+  if (body.action === 'delete') {
+    const r = await convex.mutation(api.auth.deleteUser, { authSecret: s, email: String(body.email) });
     return NextResponse.json(r, { status: r.ok ? 200 : 400 });
   }
   if (body.action === 'reset') {

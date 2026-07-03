@@ -51,7 +51,11 @@ export function DailyReportDashboard() {
   const dayParam = sp.get('day');
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
-  const isCs = useMe()?.role === 'cs'; // hide total-business omzet from CS staff
+  const me = useMe();
+  const isCs = me?.role === 'cs';
+  // A CS account is scoped to one CS: show only their card + rank, hide team totals/omzet/queen.
+  const scopedCs = isCs ? (me?.csName || me?.name) : undefined;
+  const scopedView = isCs && !!scopedCs;
 
   const now = Date.now();
   const current = useMemo(() => currentReportLabelDate(now), [now]);
@@ -139,11 +143,15 @@ export function DailyReportDashboard() {
     }
   };
 
-  const cards = ((report?.cs ?? []) as ReportCardData[]).filter((c) => !csName || c.csName === csName);
+  const allCs = (report?.cs ?? []) as ReportCardData[];
+  // Scoped CS forces the filter to their own CS (csKey-tolerant), ignoring any URL filter.
+  const effectiveCsName = scopedCs ?? csName;
+  const cards = allCs.filter((c) => !effectiveCsName || csKey(c.csName) === csKey(effectiveCsName));
   const totalDuplicates = cards.reduce((s, c) => s + (c.duplicates ?? 0), 0);
+  const scopedRank = scopedView ? allCs.findIndex((c) => csKey(c.csName) === csKey(scopedCs!)) + 1 : 0;
+  const totalCsCount = allCs.length;
 
   // Team highlights (only on the unfiltered team view). Derived, not new data.
-  const allCs = (report?.cs ?? []) as ReportCardData[];
   const topClosing = allCs.reduce<ReportCardData | null>((best, c) => (!best || c.closings > best.closings ? c : best), null);
   const topCr = allCs
     .filter((c) => c.leads >= 3)
@@ -155,7 +163,7 @@ export function DailyReportDashboard() {
       fastestResp = { csName: c.csName, ms: r.firstReplyMedianMs };
     }
   }
-  const queen = !csName
+  const queen = !scopedView && !csName
     ? computeQueenCs(
         allCs.map((c) => {
           const r = respByCs.get(csKey(c.csName));
@@ -270,8 +278,19 @@ export function DailyReportDashboard() {
         <div className="text-sm text-muted-foreground">Memuat…</div>
       ) : (
         <div ref={boardRef} className="space-y-6">
-          <GrandStrip totals={report.totals} prev={prevValid ? (prevReport?.totals ?? null) : null} hideRevenue={isCs} />
-          {queen && queenCard && (
+          {scopedView && scopedRank > 0 && (
+            <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-base font-bold tabular-nums text-primary-foreground">#{scopedRank}</span>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-foreground">Peringkat kamu: #{scopedRank} dari {totalCsCount} CS</div>
+                <div className="text-xs text-muted-foreground">berdasarkan jumlah closing · {titleDate}</div>
+              </div>
+            </div>
+          )}
+          {!scopedView && (
+            <GrandStrip totals={report.totals} prev={prevValid ? (prevReport?.totals ?? null) : null} hideRevenue={isCs} />
+          )}
+          {!scopedView && queen && queenCard && (
             <QueenHero name={queenCard.csName} closings={queenCard.closings} cr={queenCard.cr} avatarByKey={avatarByKey} />
           )}
           {cards.length === 0 ? (
@@ -282,7 +301,7 @@ export function DailyReportDashboard() {
             </div>
           ) : (
             <div className="space-y-4">
-              <InfoStrip dup={totalDuplicates} sla={slaBreaches} worstSla={worstSla?.csName} loading={respData === undefined} />
+              {!scopedView && <InfoStrip dup={totalDuplicates} sla={slaBreaches} worstSla={worstSla?.csName} loading={respData === undefined} />}
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((c) => (
                   <ReportCard

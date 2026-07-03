@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 
-export type Session = { userId: string; role: "admin" | "cs"; name: string; email: string };
+export type Session = { userId: string; role: "admin" | "cs"; name: string; email: string; csName?: string };
 
 function key(): Uint8Array {
   const secret = process.env.PANEL_AUTH_SECRET;
@@ -9,7 +9,7 @@ function key(): Uint8Array {
 }
 
 export async function signSession(s: Session): Promise<string> {
-  return new SignJWT({ userId: s.userId, role: s.role, name: s.name, email: s.email })
+  return new SignJWT({ userId: s.userId, role: s.role, name: s.name, email: s.email, csName: s.csName })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("7d")
@@ -20,11 +20,11 @@ export async function verifySession(token?: string): Promise<Session | null> {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, key());
-    const { userId, role, name, email } = payload as Record<string, unknown>;
+    const { userId, role, name, email, csName } = payload as Record<string, unknown>;
     if (typeof userId !== "string" || (role !== "admin" && role !== "cs") || typeof name !== "string" || typeof email !== "string") {
       return null;
     }
-    return { userId, role, name, email };
+    return { userId, role, name, email, csName: typeof csName === "string" ? csName : undefined };
   } catch {
     return null;
   }

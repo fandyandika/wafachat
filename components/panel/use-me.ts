@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 
-export type Me = { name: string; role: 'admin' | 'cs'; email: string };
+export type Me = { name: string; role: 'admin' | 'cs'; email: string; csName?: string };
 
 // Fetch the current session (name/role/email) once. Used to scope UI by role —
 // e.g. hide admin-only nav + total-business figures from CS staff. The route guard

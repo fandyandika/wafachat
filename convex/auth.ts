@@ -21,12 +21,12 @@ export const verifyCredentials = mutation({
     if (!user || !user.isActive) return { ok: false as const };
     if (!(await verifyPassword(args.password, user.passwordHash))) return { ok: false as const };
     await ctx.db.patch(user._id, { lastLoginAt: Date.now() });
-    return { ok: true as const, userId: user._id, role: user.role, name: user.name, email: user.email };
+    return { ok: true as const, userId: user._id, role: user.role, name: user.name, email: user.email, csName: user.csName };
   },
 });
 
 export const createUser = mutation({
-  args: { authSecret: v.string(), email: v.string(), name: v.string(), role: roleValidator, password: v.string() },
+  args: { authSecret: v.string(), email: v.string(), name: v.string(), role: roleValidator, password: v.string(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     checkSecret(args.authSecret);
     const email = normEmail(args.email);
@@ -35,8 +35,38 @@ export const createUser = mutation({
     const now = Date.now();
     await ctx.db.insert("users", {
       email, name: args.name, passwordHash: await hashPassword(args.password),
-      role: args.role, isActive: true, createdAt: now, updatedAt: now,
+      role: args.role, csName: args.role === "cs" ? (args.csName || undefined) : undefined,
+      isActive: true, createdAt: now, updatedAt: now,
     });
+    return { ok: true as const };
+  },
+});
+
+export const updateUser = mutation({
+  args: { authSecret: v.string(), email: v.string(), name: v.optional(v.string()), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    checkSecret(args.authSecret);
+    const user = await ctx.db.query("users").withIndex("by_email", (q) => q.eq("email", normEmail(args.email))).unique();
+    if (!user) return { ok: false as const, error: "not found" };
+    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    if (args.name !== undefined && args.name.trim()) patch.name = args.name.trim();
+    if (args.csName !== undefined) patch.csName = args.csName.trim() || undefined; // "" clears the assignment
+    await ctx.db.patch(user._id, patch);
+    return { ok: true as const };
+  },
+});
+
+export const deleteUser = mutation({
+  args: { authSecret: v.string(), email: v.string() },
+  handler: async (ctx, args) => {
+    checkSecret(args.authSecret);
+    const user = await ctx.db.query("users").withIndex("by_email", (q) => q.eq("email", normEmail(args.email))).unique();
+    if (!user) return { ok: false as const, error: "not found" };
+    if (user.role === "admin") {
+      const admins = (await ctx.db.query("users").collect()).filter((u) => u.role === "admin");
+      if (admins.length <= 1) return { ok: false as const, error: "tidak bisa hapus admin terakhir" };
+    }
+    await ctx.db.delete(user._id);
     return { ok: true as const };
   },
 });
@@ -68,7 +98,7 @@ export const listUsers = query({
   handler: async (ctx, args) => {
     checkSecret(args.authSecret);
     const users = await ctx.db.query("users").collect();
-    return users.map((u) => ({ email: u.email, name: u.name, role: u.role, isActive: u.isActive, lastLoginAt: u.lastLoginAt }));
+    return users.map((u) => ({ email: u.email, name: u.name, role: u.role, csName: u.csName, isActive: u.isActive, lastLoginAt: u.lastLoginAt }));
   },
 });
 

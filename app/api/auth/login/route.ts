@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
   if (!result.ok) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const token = await signSession({ userId: result.userId!, role: result.role!, name: result.name!, email: result.email! });
+  const token = await signSession({ userId: result.userId!, role: result.role!, name: result.name!, email: result.email!, csName: result.csName ?? undefined });
   const res = NextResponse.json({ ok: true });
   res.cookies.set('auth_token', token, {
     httpOnly: true,

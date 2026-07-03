@@ -216,6 +216,9 @@ export default defineSchema({
     name: v.string(),
     passwordHash: v.string(),
     role: v.union(v.literal("admin"), v.literal("cs")),
+    // For role "cs": which CS this account represents (e.g. "Azelia"). The panel scopes
+    // Laporan + Follow-up to this CS so the staffer only sees their own data.
+    csName: v.optional(v.string()),
     isActive: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),

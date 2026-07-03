@@ -500,7 +500,7 @@ function ReadOnlyConversation({ row, onBack }: { row: ClosedRow; onBack?: () => 
 
 // Main dashboard
 export function FollowUpDashboard() {
-  const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs' } | null>(null);
+  const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs'; csName?: string } | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -528,7 +528,9 @@ export function FollowUpDashboard() {
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const isCs = me?.role === 'cs';
   const [csFilter, setCsFilter] = useState<string>(cs && cs !== 'all' ? cs : 'all');
-  const csName = isCs ? me!.name : csFilter !== 'all' ? csFilter : undefined;
+  // Scoped CS: force to their assigned CS (csName), not the display name. Fallback to name for
+  // legacy accounts where csName wasn't set yet.
+  const csName = isCs ? (me!.csName || me!.name) : csFilter !== 'all' ? csFilter : undefined;
 
   // Candidates + KPI are the always-on heavy queries. Fetch them ON DEMAND (page load /
   // filter change / after an action / manual Refresh) instead of a live subscription —
