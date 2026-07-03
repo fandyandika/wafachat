@@ -16,6 +16,7 @@ import { formatRupiahShort } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { useResponseTimes } from '@/components/panel/use-response-times';
 import { useMe } from '@/components/panel/use-me';
+import { ArenaHero } from '@/components/panel/arena-hero';
 import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
 import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/panel/report-card';
 import {
@@ -163,7 +164,9 @@ export function DailyReportDashboard() {
       fastestResp = { csName: c.csName, ms: r.firstReplyMedianMs };
     }
   }
-  const queen = !scopedView && !csName
+  // Queen scorecard: team view AND the CS-scoped Arena (the crown is one truth
+  // everywhere; the scoped CS needs it for congrats/FOMO states).
+  const queen = scopedView || !csName
     ? computeQueenCs(
         allCs.map((c) => {
           const r = respByCs.get(csKey(c.csName));
@@ -298,14 +301,21 @@ export function DailyReportDashboard() {
         <div className="text-sm text-muted-foreground">Memuat…</div>
       ) : (
         <div ref={boardRef} className="space-y-6">
-          {scopedView && scopedRank > 0 && (
-            <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-base font-bold tabular-nums text-primary-foreground">#{scopedRank}</span>
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-foreground">Peringkat kamu: #{scopedRank} dari {totalCsCount} CS</div>
-                <div className="text-xs text-muted-foreground">berdasarkan jumlah closing · {titleDate}</div>
-              </div>
-            </div>
+          {scopedView && (
+            <ArenaHero
+              rank={scopedRank}
+              totalCs={totalCsCount}
+              own={cards[0] ? { csName: cards[0].csName, closings: cards[0].closings, cr: cards[0].cr, leads: cards[0].leads } : null}
+              nextUp={scopedRank > 1 ? { csName: allCs[scopedRank - 2].csName.replace(/^CS\s+/i, ''), closings: allCs[scopedRank - 2].closings } : null}
+              runnerUp={scopedRank === 1 && allCs.length > 1 ? { csName: allCs[1].csName.replace(/^CS\s+/i, ''), closings: allCs[1].closings } : null}
+              queenName={queenName}
+              medals={cards[0] ? rewardsByCs.get(cards[0].csName) ?? [] : []}
+              deltaClosings={cards[0] ? deltaFor(cards[0])?.closings ?? null : null}
+              isCurrent={isCurrent}
+              endAt={endAt}
+              titleDate={titleDate}
+              avatarUrl={cards[0] ? avatarByKey.get(csKey(cards[0].csName)) ?? undefined : undefined}
+            />
           )}
           {!scopedView && (
             <GrandStrip totals={report.totals} prev={prevValid ? (prevReport?.totals ?? null) : null} hideRevenue={isCs} />
@@ -322,7 +332,8 @@ export function DailyReportDashboard() {
           ) : (
             <div className="space-y-4">
               {!scopedView && <InfoStrip dup={totalDuplicates} sla={slaBreaches} worstSla={worstSla?.csName} loading={respData === undefined} />}
-              <div data-capture-grid="cards" className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {/* grid-cols-1 (minmax(0,1fr)) so long product names can't stretch the column past the phone viewport */}
+              <div data-capture-grid="cards" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((c) => (
                   <ReportCard
                     key={c.csName}

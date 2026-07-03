@@ -96,3 +96,25 @@
 .capture-desktop [data-capture-sep] {
   display: block !important;
 }
+
+/* Arena Harian (CS gamification): one-shot confetti burst on the Queen congrats
+   hero. Pure CSS, respects reduced motion. Pieces are absolutely positioned by
+   arena-hero.tsx; this only animates the fall. */
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(-8px) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(130px) rotate(540deg);
+    opacity: 0;
+  }
+}
+.confetti-piece {
+  animation: confetti-fall 2.5s ease-in forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .confetti-piece {
+    display: none;
+  }
+}

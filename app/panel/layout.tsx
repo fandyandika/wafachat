@@ -142,15 +142,18 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                   ))}
                 </div>
                 )}
-                <Select value={cs} onValueChange={(v) => setParam('cs', v ?? 'all')}>
-                  <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Semua CS" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Semua CS</SelectItem>
-                    {csList.map((c) => (
-                      <SelectItem key={c.key} value={c.csName}>{c.csName.replace(/^CS\s+/i, '')}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {/* CS accounts are scoped to their own data — the CS filter is meaningless for them */}
+                {!isCs && (
+                  <Select value={cs} onValueChange={(v) => setParam('cs', v ?? 'all')}>
+                    <SelectTrigger className="h-9 w-[180px]"><SelectValue placeholder="Semua CS" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Semua CS</SelectItem>
+                      {csList.map((c) => (
+                        <SelectItem key={c.key} value={c.csName}>{c.csName.replace(/^CS\s+/i, '')}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               )}
             </div>
