@@ -147,9 +147,6 @@ export function DailyReportDashboard() {
   const allCs = (report?.cs ?? []) as ReportCardData[];
   // Scoped CS forces the filter to their own CS (csKey-tolerant), ignoring any URL filter.
   const effectiveCsName = scopedCs ?? csName;
-  const cards = allCs.filter((c) => !effectiveCsName || csKey(c.csName) === csKey(effectiveCsName));
-  const totalDuplicates = cards.reduce((s, c) => s + (c.duplicates ?? 0), 0);
-  const scopedRank = scopedView ? allCs.findIndex((c) => csKey(c.csName) === csKey(scopedCs!)) + 1 : 0;
   const totalCsCount = allCs.length;
 
   // Team highlights (only on the unfiltered team view). Derived, not new data.
@@ -182,9 +179,15 @@ export function DailyReportDashboard() {
   const queenName = queen?.csName;
   const queenCard = queenName ? allCs.find((c) => c.csName === queenName) : undefined;
 
-  // Peringkat by closing (getDailyReport already returns CS sorted by closing) + team-average CR.
+  // Rank + card order follow the Queen SCORE (CR+closing+speed), so the #1 card IS the
+  // Queen — consistent with the hero and the CS Arena. (computeQueenScores already sorts
+  // eligible-first by score, closing only breaking ties; <10-lead CS sort last.)
   const rankByCs = new Map<string, number>();
-  allCs.forEach((c, i) => rankByCs.set(c.csName, i + 1));
+  queenScores.forEach((s, i) => rankByCs.set(s.csName, i + 1));
+  const cards = allCs
+    .filter((c) => !effectiveCsName || csKey(c.csName) === csKey(effectiveCsName))
+    .sort((a, b) => (rankByCs.get(a.csName) ?? 999) - (rankByCs.get(b.csName) ?? 999));
+  const totalDuplicates = cards.reduce((s, c) => s + (c.duplicates ?? 0), 0);
   const avgCr = report?.totals.cr ?? 0;
 
   // Gamification: award one badge per category to the day's leaders (works Live + Selesai).
