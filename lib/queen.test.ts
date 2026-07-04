@@ -8,9 +8,23 @@ test("absolute scorecard: the best all-rounder wins", () => {
   const q = computeQueenCs([
     row("Alpha", 30, 70, 20, 120_000, 10), // balanced: CR 70, 30 closings, 2min
     row("Beta", 35, 55, 20, 180_000, 10),  // most closings but lower CR
-    row("Gamma", 20, 78, 20, 600_000, 10), // best CR but low volume + slow
+    row("Gamma", 20, 78, 20, 1_080_000, 10), // best CR but low volume + 18min (SOP breach)
   ]);
   expect(q?.csName).toBe("Alpha");
+});
+
+test("speed: <=5 min is perfect (equal); a growing penalty above 5 min; ~50% at the 10-min SOP; 0 by 15", () => {
+  const s = computeQueenScores([
+    row("A", 30, 60, 30, 60_000, 10),    // 1 min — perfect
+    row("B", 30, 60, 30, 300_000, 10),   // 5 min — still perfect
+    row("C", 30, 60, 30, 600_000, 10),   // 10 min (SOP line) — ~half
+    row("D", 30, 60, 30, 1_200_000, 10), // 20 min — zero
+  ]);
+  const by = new Map(s.map((r) => [r.csName, r]));
+  expect(by.get("A")!.speedWpts).toBe(15); // perfect
+  expect(by.get("B")!.speedWpts).toBe(15); // 5 min still perfect, equal to A (not a race)
+  expect(by.get("C")!.speedWpts).toBeCloseTo(7.5, 5); // 50 pts * 0.15 at the SOP line
+  expect(by.get("D")!.speedWpts).toBe(0); // well past — zero
 });
 
 test("absolute: lowest-CR CS is NOT crushed to zero — strong volume+speed still competes", () => {

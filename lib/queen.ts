@@ -7,9 +7,13 @@
 //     differentiating and the race collapsed to CR-only). Proportional-to-best is
 //     self-tuning at any volume, always rewards the top closer fully, and never
 //     zeroes anyone.
-//   - Speed (15): ABSOLUTE band 0..15 min (was 30) — the whole team now answers in
-//     2-3 min, which saturated the old band; the tighter band keeps fast-vs-faster
-//     worth racing while a 10-min median still earns points.
+//   - Speed (15): PERFECT-THEN-PENALTY, not a race. Owner's rule: "under 5 menit
+//     perfect, di atas itu baru ada penalti" (SOP breach = 10 min). So any median at/
+//     under 5 min earns FULL points — the whole team normally sits here, so they're
+//     equal — then a linear penalty grows past 5 min, hitting 50 at the 10-min SOP line
+//     and 0 by 15 min. Answering in 1 min vs 4 min no longer decides the crown (both
+//     perfect); speed only bites when someone drifts slow. This lets CR (the allocation-
+//     neutral efficiency metric) be the real differentiator when the team is uniformly fast.
 // No framework imports -> runs plain in vitest.
 
 export type QueenInput = {
@@ -29,7 +33,8 @@ export const QUEEN_MIN_RESP = 5; //  enough first-replies for a fair speed score
 export const QUEEN_TARGETS = {
   crFloor: 40, // CR%: <=40 -> 0 pts
   crCeil: 80, //  CR%: >=80 -> 100 pts
-  speedCeilMin: 15, // active-hours median minutes: 0 -> 100 pts, >=15 -> 0 pts
+  speedPerfectMin: 5, // active-hours median: <=5 min -> full 100 pts (team norm = all equal)
+  speedZeroMin: 15, // >=15 min -> 0 pts; linear penalty between (50 pts at the 10-min SOP line)
 };
 
 const clamp100 = (x: number) => Math.max(0, Math.min(100, x));
@@ -63,10 +68,13 @@ export function computeQueenScores(
   const scored = rows.map((r) => {
     const crPts = clamp100(((r.cr - T.crFloor) / (T.crCeil - T.crFloor)) * 100);
     const closePts = closeBench > 0 ? clamp100((r.closings / closeBench) * 100) : 0;
-    // No/low speed sample -> 0 speed points (can't credit unmeasured responsiveness).
+    // Perfect at/under 5 min, then a linear penalty grows toward 0 at 15 min.
+    // No/low speed sample -> 0 points (can't credit unmeasured responsiveness).
     const hasSpeed = r.respCount >= minRespCount && r.respMedianMs != null;
-    const speedMin = hasSpeed ? (r.respMedianMs as number) / 60000 : T.speedCeilMin;
-    const speedPts = clamp100(((T.speedCeilMin - speedMin) / T.speedCeilMin) * 100);
+    const speedMin = hasSpeed ? (r.respMedianMs as number) / 60000 : Infinity;
+    const speedPts = speedMin <= T.speedPerfectMin
+      ? 100
+      : clamp100(((T.speedZeroMin - speedMin) / (T.speedZeroMin - T.speedPerfectMin)) * 100);
     const score = QUEEN_WEIGHTS.closing * closePts + QUEEN_WEIGHTS.cr * crPts + QUEEN_WEIGHTS.speed * speedPts;
     return {
       csName: r.csName,
