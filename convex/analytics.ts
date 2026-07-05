@@ -7,7 +7,7 @@ import { normalizeCsName, canonicalizeProduct } from "./shippingRecaps";
 // (orderIdBerdu) — order-level is right for volume + revenue (a double-ordering customer
 // really did buy twice) but WRONG for CR: 2 closings over 1 lead inflates the rate. CR
 // must therefore use closedCust/leads (same unit: customers).
-type CsAgg = { leads: Set<string>; closings: Set<string>; closedCust: Set<string>; revenue: number };
+type CsAgg = { leads: Set<string>; closings: Set<string>; closedCust: Set<string>; revenue: number; rawCounts: Map<string, number> };
 
 async function computeCsAgg(ctx: any, startAt: number, endAt: number, csName?: string): Promise<Map<string, CsAgg>> {
   const key = csName ? csKey(csName) : null;
@@ -18,10 +18,13 @@ async function computeCsAgg(ctx: any, startAt: number, endAt: number, csName?: s
     await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
   ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone) && (!key || csKey(r.csName) === key));
 
+  // Group by csKey so a CS's raw name-forms ("Aisyah"/"CS Aisyah") merge into one row.
   const map = new Map<string, CsAgg>();
   const get = (cs: string) => {
-    let a = map.get(cs);
-    if (!a) { a = { leads: new Set(), closings: new Set(), closedCust: new Set(), revenue: 0 }; map.set(cs, a); }
+    const k = csKey(cs);
+    let a = map.get(k);
+    if (!a) { a = { leads: new Set(), closings: new Set(), closedCust: new Set(), revenue: 0, rawCounts: new Map() }; map.set(k, a); }
+    a.rawCounts.set(cs, (a.rawCounts.get(cs) ?? 0) + 1);
     return a;
   };
   for (const o of orders) get(o.assignedCsName).leads.add(normalizePhone(o.customerPhone));
@@ -34,6 +37,11 @@ async function computeCsAgg(ctx: any, startAt: number, endAt: number, csName?: s
   return map;
 }
 
+// Dominant raw name-form for a merged CsAgg, for display (normalizeCsName applied by caller).
+function aggName(a: CsAgg): string {
+  return Array.from(a.rawCounts.entries()).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "";
+}
+
 export const getCsLeaderboard = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -41,11 +49,12 @@ export const getCsLeaderboard = query({
     const cur = await computeCsAgg(ctx, args.startAt, args.endAt, args.csName);
     const prev = await computeCsAgg(ctx, args.startAt - len, args.startAt - 1, args.csName);
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-    const names = Array.from(new Set(Array.from(cur.keys()).concat(Array.from(prev.keys()))));
-    const rows = names.map((csName) => {
-      const empty = (): CsAgg => ({ leads: new Set(), closings: new Set(), closedCust: new Set(), revenue: 0 });
-      const c = cur.get(csName) ?? empty();
-      const p = prev.get(csName) ?? empty();
+    const keys = Array.from(new Set(Array.from(cur.keys()).concat(Array.from(prev.keys()))));
+    const rows = keys.map((k) => {
+      const empty = (): CsAgg => ({ leads: new Set(), closings: new Set(), closedCust: new Set(), revenue: 0, rawCounts: new Map() });
+      const c = cur.get(k) ?? empty();
+      const p = prev.get(k) ?? empty();
+      const csName = aggName(cur.get(k) ?? prev.get(k)!); // dominant raw form (display unchanged from before)
       const leads = c.leads.size, closings = c.closings.size;
       const prevLeads = p.leads.size, prevClosings = p.closings.size;
       // CR in customer units on both sides (order double must not inflate the rate).
@@ -156,8 +165,8 @@ export const getPeriodReport = query({
     const cancelled = (
       await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", start).lte("closedAt", end)).collect()
     ).filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && !isInternalTestPhone(r.customerPhone)).length;
-    const perCs = Array.from(cur.entries())
-      .map(([csName, a]) => ({ csName, leads: a.leads.size, closings: a.closings.size, cr: cr(a.closedCust.size, a.leads.size), revenue: a.revenue }))
+    const perCs = Array.from(cur.values())
+      .map((a) => ({ csName: aggName(a), leads: a.leads.size, closings: a.closings.size, cr: cr(a.closedCust.size, a.leads.size), revenue: a.revenue }))
       .sort((a, b) => b.closings - a.closings);
     return {
       label, rangeStart: start, rangeEnd: end,
@@ -173,6 +182,7 @@ type CsReportAcc = {
   leads: Set<string>; closings: Set<string>; closedCust: Set<string>;
   revenue: number; discount: number; rawLeads: number;
   products: Map<string, ProductAcc>;
+  rawCounts: Map<string, number>; // raw name-forms seen -> pick the dominant for display
 };
 
 // Daily CS report on a 16:00→16:00 WIB window. Mirrors computeCsAgg's dedup/exclusion
@@ -228,10 +238,15 @@ export const getDailyReport = query({
     const fallbackOrderByPhone = new Map<string, any>();
     for (const { phone, order } of fbResults) if (order) fallbackOrderByPhone.set(phone, order);
 
+    // Group by csKey (canonical) so raw name-forms of one CS ("Aisyah" vs "CS Aisyah")
+    // MERGE into a single card instead of fragmenting into duplicates (which also
+    // collided on the React key). Display uses the dominant raw form via normalizeCsName.
     const map = new Map<string, CsReportAcc>();
     const getCs = (cs: string): CsReportAcc => {
-      let a = map.get(cs);
-      if (!a) { a = { leads: new Set(), closings: new Set(), closedCust: new Set(), revenue: 0, discount: 0, rawLeads: 0, products: new Map() }; map.set(cs, a); }
+      const k = csKey(cs);
+      let a = map.get(k);
+      if (!a) { a = { leads: new Set(), closings: new Set(), closedCust: new Set(), revenue: 0, discount: 0, rawLeads: 0, products: new Map(), rawCounts: new Map() }; map.set(k, a); }
+      a.rawCounts.set(cs, (a.rawCounts.get(cs) ?? 0) + 1);
       return a;
     };
     const getProd = (a: CsReportAcc, prod: string): ProductAcc => {
@@ -263,7 +278,8 @@ export const getDailyReport = query({
     const cpd = (disc: number, c: number) => (c > 0 ? Math.round(disc / c) : 0);
 
     const cs = Array.from(map.entries())
-      .map(([rawName, a]) => {
+      .map(([, a]) => {
+        const rawName = Array.from(a.rawCounts.entries()).sort((x, y) => y[1] - x[1])[0][0];
         const leads = a.leads.size, closings = a.closings.size;
         const products = Array.from(a.products.entries())
           .map(([product, p]) => ({ product, leads: p.leads.size, closings: p.closings.size, cr: cr(p.closings.size, p.leads.size) }))

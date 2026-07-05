@@ -334,7 +334,7 @@ export function DailyReportDashboard() {
               <div data-capture-grid="cards" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((c) => (
                   <ReportCard
-                    key={c.csName}
+                    key={csKey(c.csName)}
                     card={c}
                     label={label}
                     isCurrent={isCurrent}

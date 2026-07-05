@@ -164,6 +164,22 @@ test("getCsLeaderboard honors csName via csKey (CS Aisyah == Aisyah)", async () 
   expect(filtered[0].csName).toBe("Aisyah");
 });
 
+test("getDailyReport merges raw name variants of one CS into a single card (no fragmentation)", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    // Same CS, two raw name-forms: orders + main recap use "Aisyah"; one stray recap "CS Aisyah".
+    await ctx.db.insert("orders", { ...ordBase, orderId: "V-1", customerPhone: "62831", assignedCsName: "Aisyah", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "V-2", customerPhone: "62832", assignedCsName: "Aisyah", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "V-1", customerPhone: "62831", customerName: "A", csName: "Aisyah", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "V-9", customerPhone: "62839", customerName: "B", csName: "CS Aisyah", closedAt: t0, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
+  });
+  const r = await t.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
+  const aisyah = r.cs.filter((c: { csName: string }) => /aisyah/i.test(c.csName));
+  expect(aisyah.length).toBe(1); // ONE merged card, not two
+  expect(aisyah[0].leads).toBe(2); // unique order customers
+  expect(aisyah[0].closings).toBe(2); // both recaps counted across the two name-forms
+});
+
 test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () => {
   const t = convexTest(schema);
   const t0_new = Date.parse("2026-06-22T10:00:00+07:00");
