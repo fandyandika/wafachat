@@ -211,6 +211,20 @@ export const getCsDetail = query({
     const isCancelled = (s: string) => s === "cancelled" || s === "cancelled_after_export";
     const money = (r: any) => r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
 
+    // Canonical product per closing (same rule as the card's product breakdown): prefer the
+    // matched in-window order's name over the recap's SKU text — uses orders already fetched,
+    // zero extra reads. Lets the sheet group rows per product without name fragmentation.
+    const latestOrderByPhone = new Map<string, any>();
+    for (const o of orders) {
+      const p = normalizePhone(o.customerPhone);
+      const ex = latestOrderByPhone.get(p);
+      if (!ex || o.createdAt > ex.createdAt) latestOrderByPhone.set(p, o);
+    }
+    const productOf = (r: any) => {
+      const mo = latestOrderByPhone.get(normalizePhone(r.customerPhone));
+      return canonicalizeProduct(mo?.productName || mo?.products || r.packageContent);
+    };
+
     // Counted closings: dedup by the SAME key the card count uses (orderIdBerdu || phone),
     // keeping the latest row, so list length always equals the card's Total Closing.
     const byKey = new Map<string, any>();
@@ -226,7 +240,7 @@ export const getCsDetail = query({
         customerName: r.customerName || "-",
         customerPhone: r.customerPhone,
         orderIdBerdu: r.orderIdBerdu ?? null,
-        product: r.packageContent || "",
+        product: productOf(r),
         total: money(r),
         payment: r.paymentMethod ?? null,
       }));
@@ -257,7 +271,7 @@ export const getCsDetail = query({
         customerName: o.customerName || "-",
         customerPhone: o.customerPhone,
         orderId: o.orderId,
-        product: o.productName || o.products || "",
+        product: canonicalizeProduct(o.productName || o.products),
         orderCount: perPhone.get(normalizePhone(o.customerPhone)) ?? 1,
       }));
 
