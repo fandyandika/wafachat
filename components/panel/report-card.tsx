@@ -5,7 +5,7 @@ import { Copy, Check, Zap, Trophy, Crown, Clock, ImageDown, ReceiptText, MoreVer
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { shareNodeAsPng } from '@/lib/capture';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { AnimatedNumber } from '@/components/ui/animated-number';
 import { DeltaPill } from '@/components/ui/metric-card';
@@ -128,13 +128,15 @@ export function ReportCard({
           )}
           <DropdownMenu>
             <DropdownMenuTrigger
+              // Native <button>, NOT our <Button>: Base UI must attach a ref to the trigger
+              // to anchor the popup + bind tap handling, and Button doesn't forward refs —
+              // on real phones the menu silently failed to open because of it.
               render={
-                <Button
-                  size="icon-sm"
-                  variant="ghost"
+                <button
+                  type="button"
                   aria-label="Aksi card"
                   data-nocapture
-                  className="size-7 text-muted-foreground/50 hover:text-foreground"
+                  className={cn(buttonVariants({ variant: 'ghost', size: 'icon-sm' }), 'size-7 text-muted-foreground/50 hover:text-foreground')}
                 />
               }
             >
