@@ -1,7 +1,8 @@
 'use client';
 
 import { useRef, useState, type ComponentType } from 'react';
-import { Copy, Check, Zap, Trophy, Crown, Clock, ImageDown, ReceiptText } from 'lucide-react';
+import { Copy, Check, Zap, Trophy, Crown, Clock, ImageDown, ReceiptText, MoreVertical } from 'lucide-react';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { shareNodeAsPng } from '@/lib/capture';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -114,21 +115,9 @@ export function ReportCard({
             )}
           </div>
         </div>
-        {/* Right cluster: SLA + rincian + share + copy, dempet & minimalis */}
-        <div className="flex shrink-0 items-center gap-0.5">
-          {onDetail && (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={onDetail}
-              aria-label="Rincian closing & leads"
-              title="Rincian closing & leads (self-check)"
-              data-nocapture
-              className="size-7 text-muted-foreground/50 hover:text-foreground"
-            >
-              <ReceiptText className="size-4" />
-            </Button>
-          )}
+        {/* Right cluster: SLA status + ONE action menu (Rincian / Share / Copy) —
+            a single ⋯ keeps the header calm instead of a row of four icons. */}
+        <div className="flex shrink-0 items-center gap-1">
           {resp && resp.slaBreaches > 0 && (
             <span
               className="inline-flex items-center gap-0.5 text-[11px] font-semibold tabular-nums text-destructive"
@@ -137,20 +126,34 @@ export function ReportCard({
               <Clock className="size-3.5" /> {resp.slaBreaches}
             </span>
           )}
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            onClick={onShare}
-            disabled={sharing}
-            aria-label="Share gambar card"
-            data-nocapture
-            className="size-7 text-muted-foreground/50 hover:text-foreground"
-          >
-            <ImageDown className={cn('size-4', sharing && 'animate-pulse')} />
-          </Button>
-          <Button size="icon-sm" variant="ghost" onClick={onCopy} aria-label="Copy teks WA" data-nocapture className="size-7 text-muted-foreground/50 hover:text-foreground">
-            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Aksi card"
+                  data-nocapture
+                  className="size-7 text-muted-foreground/50 hover:text-foreground"
+                />
+              }
+            >
+              {copied ? <Check className="size-4 text-positive" /> : <MoreVertical className={cn('size-4', sharing && 'animate-pulse')} />}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-52">
+              {onDetail && (
+                <DropdownMenuItem onClick={onDetail}>
+                  <ReceiptText /> Rincian closing & leads
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem onClick={onShare} disabled={sharing}>
+                <ImageDown /> Share gambar card
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onCopy}>
+                <Copy /> Copy teks WA
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
