@@ -240,3 +240,30 @@ test("CR uses unique CUSTOMERS: an order-double closing twice does not inflate t
   const rows = await t.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
   expect(rows[0].cr).toBe(50);
 });
+
+test("getCsDetail: counted closings match card semantics; cancelled + boundary surfaced; leads with double count", async () => {
+  const t = convexTest(schema);
+  const H = 3_600_000;
+  await t.run(async (ctx) => {
+    // Leads: 3 orders, 2 unique customers (62841 doubles)
+    await ctx.db.insert("orders", { ...ordBase, orderId: "W-1", customerPhone: "62841", assignedCsName: "CS A", productName: "Q", createdAt: t0 + H, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "W-2", customerPhone: "62841", assignedCsName: "CS A", productName: "Q", createdAt: t0 + 2 * H, updatedAt: t0 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "W-3", customerPhone: "62842", assignedCsName: "CS A", productName: "Q", createdAt: t0 + 3 * H, updatedAt: t0 });
+    // Closings: 2 counted, 1 cancelled (excluded), 1 outside window (boundary after)
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "W-1", customerPhone: "62841", customerName: "A", csName: "CS A", closedAt: t0 + 4 * H, total: 100, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "W-3", customerPhone: "62842", customerName: "B", csName: "CS A", closedAt: t0 + 5 * H, total: 200, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "W-9", customerPhone: "62849", customerName: "C", csName: "CS A", closedAt: t0 + 6 * H, total: 300, status: "cancelled", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "W-8", customerPhone: "62848", customerName: "D", csName: "CS A", closedAt: t0 + DAY + H, total: 400, status: "ready", createdAt: t0, updatedAt: t0 });
+    // Other CS in window must not leak in
+    await ctx.db.insert("orders", { ...ordBase, orderId: "X-1", customerPhone: "62851", assignedCsName: "CS B", productName: "Q", createdAt: t0 + H, updatedAt: t0 });
+  });
+  const d = await t.query(api.analytics.getCsDetail, { startAt: t0, endAt: t0 + DAY, csName: "CS A" });
+  expect(d.counts).toEqual({ closings: 2, leadsUnique: 2, leadOrders: 3 });
+  expect(d.closings.map((c: { orderIdBerdu: string | null }) => c.orderIdBerdu)).toEqual(["W-1", "W-3"]);
+  expect(d.excludedCancelled).toHaveLength(1);
+  expect(d.excludedCancelled[0].customerName).toBe("C");
+  expect(d.boundary).toHaveLength(1);
+  expect(d.boundary[0].when).toBe("after");
+  const dbl = d.leads.filter((l: { orderCount: number }) => l.orderCount === 2);
+  expect(dbl).toHaveLength(2); // both rows of the doubling customer flagged
+});

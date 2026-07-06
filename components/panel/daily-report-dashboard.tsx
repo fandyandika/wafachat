@@ -17,6 +17,7 @@ import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { useResponseTimes } from '@/components/panel/use-response-times';
 import { useMe } from '@/components/panel/use-me';
 import { ArenaHero } from '@/components/panel/arena-hero';
+import { CsDetailSheet } from '@/components/panel/cs-detail-sheet';
 import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
 import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/panel/report-card';
 import {
@@ -48,6 +49,7 @@ export function DailyReportDashboard() {
   const [respRefreshKey, setRespRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [sharingBoard, setSharingBoard] = useState(false);
+  const [detailCs, setDetailCs] = useState<string | null>(null); // csName whose Rincian sheet is open
   const boardRef = useRef<HTMLDivElement>(null);
   const dayParam = sp.get('day');
   const csList = useQuery(api.cs.listCs, {}) ?? [];
@@ -345,6 +347,7 @@ export function DailyReportDashboard() {
                     rewards={rewardsByCs.get(c.csName)}
                     avatarByKey={avatarByKey}
                     isQueen={c.csName === queenName}
+                    onDetail={() => setDetailCs(c.csName)}
                   />
                 ))}
               </div>
@@ -352,6 +355,16 @@ export function DailyReportDashboard() {
           )}
         </div>
       )}
+
+      <CsDetailSheet
+        open={detailCs != null}
+        onOpenChange={(o) => { if (!o) setDetailCs(null); }}
+        csName={detailCs ?? ''}
+        startAt={startAt}
+        endAt={endAt}
+        titleDate={titleDate}
+        avatarUrl={detailCs ? avatarByKey.get(csKey(detailCs)) ?? undefined : undefined}
+      />
     </div>
   );
 }

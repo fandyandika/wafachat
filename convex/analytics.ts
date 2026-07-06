@@ -185,6 +185,92 @@ type CsReportAcc = {
   rawCounts: Map<string, number>; // raw name-forms seen -> pick the dominant for display
 };
 
+// Self-check drill-down for ONE CS in a window: the exact rows behind the card's
+// "Total Leads / Total Closing" numbers, so a CS can reconcile their own manual
+// count ("saya 20, panel 19") without the owner tracing it by hand. Also surfaces
+// the two most common discrepancy causes we CAN see: cancelled recaps (excluded
+// from the count) and closings just OUTSIDE the window (they landed in the
+// neighboring 16:00 period). Fetched on-demand only (drawer open) — index-bounded
+// reads, zero standing subscriptions.
+export const getCsDetail = query({
+  args: { startAt: v.number(), endAt: v.number(), csName: v.string() },
+  handler: async (ctx, args) => {
+    const k = csKey(args.csName);
+    const BOUNDARY_MS = 6 * 60 * 60 * 1000; // neighbor-period peek on each side
+
+    const orders = (
+      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
+    ).filter((o: any) => !isInternalTestPhone(o.customerPhone) && csKey(o.assignedCsName) === k);
+
+    // One index read covers the window AND both boundary peeks.
+    const recapsAll = (
+      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", args.startAt - BOUNDARY_MS).lte("closedAt", args.endAt + BOUNDARY_MS)).collect()
+    ).filter((r: any) => !isInternalTestPhone(r.customerPhone) && csKey(r.csName) === k);
+
+    const inWin = (r: any) => r.closedAt >= args.startAt && r.closedAt <= args.endAt;
+    const isCancelled = (s: string) => s === "cancelled" || s === "cancelled_after_export";
+    const money = (r: any) => r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
+
+    // Counted closings: dedup by the SAME key the card count uses (orderIdBerdu || phone),
+    // keeping the latest row, so list length always equals the card's Total Closing.
+    const byKey = new Map<string, any>();
+    for (const r of recapsAll.filter((r: any) => inWin(r) && !isCancelled(r.status))) {
+      const kk = r.orderIdBerdu || normalizePhone(r.customerPhone);
+      const ex = byKey.get(kk);
+      if (!ex || r.closedAt > ex.closedAt) byKey.set(kk, r);
+    }
+    const closings = Array.from(byKey.values())
+      .sort((a, b) => a.closedAt - b.closedAt)
+      .map((r) => ({
+        closedAt: r.closedAt,
+        customerName: r.customerName || "-",
+        customerPhone: r.customerPhone,
+        orderIdBerdu: r.orderIdBerdu ?? null,
+        product: r.packageContent || "",
+        total: money(r),
+        payment: r.paymentMethod ?? null,
+      }));
+
+    const excludedCancelled = recapsAll
+      .filter((r: any) => inWin(r) && isCancelled(r.status))
+      .sort((a: any, b: any) => a.closedAt - b.closedAt)
+      .map((r: any) => ({ closedAt: r.closedAt, customerName: r.customerName || "-", orderIdBerdu: r.orderIdBerdu ?? null }));
+
+    const boundary = recapsAll
+      .filter((r: any) => !inWin(r) && !isCancelled(r.status))
+      .sort((a: any, b: any) => a.closedAt - b.closedAt)
+      .map((r: any) => ({
+        closedAt: r.closedAt,
+        customerName: r.customerName || "-",
+        orderIdBerdu: r.orderIdBerdu ?? null,
+        when: r.closedAt < args.startAt ? ("before" as const) : ("after" as const),
+      }));
+
+    // Leads: every order row (the raw Berdu count), with a per-customer order count so
+    // doubles are visible; unique-customer count matches the card's Total Leads.
+    const perPhone = new Map<string, number>();
+    for (const o of orders) { const p = normalizePhone(o.customerPhone); perPhone.set(p, (perPhone.get(p) ?? 0) + 1); }
+    const leads = orders
+      .sort((a: any, b: any) => a.createdAt - b.createdAt)
+      .map((o: any) => ({
+        createdAt: o.createdAt,
+        customerName: o.customerName || "-",
+        customerPhone: o.customerPhone,
+        orderId: o.orderId,
+        product: o.productName || o.products || "",
+        orderCount: perPhone.get(normalizePhone(o.customerPhone)) ?? 1,
+      }));
+
+    return {
+      closings,
+      excludedCancelled,
+      boundary,
+      leads,
+      counts: { closings: closings.length, leadsUnique: perPhone.size, leadOrders: orders.length },
+    };
+  },
+});
+
 // Daily CS report on a 16:00→16:00 WIB window. Mirrors computeCsAgg's dedup/exclusion
 // rules exactly (so totals match the Performance page), adding discount + per-CS×product
 // nesting + a duplicate-phone count (a judging aid for the CS-reported "Mis Rep").

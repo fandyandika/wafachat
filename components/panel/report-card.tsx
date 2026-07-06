@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, type ComponentType } from 'react';
-import { Copy, Check, Zap, Trophy, Crown, Clock, ImageDown } from 'lucide-react';
+import { Copy, Check, Zap, Trophy, Crown, Clock, ImageDown, ReceiptText } from 'lucide-react';
 import { shareNodeAsPng } from '@/lib/capture';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -37,7 +37,7 @@ const REWARD_ICON: Record<string, ComponentType<{ className?: string }>> = {
 };
 
 export function ReportCard({
-  card, label, isCurrent, resp, rank, avgCr, delta, rewards, avatarByKey, isQueen,
+  card, label, isCurrent, resp, rank, avgCr, delta, rewards, avatarByKey, isQueen, onDetail,
 }: {
   card: ReportCardData;
   label: { y: number; m: number; d: number; dow: number };
@@ -49,6 +49,7 @@ export function ReportCard({
   rewards?: string[];
   avatarByKey?: Map<string, string | null>;
   isQueen?: boolean;
+  onDetail?: () => void; // opens the self-check "Rincian" sheet (closing + leads list)
 }) {
   const [copied, setCopied] = useState(false);
   const [productsExpanded, setProductsExpanded] = useState(false);
@@ -113,8 +114,21 @@ export function ReportCard({
             )}
           </div>
         </div>
-        {/* Right cluster: SLA + copy, dempet & minimalis */}
+        {/* Right cluster: SLA + rincian + share + copy, dempet & minimalis */}
         <div className="flex shrink-0 items-center gap-0.5">
+          {onDetail && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              onClick={onDetail}
+              aria-label="Rincian closing & leads"
+              title="Rincian closing & leads (self-check)"
+              data-nocapture
+              className="size-7 text-muted-foreground/50 hover:text-foreground"
+            >
+              <ReceiptText className="size-4" />
+            </Button>
+          )}
           {resp && resp.slaBreaches > 0 && (
             <span
               className="inline-flex items-center gap-0.5 text-[11px] font-semibold tabular-nums text-destructive"
