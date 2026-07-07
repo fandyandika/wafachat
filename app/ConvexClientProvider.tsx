@@ -1,7 +1,17 @@
 'use client';
 
 import { ReactNode, useMemo } from 'react';
-import { ConvexProvider, ConvexReactClient } from 'convex/react';
+import { ConvexProvider, ConvexReactClient, useConvexAuth } from 'convex/react';
+
+// Hold rendering until the auth handshake resolves (authenticated OR confirmed
+// anonymous). Without this, the first queries fire before the token is attached —
+// harmless while authz is permissive, but they would be REJECTED once enforcement
+// flips, leaving one-shot snapshot fetches stuck on an error until reload.
+function AuthReadyGate({ children }: { children: ReactNode }) {
+  const { isLoading } = useConvexAuth();
+  if (isLoading) return null;
+  return <>{children}</>;
+}
 
 export function ConvexClientProvider({ children }: { children: ReactNode }) {
   const convex = useMemo(() => {
@@ -27,5 +37,9 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
     return client;
   }, []);
 
-  return <ConvexProvider client={convex}>{children}</ConvexProvider>;
+  return (
+    <ConvexProvider client={convex}>
+      <AuthReadyGate>{children}</AuthReadyGate>
+    </ConvexProvider>
+  );
 }

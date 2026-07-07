@@ -1,9 +1,9 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 
 const GLOBAL_AI_KEY = "global_ai_enabled";
 
-export const getGlobalAiEnabled = query({
+export const getGlobalAiEnabled = internalQuery({
   args: {},
   handler: async (ctx) => {
     const setting = await ctx.db
@@ -15,7 +15,7 @@ export const getGlobalAiEnabled = query({
   },
 });
 
-export const setGlobalAiEnabled = mutation({
+export const setGlobalAiEnabled = internalMutation({
   args: { enabled: v.boolean() },
   handler: async (ctx, args) => {
     const now = Date.now();

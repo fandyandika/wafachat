@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { startOfJakartaDayMs } from "./lib";
 
 const DAY = 86_400_000;
@@ -26,7 +26,7 @@ test("listConversations: closed bounded to today (Jakarta); active+handover alwa
     await ctx.db.insert("conversations", { ...base, orderId: "CO", customerPhone: "62814", status: "closed", updatedAt: now - 2 * DAY });
   });
 
-  const rows = await t.query(api.state.listConversations, { includeClosed: true });
+  const rows = await t.query(internal.state.listConversations, { includeClosed: true });
   const phones = rows.map((r) => r.phone);
   expect(phones).toContain("62811"); // active
   expect(phones).toContain("62812"); // handover
@@ -42,7 +42,7 @@ test("listConversations: includeClosed=false omits closed entirely", async () =>
     await ctx.db.insert("conversations", { ...base, orderId: "A", customerPhone: "62811", status: "active", updatedAt: now });
     await ctx.db.insert("conversations", { ...base, orderId: "CT", customerPhone: "62813", status: "closed", updatedAt: now });
   });
-  const rows = await t.query(api.state.listConversations, { includeClosed: false });
+  const rows = await t.query(internal.state.listConversations, { includeClosed: false });
   const phones = rows.map((r) => r.phone);
   expect(phones).toContain("62811");
   expect(phones).not.toContain("62813");
@@ -58,7 +58,7 @@ test("listOrderCountersByPrefix returns sorted present counters for the date pre
     await ctx.db.insert("orders", { ...base, orderId: "O-260624000012" }); // gap at 11
     await ctx.db.insert("orders", { ...base, orderId: "O-260623000005" }); // different day -> excluded
   });
-  const res = await t.query(api.state.listOrderCountersByPrefix, { datePrefix: "260624" });
+  const res = await t.query(internal.state.listOrderCountersByPrefix, { datePrefix: "260624" });
   expect(res.counters).toEqual([9, 10, 12]);
   expect(res.min).toBe(9);
   expect(res.max).toBe(12);
@@ -68,7 +68,7 @@ test("listOrderCountersByPrefix returns sorted present counters for the date pre
 test("upsertOrderFromN8n honors explicit createdAt on insert (reconciler backfill keeps real order time)", async () => {
   const t = convexTest(schema);
   const backdated = Date.UTC(2026, 5, 23, 18, 10, 43); // real Berdu order time, not now
-  await t.mutation(api.state.upsertOrderFromN8n, { phone: "6285735647633", csName: "Risma", order_id: "O-260624000009", createdAt: backdated });
+  await t.mutation(internal.state.upsertOrderFromN8n, { phone: "6285735647633", csName: "Risma", order_id: "O-260624000009", createdAt: backdated });
   const order = await t.run(async (ctx) =>
     ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-260624000009")).unique());
   expect(order?.createdAt).toBe(backdated);

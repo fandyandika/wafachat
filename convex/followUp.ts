@@ -1,4 +1,5 @@
 import { query, action, mutation, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { requireMember } from "./authz";
 import { v } from "convex/values";
 import { csKey, isInternalTestPhone, normalizeCsName } from "./lib";
 import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
@@ -39,6 +40,7 @@ export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: a
 export const getFollowUpCandidates = query({
   args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "followUp.getFollowUpCandidates");
     const now = args.nowOverride ?? Date.now();
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
 
@@ -303,6 +305,7 @@ export const unarchiveFollowUp = mutation({
 export const getArchivedFollowUps = query({
   args: { csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "followUp.getArchivedFollowUps");
     const now = Date.now();
     const DAY = 86_400_000;
     const since = now - 14 * DAY;
@@ -394,6 +397,8 @@ export const getAutoFollowUp = query({
 export const getFollowUpEffectiveness = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "followUp.getFollowUpEffectiveness");
+    await requireMember(ctx, "followUp.getAutoFollowUp");
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
     const recaps = await ctx.db
       .query("shippingRecaps")
@@ -429,6 +434,7 @@ export const getFollowUpEffectiveness = query({
 export const getClosedFollowUps = query({
   args: { csName: v.optional(v.string()), sinceDays: v.optional(v.number()), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "followUp.getClosedFollowUps");
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
     const since = now - (args.sinceDays ?? 7) * DAY;

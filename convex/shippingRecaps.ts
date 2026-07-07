@@ -1,4 +1,5 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
+import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isInternalTestPhone, csKey } from "./lib";
@@ -358,7 +359,7 @@ async function findExistingRecap(
   return recentByPhone.find((row) => row.conversationId === args.conversationId) ?? recentByPhone[0] ?? null;
 }
 
-export const upsertFromN8n = mutation({
+export const upsertFromN8n = internalMutation({
   args: {
     customerPhone: v.string(),
     customerName: v.optional(v.string()),
@@ -458,6 +459,7 @@ export const createFromPanelClosing = mutation({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.createFromPanelClosing");
     const now = Date.now();
     const order = await findOrder(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone });
     const conversation = await findConversation(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone });
@@ -593,6 +595,7 @@ export const backfillFromMessages = mutation({
     force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.backfillFromMessages");
     const limit = Math.min(args.limit ?? 300, 1000);
     const messages = await ctx.db
       .query("messages")
@@ -634,6 +637,7 @@ export const reparseNeedsReview = mutation({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.reparseNeedsReview");
     const limit = Math.min(args.limit ?? 1000, 2000);
     const rows =
       args.startAt !== undefined && args.endAt !== undefined
@@ -689,6 +693,7 @@ export const list = query({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "shippingRecaps.list");
     const rows = args.status
       ? await ctx.db
           .query("shippingRecaps")
@@ -732,6 +737,7 @@ export const getCounts = query({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "shippingRecaps.getCounts");
     const rows = await ctx.db
       .query("shippingRecaps")
       .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
@@ -785,6 +791,7 @@ export const updateFields = mutation({
     specialBonus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.updateFields");
     const { recapId, ...patch } = args;
     await ctx.db.patch(recapId, {
       ...patch,
@@ -799,6 +806,7 @@ export const updateFields = mutation({
 export const markReady = mutation({
   args: { recapId: v.id("shippingRecaps") },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.markReady");
     await ctx.db.patch(args.recapId, { status: "ready", flags: [], updatedAt: Date.now() });
     return { success: true, recapId: args.recapId };
   },
@@ -807,6 +815,7 @@ export const markReady = mutation({
 export const markCancelled = mutation({
   args: { recapId: v.id("shippingRecaps"), reason: v.string() },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.markCancelled");
     const row = await ctx.db.get(args.recapId);
     if (!row) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.status === "exported" ? "cancelled_after_export" : "cancelled";
@@ -833,6 +842,7 @@ export const markCancelled = mutation({
 export const undoCancelled = mutation({
   args: { recapId: v.id("shippingRecaps") },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.undoCancelled");
     const row = await ctx.db.get(args.recapId);
     if (!row) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.flags.length > 0 ? "needs_review" : "ready";
@@ -859,6 +869,7 @@ export const undoCancelled = mutation({
 export const markExported = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")), exportBatchId: v.string() },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.markExported");
     const now = Date.now();
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
@@ -886,6 +897,7 @@ export const markExported = mutation({
 export const markDelivered = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")) },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.markDelivered");
     const now = Date.now();
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
@@ -908,6 +920,7 @@ export const markDelivered = mutation({
 export const undoDelivered = mutation({
   args: { recapId: v.id("shippingRecaps") },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.undoDelivered");
     const row = await ctx.db.get(args.recapId);
     if (!row) return { success: false, error: "recap not found" };
     await ctx.db.patch(args.recapId, { status: "exported", deliveredAt: undefined, updatedAt: Date.now() });
@@ -918,6 +931,7 @@ export const undoDelivered = mutation({
 export const markReadyBulk = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")) },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.markReadyBulk");
     const now = Date.now();
     for (const recapId of args.recapIds) {
       await ctx.db.patch(recapId, { status: "ready", flags: [], updatedAt: now });
@@ -929,6 +943,7 @@ export const markReadyBulk = mutation({
 export const markCancelledBulk = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")), reason: v.string() },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.markCancelledBulk");
     const now = Date.now();
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
@@ -949,7 +964,7 @@ export const markCancelledBulk = mutation({
   },
 });
 
-export const markLatestCancelledByPhone = mutation({
+export const markLatestCancelledByPhone = internalMutation({
   args: {
     customerPhone: v.string(),
     orderIdBerdu: v.optional(v.string()),
@@ -992,7 +1007,7 @@ export const markLatestCancelledByPhone = mutation({
   },
 });
 
-export const importBerduVerifiedRows = mutation({
+export const importBerduVerifiedRows = internalMutation({
   args: {
     rows: v.array(berduVerifiedRowValidator),
     importBatchId: v.string(),
@@ -1093,6 +1108,7 @@ export const repairRecipientNamesFromOrders = mutation({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.repairRecipientNamesFromOrders");
     const limit = Math.min(args.limit ?? 200, 1000);
     const rows = await ctx.db.query("shippingRecaps").order("desc").take(limit);
     const repaired: Array<{ recapId: Id<"shippingRecaps">; orderId?: string; recipientName: string }> = [];
@@ -1149,6 +1165,7 @@ export const getPerformance = query({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "shippingRecaps.getPerformance");
     const key = args.csName ? csKey(args.csName) : null;
     const orders = await ctx.db
       .query("orders")
@@ -1303,6 +1320,7 @@ export const getPerformance = query({
 export const backfillCsNameByOrderIds = mutation({
   args: { orderIds: v.array(v.string()), csName: v.string() },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.backfillCsNameByOrderIds");
     const now = Date.now();
     const results: Array<{ orderId: string; recap: string; order: string; conversation: string }> = [];
 
@@ -1352,6 +1370,7 @@ export const backfillCsNameByOrderIds = mutation({
 export const renameCsName = mutation({
   args: { from: v.string(), to: v.string() },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.renameCsName");
     const now = Date.now();
     let orders = 0;
     for (const o of await ctx.db.query("orders").collect()) {
@@ -1386,6 +1405,7 @@ export const backfillByPhone = mutation({
     entries: v.array(v.object({ phone: v.string(), customerName: v.string(), csName: v.string() })),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "shippingRecaps.backfillByPhone");
     const now = Date.now();
     const results: Array<{ phone: string; conversations: number; orders: number; recaps: number }> = [];
 

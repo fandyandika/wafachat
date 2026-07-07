@@ -1,6 +1,6 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const http = httpRouter();
 
@@ -35,12 +35,12 @@ http.route({
     const action = body.action;
 
     if (action === "health") {
-      const result = await ctx.runQuery(api.state.health, {});
+      const result = await ctx.runQuery(internal.state.health, {});
       return jsonResponse(result);
     }
 
     if (action === "set_order") {
-      const result = await ctx.runMutation(api.state.upsertOrderFromN8n, {
+      const result = await ctx.runMutation(internal.state.upsertOrderFromN8n, {
         phone: String(body.phone || ""),
         csName: String(body.csName || ""),
         csNumber: body.csNumber ? String(body.csNumber) : undefined,
@@ -60,14 +60,14 @@ http.route({
     }
 
     if (action === "list_order_counters") {
-      const result = await ctx.runQuery(api.state.listOrderCountersByPrefix, {
+      const result = await ctx.runQuery(internal.state.listOrderCountersByPrefix, {
         datePrefix: String(body.datePrefix || ""),
       });
       return jsonResponse({ ...result, _action: "list_order_counters" });
     }
 
     if (action === "get_with_global") {
-      const result = await ctx.runQuery(api.state.getConversationContextForN8n, {
+      const result = await ctx.runQuery(internal.state.getConversationContextForN8n, {
         phone: String(body.phone || ""),
         messageLimit: body.messageLimit ? Number(body.messageLimit) : undefined,
       });
@@ -75,7 +75,7 @@ http.route({
     }
 
     if (action === "get") {
-      const result = await ctx.runQuery(api.state.getConversationContextForN8n, {
+      const result = await ctx.runQuery(internal.state.getConversationContextForN8n, {
         phone: String(body.phone || ""),
         messageLimit: 0,
       });
@@ -90,7 +90,7 @@ http.route({
     }
 
     if (action === "set") {
-      const result = await ctx.runMutation(api.state.setConversationStatusFromN8n, {
+      const result = await ctx.runMutation(internal.state.setConversationStatusFromN8n, {
         phone: String(body.phone || ""),
         order_id: body.order_id ? String(body.order_id) : undefined,
         status: body.status,
@@ -102,7 +102,7 @@ http.route({
     }
 
     if (action === "increment_stat") {
-      const result = await ctx.runMutation(api.state.recordStatEventFromN8n, {
+      const result = await ctx.runMutation(internal.state.recordStatEventFromN8n, {
         field: body.field,
         phone: body.phone ? String(body.phone) : undefined,
         order_id: body.order_id ? String(body.order_id) : undefined,
@@ -113,7 +113,7 @@ http.route({
     }
 
     if (action === "append_message") {
-      const result = await ctx.runMutation(api.messages.appendMessageFromN8n, {
+      const result = await ctx.runMutation(internal.messages.appendMessageFromN8n, {
         phone: String(body.phone || ""),
         order_id: body.order_id ? String(body.order_id) : undefined,
         customerName: body.customerName ? String(body.customerName) : undefined,
@@ -129,7 +129,7 @@ http.route({
     }
 
     if (action === "upsert_shipping_recap") {
-      const result = await ctx.runMutation(api.shippingRecaps.upsertFromN8n, {
+      const result = await ctx.runMutation(internal.shippingRecaps.upsertFromN8n, {
         customerPhone: String(body.customerPhone || body.phone || ""),
         customerName: body.customerName ? String(body.customerName) : undefined,
         csName: body.csName ? String(body.csName) : undefined,
@@ -143,7 +143,7 @@ http.route({
     }
 
     if (action === "import_berdu_verified_rows") {
-      const result = await ctx.runMutation(api.shippingRecaps.importBerduVerifiedRows, {
+      const result = await ctx.runMutation(internal.shippingRecaps.importBerduVerifiedRows, {
         importBatchId: String(body.importBatchId || `berdu-${Date.now()}`),
         rows: Array.isArray(body.rows) ? body.rows : [],
       });
@@ -151,7 +151,7 @@ http.route({
     }
 
     if (action === "cancel_shipping_recap") {
-      const result = await ctx.runMutation(api.shippingRecaps.markLatestCancelledByPhone, {
+      const result = await ctx.runMutation(internal.shippingRecaps.markLatestCancelledByPhone, {
         customerPhone: String(body.customerPhone || body.phone || ""),
         orderIdBerdu: body.orderIdBerdu || body.order_id ? String(body.orderIdBerdu || body.order_id) : undefined,
         reason: body.reason ? String(body.reason) : undefined,
@@ -161,28 +161,28 @@ http.route({
 
 
     if (action === "list_all") {
-      const result = await ctx.runQuery(api.state.listConversations, {
+      const result = await ctx.runQuery(internal.state.listConversations, {
         includeClosed: body.includeClosed === true || body.includeClosed === "true",
       });
       return jsonResponse({ success: true, conversations: result, _action: "list_all" });
     }
 
     if (action === "get_stats") {
-      const result = await ctx.runQuery(api.state.getDailyStats, {
+      const result = await ctx.runQuery(internal.state.getDailyStats, {
         date: body.date ? String(body.date) : undefined,
       });
       return jsonResponse(result);
     }
 
     if (action === "set_global") {
-      const result = await ctx.runMutation(api.settings.setGlobalAiEnabled, {
+      const result = await ctx.runMutation(internal.settings.setGlobalAiEnabled, {
         enabled: body.enabled !== false,
       });
       return jsonResponse({ ...result, _action: "set_global" });
     }
 
     if (action === "get_global") {
-      const globalEnabled = await ctx.runQuery(api.settings.getGlobalAiEnabled, {});
+      const globalEnabled = await ctx.runQuery(internal.settings.getGlobalAiEnabled, {});
       return jsonResponse({ success: true, globalEnabled, _action: "get_global" });
     }
 

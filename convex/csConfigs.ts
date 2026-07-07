@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import { normalizeCsName } from "./lib";
 
@@ -82,6 +83,7 @@ export async function getCsFeatureConfig(ctx: { db: any }, csName: string): Prom
 export const list = query({
   args: {},
   handler: async (ctx) => {
+    await requireMember(ctx, "csConfigs.list");
     const stored = await ctx.db.query("csConfigs").withIndex("by_active", (q) => q.eq("isActive", true)).collect();
     const byName = new Map(stored.map((config) => [config.normalizedName, config]));
 
@@ -133,6 +135,7 @@ export const upsert = mutation({
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "csConfigs.upsert");
     const now = Date.now();
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db
@@ -157,6 +160,7 @@ export const upsert = mutation({
 export const renameCs = mutation({
   args: { fromCsName: v.string(), toCsName: v.string() },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "csConfigs.renameCs");
     const to = args.toCsName.trim();
     if (!to) return { ok: false as const, error: "nama baru kosong" };
     const fromNorm = normalizeCsName(args.fromCsName);
@@ -182,6 +186,7 @@ export const renameCs = mutation({
 export const deleteCsConfig = mutation({
   args: { csName: v.string() },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "csConfigs.deleteCsConfig");
     const stored = await ctx.db
       .query("csConfigs")
       .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizeCsName(args.csName)))

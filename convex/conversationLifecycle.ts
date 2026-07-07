@@ -10,6 +10,7 @@
 import { action, internalAction, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { requireAdmin } from "./authz";
 import { messageHasDoneMarker } from "./followUpMath";
 
 // 5 days — same ceiling the follow-up funnel uses (followUpMath). Past this, a silent lead is dead.
@@ -119,5 +120,8 @@ export const cronArchiveSweep = internalAction({
 // pre-backfill preview via `npx convex run conversationLifecycle:archiveDryRun --prod`.
 export const archiveDryRun = action({
   args: {},
-  handler: async (ctx): Promise<SweepResult> => sweep(ctx, true),
+  handler: async (ctx): Promise<SweepResult> => {
+    await requireAdmin(ctx, "conversationLifecycle.archiveDryRun");
+    return sweep(ctx, true);
+  },
 });

@@ -1,4 +1,5 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
+import { requireAdmin } from "./authz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -107,6 +108,7 @@ export const createTestConversation = mutation({
     productName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "state.createTestConversation");
     const now = Date.now();
     const phone = normalizePhone(args.phone);
     const csName = args.csName ?? "CS Aisyah";
@@ -176,6 +178,7 @@ export const repairDailyStats = mutation({
     clearClosingKeys: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "state.repairDailyStats");
     const stats = await ctx.db
       .query("dailyStats")
       .withIndex("by_date", (q) => q.eq("date", args.date))
@@ -216,7 +219,7 @@ async function getConversationForArgs(ctx: { db: any }, args: { orderId?: string
   return null;
 }
 
-export const upsertOrderFromN8n = mutation({
+export const upsertOrderFromN8n = internalMutation({
   args: {
     phone: v.string(),
     csName: v.string(),
@@ -353,7 +356,7 @@ export const upsertOrderFromN8n = mutation({
 // prefix (e.g. "260624" -> orderIds "O-260624######"). The n8n reconciler diffs
 // these against Berdu's sequential daily numbering to find dropped orders to
 // backfill via /order/detail. Returns only the counters present in WaFaChat.
-export const listOrderCountersByPrefix = query({
+export const listOrderCountersByPrefix = internalQuery({
   args: { datePrefix: v.string() },
   handler: async (ctx, args) => {
     const lo = `O-${args.datePrefix}000000`;
@@ -376,7 +379,7 @@ export const listOrderCountersByPrefix = query({
   },
 });
 
-export const setConversationStatusFromN8n = mutation({
+export const setConversationStatusFromN8n = internalMutation({
   args: {
     phone: v.string(),
     order_id: v.optional(v.string()),
@@ -472,6 +475,7 @@ export const markConversationNotClosing = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "state.markConversationNotClosing");
     const now = Date.now();
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
@@ -540,6 +544,7 @@ export const markConversationCancelled = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "state.markConversationCancelled");
     const now = Date.now();
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
@@ -597,6 +602,7 @@ export const undoConversationCancelled = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "state.undoConversationCancelled");
     const now = Date.now();
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
@@ -651,6 +657,7 @@ export const markConversationClosing = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "state.markConversationClosing");
     const now = Date.now();
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
@@ -702,6 +709,7 @@ export const deleteConversationOrder = mutation({
     order_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "state.deleteConversationOrder");
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -784,7 +792,7 @@ export const deleteConversationOrder = mutation({
   },
 });
 
-export const recordStatEventFromN8n = mutation({
+export const recordStatEventFromN8n = internalMutation({
   args: {
     field: v.union(v.literal("closings"), v.literal("handovers")),
     phone: v.optional(v.string()),
@@ -849,7 +857,7 @@ export const recordStatEventFromN8n = mutation({
   },
 });
 
-export const listConversations = query({
+export const listConversations = internalQuery({
   args: { includeClosed: v.optional(v.boolean()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const startToday = startOfJakartaDayMs();
@@ -935,7 +943,7 @@ export const listConversations = query({
 });
 
 // DEPRECATED (Fase 1A): superseded by api.metrics.getDashboardSummary (derive-on-read). Kept until panel deploy cuts over.
-export const getDailyStats = query({
+export const getDailyStats = internalQuery({
   args: { date: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const date = args.date ?? getJakartaDate();
@@ -974,7 +982,7 @@ export const getDailyStats = query({
   },
 });
 
-export const health = query({
+export const health = internalQuery({
   args: {},
   handler: async (ctx) => {
     const globalEnabled = await getGlobalEnabled(ctx);
@@ -995,7 +1003,7 @@ export const health = query({
   },
 });
 
-export const getConversationContextForN8n = query({
+export const getConversationContextForN8n = internalQuery({
   args: { phone: v.string(), messageLimit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const phone = normalizePhone(args.phone);

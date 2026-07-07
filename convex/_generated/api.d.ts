@@ -10,6 +10,7 @@
 
 import type * as analytics from "../analytics.js";
 import type * as auth from "../auth.js";
+import type * as authz from "../authz.js";
 import type * as autoFollowUp from "../autoFollowUp.js";
 import type * as closingRules from "../closingRules.js";
 import type * as conversationLifecycle from "../conversationLifecycle.js";
@@ -39,6 +40,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   analytics: typeof analytics;
   auth: typeof auth;
+  authz: typeof authz;
   autoFollowUp: typeof autoFollowUp;
   closingRules: typeof closingRules;
   conversationLifecycle: typeof conversationLifecycle;

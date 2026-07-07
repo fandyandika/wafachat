@@ -1,4 +1,5 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
+import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizePhone } from "./lib";
@@ -39,6 +40,7 @@ export const appendMessage = mutation({
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "messages.appendMessage");
     const createdAt = args.createdAt ?? Date.now();
     const messageId = await ctx.db.insert("messages", { ...args, createdAt });
 
@@ -83,6 +85,7 @@ export const listMessages = query({
 export const deleteMessage = mutation({
   args: { messageId: v.id("messages") },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "messages.deleteMessage");
     const message = await ctx.db.get(args.messageId);
     if (!message) return { success: false, error: "message not found" };
 
@@ -105,7 +108,7 @@ export const deleteMessage = mutation({
   },
 });
 
-export const appendMessageFromN8n = mutation({
+export const appendMessageFromN8n = internalMutation({
   args: {
     phone: v.string(),
     order_id: v.optional(v.string()),

@@ -1,10 +1,12 @@
 import { query } from "./_generated/server";
+import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
 
 export const getDashboardSummary = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "metrics.getDashboardSummary");
     const orders = await ctx.db.query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
@@ -65,6 +67,7 @@ export const getTrend = query({
   args: { startAt: v.number(), endAt: v.number(),
     bucket: v.union(v.literal("day"), v.literal("week"), v.literal("month")), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "metrics.getTrend");
     const key = args.csName ? csKey(args.csName) : null;
     const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
     const orders = (await ctx.db.query("orders")
@@ -93,6 +96,7 @@ export const getTrend = query({
 export const getDuplicateOrders = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "metrics.getDuplicateOrders");
     const key = args.csName ? csKey(args.csName) : null;
     const orders = (
       await ctx.db
@@ -143,6 +147,7 @@ export const getDuplicateOrders = query({
 export const debugFindOrders = query({
   args: { orderIds: v.array(v.string()) },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "metrics.debugFindOrders");
     const results = [];
     for (const raw of args.orderIds) {
       const stripped = raw.replace(/^#/, "").trim();
@@ -169,6 +174,7 @@ export const debugFindOrders = query({
 export const debugOrderReconcile = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "metrics.debugOrderReconcile");
     const orders = await ctx.db
       .query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))

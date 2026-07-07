@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import { requireAdmin } from "./authz";
 
 const DEFAULT_PHRASES = ["PEMESANAN BERHASIL"];
 
@@ -21,6 +22,7 @@ export const getActivePhrases = query({
 export const seedDefault = mutation({
   args: {},
   handler: async (ctx) => {
+    await requireAdmin(ctx, "closingRules.seedDefault");
     const existing = await ctx.db.query("closingRules").collect();
     if (existing.length > 0) return { seeded: false, count: existing.length };
     for (const phrase of DEFAULT_PHRASES) {

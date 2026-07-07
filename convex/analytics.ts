@@ -1,4 +1,5 @@
 import { query } from "./_generated/server";
+import { requireMember } from "./authz";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, csKey } from "./lib";
 import { normalizeCsName, canonicalizeProduct } from "./shippingRecaps";
@@ -45,6 +46,7 @@ function aggName(a: CsAgg): string {
 export const getCsLeaderboard = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getCsLeaderboard");
     const len = args.endAt - args.startAt;
     const cur = await computeCsAgg(ctx, args.startAt, args.endAt, args.csName);
     const prev = await computeCsAgg(ctx, args.startAt - len, args.startAt - 1, args.csName);
@@ -99,6 +101,7 @@ async function computeProductAgg(ctx: any, startAt: number, endAt: number, csNam
 export const getProductDifficulty = query({
   args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getProductDifficulty");
     const minLeads = args.minLeads ?? 3;
     const len = args.endAt - args.startAt;
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
@@ -146,6 +149,7 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
 export const getPeriodReport = query({
   args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getPeriodReport");
     const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
     const cur = await computeCsAgg(ctx, start, end, args.csName);
@@ -195,6 +199,7 @@ type CsReportAcc = {
 export const getCsDetail = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.string() },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getCsDetail");
     const k = csKey(args.csName);
     const BOUNDARY_MS = 6 * 60 * 60 * 1000; // neighbor-period peek on each side
 
@@ -291,6 +296,7 @@ export const getCsDetail = query({
 export const getDailyReport = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getDailyReport");
     const orders = (
       await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone));

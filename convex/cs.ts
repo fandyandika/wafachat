@@ -1,4 +1,5 @@
 import { query, mutation } from "./_generated/server";
+import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import { csKey, normalizeCsName } from "./lib";
 import { DEFAULT_CONFIGS } from "./csConfigs";
@@ -12,6 +13,7 @@ type CsRow = {
 export const listCs = query({
   args: {},
   handler: async (ctx): Promise<CsRow[]> => {
+    await requireMember(ctx, "cs.listCs");
     // CS registry comes from csConfigs (~6 rows) + built-in DEFAULT_CONFIGS — NOT from a
     // 90-day scan of the orders table (that read ~18k docs on every render, on every page,
     // and was the single biggest avoidable DB I/O cost). New CS are registered in Settings.
@@ -69,6 +71,8 @@ export const generateUploadUrl = mutation({
 export const setCsAvatar = mutation({
   args: { csName: v.string(), storageId: v.id("_storage") },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "cs.setCsAvatar");
+    await requireAdmin(ctx, "cs.generateUploadUrl");
     const normalizedName = normalizeCsName(args.csName);
     const now = Date.now();
     const existing = await ctx.db.query("csConfigs")
@@ -92,6 +96,7 @@ export const setCsAvatar = mutation({
 export const clearCsAvatar = mutation({
   args: { csName: v.string() },
   handler: async (ctx, args) => {
+    await requireAdmin(ctx, "cs.clearCsAvatar");
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db.query("csConfigs")
       .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName)).unique();

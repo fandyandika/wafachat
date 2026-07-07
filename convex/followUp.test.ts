@@ -292,7 +292,7 @@ test("setFollowUpStage: cleared on customer reply (inbound)", async () => {
   await t.mutation(api.followUp.setFollowUpStage, { conversationId: convId, stage: 2, authSecret: "s3cret" });
 
   // Simulate inbound customer reply
-  await t.mutation(api.messages.appendMessageFromN8n, {
+  await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "62817", order_id: "O-17", direction: "inbound", role: "customer",
     content: "Terima kasih", createdAt: now - 1 * HOUR
   });
