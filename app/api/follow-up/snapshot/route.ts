@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ConvexHttpClient } from 'convex/browser';
 import { api } from '@/convex/_generated/api';
 import { verifySession } from '@/lib/auth-jwt';
+import { signConvexToken } from '@/lib/convex-token';
 
 // One-shot fetch for the heavy follow-up data (candidates + KPI). Replaces the live
 // useQuery subscriptions on the dashboard so these queries run only on page load /
@@ -19,6 +20,8 @@ export async function POST(req: NextRequest) {
   const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
 
   try {
+    // Carry the verified caller's identity into Convex (guarded queries reject anonymous).
+    convex.setAuth(await signConvexToken(session));
     const [candidates, kpi] = await Promise.all([
       convex.query(api.followUp.getFollowUpCandidates, { csName: cs }),
       convex.query(api.followUp.getFollowUpEffectiveness, { startAt: thirtyDaysAgo, endAt: now, csName: cs }),

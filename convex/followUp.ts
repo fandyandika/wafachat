@@ -37,10 +37,8 @@ export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: a
 }
 
 // nowOverride is test-only (Date.now() is unavailable in some runtimes); prod passes nothing.
-export const getFollowUpCandidates = query({
-  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    await requireMember(ctx, "followUp.getFollowUpCandidates");
+// Shared by the guarded panel query AND the identity-less cron sweep (autoFollowUp).
+async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowOverride?: number }) {
     const now = args.nowOverride ?? Date.now();
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
 
@@ -52,7 +50,7 @@ export const getFollowUpCandidates = query({
     const recent = (
       await Promise.all(
         (["active", "handover"] as const).map((s) =>
-          ctx.db.query("conversations").withIndex("by_status_updatedAt", (q) => q.eq("status", s).gte("updatedAt", since)).collect(),
+          ctx.db.query("conversations").withIndex("by_status_updatedAt", (q: any) => q.eq("status", s).gte("updatedAt", since)).collect(),
         ),
       )
     ).flat();
@@ -62,7 +60,7 @@ export const getFollowUpCandidates = query({
 
     // Latest message per conversation -> keep only GHOSTED ones (last message outbound), which bounds the heavier lookups.
     const lastMsgs = await Promise.all(
-      open.map((c) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first()),
+      open.map((c) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", c._id)).order("desc").first()),
     );
     const ghosted = open
       .map((c, i) => ({ c, lastMsg: lastMsgs[i] }))
@@ -70,10 +68,10 @@ export const getFollowUpCandidates = query({
 
     // For ghosted only: closed-by-recap, the latest inbound, and the follow-up touches since.
     const recaps = await Promise.all(
-      ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", x.c.orderId)).first()),
+      ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_orderIdBerdu", (q: any) => q.eq("orderIdBerdu", x.c.orderId)).first()),
     );
     const lastInbounds = await Promise.all(
-      ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", x.c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first()),
+      ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", x.c._id)).order("desc").filter((q: any) => q.eq(q.field("direction"), "inbound")).first()),
     );
     const touches = await Promise.all(
       ghosted.map((x, i) => touchInfo(ctx, x.c._id, lastInbounds[i]?.createdAt ?? null)),
@@ -117,7 +115,7 @@ export const getFollowUpCandidates = query({
 
     // Product name only for the final candidates.
     const orders = await Promise.all(
-      deduped.map((e) => ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", e.c.orderId)).first()),
+      deduped.map((e) => ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", e.c.orderId)).first()),
     );
     const stage1: Candidate[] = [];
     const stage2: Candidate[] = [];
@@ -134,7 +132,20 @@ export const getFollowUpCandidates = query({
     stage2.sort((a, b) => a.lastInboundAt - b.lastInboundAt);
     stage3.sort((a, b) => a.lastInboundAt - b.lastInboundAt);
     return { stage1, stage2, stage3 };
+}
+
+export const getFollowUpCandidates = query({
+  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "followUp.getFollowUpCandidates");
+    return followUpCandidatesHandler(ctx, args);
   },
+});
+
+// Cron/sweep path (autoFollowUp) — server-side, no user identity, not publicly callable.
+export const getFollowUpCandidatesInternal = internalQuery({
+  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
+  handler: async (ctx, args) => followUpCandidatesHandler(ctx, args),
 });
 
 const KIRIM_ERR: Record<string, string> = {

@@ -20,7 +20,11 @@ export type Viewer = {
   csName?: string;
 };
 
-const ENFORCE_DEFAULT = false; // flip to true in the enforcement commit (plan task 6)
+// FLIPPED 2026-07-07 after verification: identity chain proven end-to-end (prod token ->
+// whoami), n8n internalized, panel on token-carrying bundle, 4-min active-hours log
+// observation showed zero anonymous callers. Emergency rollback: set Convex env
+// AUTH_ENFORCE=off (dashboard) — overrides this default without a deploy.
+const ENFORCE_DEFAULT = true;
 function enforcing(): boolean {
   const env = (process.env.AUTH_ENFORCE ?? "").toLowerCase();
   if (env === "on" || env === "true") return true;

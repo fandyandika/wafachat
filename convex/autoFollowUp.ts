@@ -49,7 +49,7 @@ export const autoFollowUpSweep = internalAction({
     for (const cs of enabled) {
       const remaining = AUTO_DAILY_CAP - cs.sentToday;
       if (remaining <= 0) continue;
-      const cands = await ctx.runQuery(api.followUp.getFollowUpCandidates, { csName: cs.csName, nowOverride: now });
+      const cands = await ctx.runQuery(internal.followUp.getFollowUpCandidatesInternal, { csName: cs.csName, nowOverride: now });
       const queue = [
         ...cands.stage1.map((c) => ({ id: c.conversationId, stage: 1 })),
         ...cands.stage2.map((c) => ({ id: c.conversationId, stage: 2 })),
