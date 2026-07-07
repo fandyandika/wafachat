@@ -20,4 +20,18 @@ crons.hourly(
   {},
 );
 
+crons.interval(
+  "ingest silence detector",
+  { minutes: 5 },
+  internal.ingest.monitor.checkHealth,
+  {},
+);
+
+crons.daily(
+  "ingest events retention (30d)",
+  { hourUTC: 19, minuteUTC: 30 }, // 02:30 WIB, quiet window
+  internal.ingest.events.cleanupOldDaily,
+  {},
+);
+
 export default crons;

@@ -60,6 +60,19 @@ export const cleanupOld = internalMutation({
   },
 });
 
+export const cleanupOldDaily = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cutoff = Date.now() - 30 * 24 * 3_600_000;
+    const old = await ctx.db
+      .query("ingestEvents")
+      .withIndex("by_receivedAt", (q) => q.lt("receivedAt", cutoff))
+      .take(500);
+    for (const row of old) await ctx.db.delete(row._id);
+    return { deleted: old.length };
+  },
+});
+
 export const listRecent = query({
   args: { limit: v.optional(v.number()), status: v.optional(statusValidator) },
   handler: async (ctx, args) => {
