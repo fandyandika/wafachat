@@ -129,7 +129,7 @@ export default defineSchema({
     direction: v.union(v.literal("inbound"), v.literal("outbound")),
     content: v.string(),
     messageType: v.union(v.literal("text"), v.literal("image"), v.literal("template"), v.literal("button")),
-    source: v.union(v.literal("kirimchat"), v.literal("panel"), v.literal("n8n")),
+    source: v.union(v.literal("kirimchat"), v.literal("panel"), v.literal("n8n"), v.literal("ingest")),
     externalMessageId: v.optional(v.string()),
     createdAt: v.number(),
   })

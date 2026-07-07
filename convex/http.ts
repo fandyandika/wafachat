@@ -1,6 +1,7 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { verifySignature } from "./ingest/signature";
 
 const http = httpRouter();
 
@@ -22,6 +23,8 @@ function normalizeMessageType(value: unknown): "text" | "image" | "template" | "
   if (value === "image" || value === "template" || value === "button") return value;
   return "text";
 }
+
+const MAX_BODY_BYTES = 262_144; // 256 KB
 
 http.route({
   path: "/n8n/state",
@@ -187,6 +190,55 @@ http.route({
     }
 
     return jsonResponse({ success: false, error: `unsupported action: ${action}` }, 400);
+  }),
+});
+
+http.route({
+  path: "/webhooks/kirimdev",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const rawBody = await request.text();
+    if (rawBody.length > MAX_BODY_BYTES) {
+      return jsonResponse({ ok: false, error: "payload too large" }, 400);
+    }
+    const source = await ctx.runQuery(internal.ingest.sources.getBySourceKey, {
+      sourceKey: "kirimdev-pustakaislam",
+    });
+    if (!source || !source.enabled) return jsonResponse({ ok: false, error: "unknown source" }, 404);
+
+    const sig = await verifySignature({
+      header: request.headers.get("x-kirim-signature"),
+      rawBody, secret: source.secret, nowMs: Date.now(),
+    });
+    if (!sig.ok && source.enforceSignature) {
+      return jsonResponse({ ok: false, error: "invalid signature" }, 401);
+    }
+    try { JSON.parse(rawBody); } catch {
+      return jsonResponse({ ok: false, error: "invalid json" }, 400);
+    }
+
+    const relevantHeaders: Record<string, string> = {};
+    for (const h of ["x-kirim-event", "x-kirim-event-id", "x-kirim-delivery-id", "x-kirim-signature", "content-type"]) {
+      const val = request.headers.get(h);
+      if (val) relevantHeaders[h] = val;
+    }
+    const eventId = await ctx.runMutation(internal.ingest.events.captureEvent, {
+      sourceKey: source.sourceKey,
+      kind: "message.event",
+      rawHeaders: JSON.stringify(relevantHeaders),
+      rawBody,
+      signatureOk: sig.ok,
+    });
+    // Always-200 after capture: a processing bug must not make the vendor
+    // count failures (that is what auto-disabled the subscription on 7 Jul).
+    try {
+      await ctx.runMutation(internal.ingest.core.processEvent, { eventId });
+    } catch (e) {
+      await ctx.runMutation(internal.ingest.events.markFailed, {
+        eventId, error: (e as Error).message || String(e),
+      });
+    }
+    return jsonResponse({ ok: true, eventId });
   }),
 });
 

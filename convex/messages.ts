@@ -108,6 +108,181 @@ export const deleteMessage = mutation({
   },
 });
 
+// Shared ingestion core: called by the n8n adapter route (legacy, during transition)
+// and by the Ingestion API (convex/ingest/core.ts). Behavior is identical to the
+// pre-refactor appendMessageFromN8n handler, plus an optional `source` tag.
+export type AppendMessageCoreArgs = {
+  phone: string;
+  order_id?: string;
+  customerName?: string;
+  csName?: string;
+  role: "customer" | "ai" | "cs" | "system";
+  direction: "inbound" | "outbound";
+  content: string;
+  messageType?: "text" | "image" | "template" | "button";
+  externalMessageId?: string;
+  createdAt?: number;
+  source?: string; // "n8n" (default) | "ingest"
+};
+
+export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
+  const phone = normalizePhone(args.phone);
+  if (args.externalMessageId) {
+    const dup = await ctx.db
+      .query("messages")
+      .withIndex("by_externalMessageId", (q: any) => q.eq("externalMessageId", args.externalMessageId))
+      .first();
+    if (dup) {
+      return {
+        success: true, messageId: dup._id, conversationId: dup.conversationId,
+        order_id: dup.orderId, phone: dup.customerPhone, _action: "append_message", deduped: true,
+      };
+    }
+  }
+  let conversation = await getConversationForMessage(ctx, {
+    customerPhone: phone,
+    orderId: args.order_id,
+  });
+
+  if (!conversation) {
+    const now = Date.now();
+    const csName = args.csName || "Unknown";
+    const csConfig = await getCsFeatureConfig(ctx, csName);
+    const orderId = args.order_id || `manual:${phone}`;
+    const conversationId = await ctx.db.insert("conversations", {
+      orderId,
+      customerPhone: phone,
+      customerName: args.customerName || "",
+      assignedCsName: csName,
+      status: "handover",
+      aiEnabled: false,
+      note: "created from webhook message",
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    conversation = await ctx.db.get(conversationId);
+
+    await ctx.db.insert("events", {
+      conversationId,
+      orderId,
+      customerPhone: phone,
+      type: "order_upserted",
+      actor: "n8n",
+      metadata: {
+        source: "message_append_fallback",
+        reportingEnabled: csConfig.reportingEnabled,
+        aiEnabled: false,
+      },
+      createdAt: now,
+    });
+  }
+
+  const createdAt = args.createdAt ?? Date.now();
+  const messageId = await ctx.db.insert("messages", {
+    conversationId: conversation._id,
+    orderId: conversation.orderId,
+    customerPhone: conversation.customerPhone,
+    role: args.role,
+    direction: args.direction,
+    content: args.content,
+    messageType: args.messageType ?? "text",
+    source: args.source ?? "n8n",
+    externalMessageId: args.externalMessageId,
+    createdAt,
+  });
+
+  const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string; followUpStageOverride?: undefined } = {
+    lastMessageAt: createdAt,
+    updatedAt: createdAt,
+  };
+  // Heal CS attribution: adopt a known CS when the existing conversation is still
+  // unattributed ("Unknown"/empty). Never clobber a real CS. The closing detection
+  // below re-reads this conversation, so a closing message also lands the right CS.
+  if (
+    args.csName &&
+    args.csName !== "Unknown" &&
+    (!conversation.assignedCsName || conversation.assignedCsName === "Unknown")
+  ) {
+    convPatch.assignedCsName = args.csName;
+  }
+  // Feature #8: clear override on customer reply (customer reply resets the manual pin).
+  if (args.direction === "inbound") {
+    convPatch.followUpStageOverride = undefined;
+  }
+  await ctx.db.patch(conversation._id, convPatch);
+  await ctx.db.insert("events", {
+    conversationId: conversation._id,
+    orderId: conversation.orderId,
+    customerPhone: conversation.customerPhone,
+    type: args.direction === "inbound" ? "message_inbound" : "ai_reply_sent",
+    actor: args.role === "ai" ? "ai" : args.role === "cs" ? "cs" : "n8n",
+    metadata: {
+      messageId,
+      role: args.role,
+      direction: args.direction,
+      messageType: args.messageType ?? "text",
+      source: args.source ?? "n8n",
+    },
+    createdAt,
+  });
+
+  let closingRecapId: Id<"shippingRecaps"> | undefined;
+  if (args.direction === "outbound") {
+    const phrases = await getActiveClosingPhrases(ctx);
+    if (messageMatchesPhrase(args.content, phrases)) {
+      const result = await upsertRecapFromMessage(ctx, {
+        orderId: conversation.orderId,
+        customerPhone: conversation.customerPhone,
+        content: args.content,
+        externalMessageId: args.externalMessageId,
+        _id: messageId,
+        createdAt,
+      });
+      if (result.action !== "skipped") {
+        closingRecapId = result.recapId;
+
+        // Feature #10: record follow-up touches that preceded this closing.
+        const lastInbound = await ctx.db
+          .query("messages")
+          .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversation._id))
+          .order("desc")
+          .filter((q: any) => q.eq(q.field("direction"), "inbound"))
+          .first();
+        const touchCount = await countFollowUpTouchesBeforeTime(ctx, conversation._id, lastInbound?.createdAt ?? null, createdAt);
+        await ctx.db.patch(result.recapId, { followUpTouchesAtClose: touchCount });
+
+        await ctx.db.insert("events", {
+          conversationId: conversation._id,
+          orderId: conversation.orderId,
+          customerPhone: conversation.customerPhone,
+          type: "closing_detected",
+          actor: "n8n",
+          metadata: { recapId: result.recapId, source: "auto_message", externalMessageId: args.externalMessageId },
+          createdAt,
+        });
+      }
+    }
+  }
+
+  // Funnel-exclude markers (shopee / bonus / review / testi / feedback / cod diproses): the lead is
+  // post-sale or handled elsewhere → close it in REAL TIME so it drops out of the follow-up funnel
+  // immediately (same idea as closing detection above; the daily sweep is the backstop). Reversible.
+  if (conversation.status !== "closed" && messageHasDoneMarker(args.content, args.direction)) {
+    await ctx.db.patch(conversation._id, { status: "closed", updatedAt: createdAt });
+  }
+
+  return {
+    success: true,
+    messageId,
+    conversationId: conversation._id,
+    order_id: conversation.orderId,
+    phone: conversation.customerPhone,
+    closingRecapId,
+    _action: "append_message",
+  };
+}
+
 export const appendMessageFromN8n = internalMutation({
   args: {
     phone: v.string(),
@@ -121,161 +296,5 @@ export const appendMessageFromN8n = internalMutation({
     externalMessageId: v.optional(v.string()),
     createdAt: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const phone = normalizePhone(args.phone);
-    if (args.externalMessageId) {
-      const dup = await ctx.db
-        .query("messages")
-        .withIndex("by_externalMessageId", (q) => q.eq("externalMessageId", args.externalMessageId))
-        .first();
-      if (dup) {
-        return {
-          success: true, messageId: dup._id, conversationId: dup.conversationId,
-          order_id: dup.orderId, phone: dup.customerPhone, _action: "append_message", deduped: true,
-        };
-      }
-    }
-    let conversation = await getConversationForMessage(ctx, {
-      customerPhone: phone,
-      orderId: args.order_id,
-    });
-
-    if (!conversation) {
-      const now = Date.now();
-      const csName = args.csName || "Unknown";
-      const csConfig = await getCsFeatureConfig(ctx, csName);
-      const orderId = args.order_id || `manual:${phone}`;
-      const conversationId = await ctx.db.insert("conversations", {
-        orderId,
-        customerPhone: phone,
-        customerName: args.customerName || "",
-        assignedCsName: csName,
-        status: "handover",
-        aiEnabled: false,
-        note: "created from webhook message",
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      conversation = await ctx.db.get(conversationId);
-
-      await ctx.db.insert("events", {
-        conversationId,
-        orderId,
-        customerPhone: phone,
-        type: "order_upserted",
-        actor: "n8n",
-        metadata: {
-          source: "message_append_fallback",
-          reportingEnabled: csConfig.reportingEnabled,
-          aiEnabled: false,
-        },
-        createdAt: now,
-      });
-    }
-
-    const createdAt = args.createdAt ?? Date.now();
-    const messageId = await ctx.db.insert("messages", {
-      conversationId: conversation._id,
-      orderId: conversation.orderId,
-      customerPhone: conversation.customerPhone,
-      role: args.role,
-      direction: args.direction,
-      content: args.content,
-      messageType: args.messageType ?? "text",
-      source: "n8n",
-      externalMessageId: args.externalMessageId,
-      createdAt,
-    });
-
-    const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string; followUpStageOverride?: undefined } = {
-      lastMessageAt: createdAt,
-      updatedAt: createdAt,
-    };
-    // Heal CS attribution: adopt a known CS when the existing conversation is still
-    // unattributed ("Unknown"/empty). Never clobber a real CS. The closing detection
-    // below re-reads this conversation, so a closing message also lands the right CS.
-    if (
-      args.csName &&
-      args.csName !== "Unknown" &&
-      (!conversation.assignedCsName || conversation.assignedCsName === "Unknown")
-    ) {
-      convPatch.assignedCsName = args.csName;
-    }
-    // Feature #8: clear override on customer reply (customer reply resets the manual pin).
-    if (args.direction === "inbound") {
-      convPatch.followUpStageOverride = undefined;
-    }
-    await ctx.db.patch(conversation._id, convPatch);
-    await ctx.db.insert("events", {
-      conversationId: conversation._id,
-      orderId: conversation.orderId,
-      customerPhone: conversation.customerPhone,
-      type: args.direction === "inbound" ? "message_inbound" : "ai_reply_sent",
-      actor: args.role === "ai" ? "ai" : args.role === "cs" ? "cs" : "n8n",
-      metadata: {
-        messageId,
-        role: args.role,
-        direction: args.direction,
-        messageType: args.messageType ?? "text",
-        source: "n8n",
-      },
-      createdAt,
-    });
-
-    let closingRecapId: Id<"shippingRecaps"> | undefined;
-    if (args.direction === "outbound") {
-      const phrases = await getActiveClosingPhrases(ctx);
-      if (messageMatchesPhrase(args.content, phrases)) {
-        const result = await upsertRecapFromMessage(ctx, {
-          orderId: conversation.orderId,
-          customerPhone: conversation.customerPhone,
-          content: args.content,
-          externalMessageId: args.externalMessageId,
-          _id: messageId,
-          createdAt,
-        });
-        if (result.action !== "skipped") {
-          closingRecapId = result.recapId;
-
-          // Feature #10: record follow-up touches that preceded this closing.
-          const lastInbound = await ctx.db
-            .query("messages")
-            .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversation._id))
-            .order("desc")
-            .filter((q: any) => q.eq(q.field("direction"), "inbound"))
-            .first();
-          const touchCount = await countFollowUpTouchesBeforeTime(ctx, conversation._id, lastInbound?.createdAt ?? null, createdAt);
-          await ctx.db.patch(result.recapId, { followUpTouchesAtClose: touchCount });
-
-          await ctx.db.insert("events", {
-            conversationId: conversation._id,
-            orderId: conversation.orderId,
-            customerPhone: conversation.customerPhone,
-            type: "closing_detected",
-            actor: "n8n",
-            metadata: { recapId: result.recapId, source: "auto_message", externalMessageId: args.externalMessageId },
-            createdAt,
-          });
-        }
-      }
-    }
-
-    // Funnel-exclude markers (shopee / bonus / review / testi / feedback / cod diproses): the lead is
-    // post-sale or handled elsewhere → close it in REAL TIME so it drops out of the follow-up funnel
-    // immediately (same idea as closing detection above; the daily sweep is the backstop). Reversible.
-    if (conversation.status !== "closed" && messageHasDoneMarker(args.content, args.direction)) {
-      await ctx.db.patch(conversation._id, { status: "closed", updatedAt: createdAt });
-    }
-
-    return {
-      success: true,
-      messageId,
-      conversationId: conversation._id,
-      order_id: conversation.orderId,
-      phone: conversation.customerPhone,
-      closingRecapId,
-      _action: "append_message",
-    };
-  },
+  handler: async (ctx, args) => appendMessageCore(ctx, args),
 });
