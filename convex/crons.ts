@@ -27,6 +27,13 @@ crons.interval(
   {},
 );
 
+crons.interval(
+  "berdu order reconciler",
+  { minutes: 5 },
+  internal.ingest.reconciler.runReconcile,
+  {},
+);
+
 crons.daily(
   "ingest events retention (30d)",
   { hourUTC: 19, minuteUTC: 30 }, // 02:30 WIB, quiet window

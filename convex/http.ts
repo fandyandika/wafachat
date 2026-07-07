@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { verifySignature } from "./ingest/signature";
+import { fetchBerduOrderDetail } from "./ingest/reconciler";
 
 const http = httpRouter();
 
@@ -241,11 +242,6 @@ http.route({
     return jsonResponse({ ok: true, eventId });
   }),
 });
-
-// Task 10: Berdu webhook route. Task 11 will replace the stub with real import.
-async function fetchBerduOrderDetail(_orderId: string): Promise<any | null> {
-  return null;
-}
 
 http.route({
   path: "/webhooks/berdu",
