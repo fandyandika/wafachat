@@ -163,3 +163,31 @@ test("lead.created ingests order via upsertOrderCore with preserved createdAt", 
     });
   });
 });
+
+test("generic.message ingests via universal contract", async () => {
+  const t = convexTest(schema);
+  const raw = JSON.stringify({
+    phone: "6281234567890", direction: "inbound", role: "customer",
+    content: "tanya stok", externalMessageId: "ext-1", timestamp: 1783427359000,
+  });
+  const eventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}", rawBody: raw, signatureOk: true,
+  });
+  await t.mutation(internal.ingest.core.processEvent, { eventId });
+  await t.run(async (ctx) => {
+    const msgs = await ctx.db.query("messages").collect();
+    expect(msgs[0]).toMatchObject({ content: "tanya stok", createdAt: 1783427359000 });
+  });
+});
+
+test("generic.lead validates required fields", async () => {
+  const t = convexTest(schema);
+  const eventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "custom-x", kind: "generic.lead", rawHeaders: "{}",
+    rawBody: JSON.stringify({ phone: "628123" }), signatureOk: true,
+  });
+  await t.mutation(internal.ingest.core.processEvent, { eventId });
+  const asAdminT = t.withIdentity({ subject: "a1", role: "admin", name: "A", email: "a@w" });
+  const skipped = await asAdminT.query(api.ingest.events.listRecent, { status: "skipped" });
+  expect(skipped[0].skipReason).toBe("missing phone/orderId/csName");
+});

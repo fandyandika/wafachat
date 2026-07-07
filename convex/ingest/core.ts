@@ -62,6 +62,36 @@ export async function processCapturedEvent(
     return { status: "processed", resultRef: String(result?.orderId ?? e.orderId) };
   }
 
+  if (event.kind === "generic.message") {
+    const p = body as Record<string, any>;
+    if (!p.phone || !p.content || !p.externalMessageId) return { status: "skipped", skipReason: "missing phone/content/externalMessageId" };
+    if (p.direction !== "inbound" && p.direction !== "outbound") return { status: "skipped", skipReason: "invalid direction" };
+    if (p.role !== "customer" && p.role !== "cs" && p.role !== "ai") return { status: "skipped", skipReason: "invalid role" };
+    const result = await appendMessageCore(ctx, {
+      phone: String(p.phone), role: p.role, direction: p.direction,
+      content: String(p.content), messageType: "text",
+      externalMessageId: String(p.externalMessageId),
+      createdAt: typeof p.timestamp === "number" ? p.timestamp : event.receivedAt,
+      csName: typeof p.csName === "string" ? p.csName : undefined,
+      source: "ingest",
+    });
+    return { status: "processed", resultRef: String(result?.messageId ?? "") };
+  }
+
+  if (event.kind === "generic.lead") {
+    const p = body as Record<string, any>;
+    if (!p.phone || !p.orderId || !p.csName) return { status: "skipped", skipReason: "missing phone/orderId/csName" };
+    const result = await upsertOrderCore(ctx, {
+      phone: String(p.phone), csName: String(p.csName),
+      customerName: p.customerName ? String(p.customerName) : undefined,
+      products: p.products ? String(p.products) : undefined,
+      total: p.total ? String(p.total) : undefined,
+      order_id: String(p.orderId),
+      createdAt: typeof p.timestamp === "number" ? p.timestamp : undefined,
+    });
+    return { status: "processed", resultRef: String(result?.orderId ?? p.orderId) };
+  }
+
   // Task 12 adds "generic.message"/"generic.lead".
   return { status: "skipped", skipReason: `unsupported kind ${event.kind}` };
 }

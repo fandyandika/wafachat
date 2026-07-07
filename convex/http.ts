@@ -281,4 +281,40 @@ http.route({
   }),
 });
 
+function genericIngestRoute(path: string, kind: "generic.message" | "generic.lead") {
+  http.route({
+    path,
+    method: "POST",
+    handler: httpAction(async (ctx, request) => {
+      const rawBody = await request.text();
+      if (rawBody.length > MAX_BODY_BYTES) return jsonResponse({ ok: false, error: "payload too large" }, 400);
+      const sourceKey = request.headers.get("x-wafachat-source") ?? "";
+      const source = sourceKey
+        ? await ctx.runQuery(internal.ingest.sources.getBySourceKey, { sourceKey })
+        : null;
+      if (!source || !source.enabled) return jsonResponse({ ok: false, error: "unknown source" }, 404);
+      const sig = await verifySignature({
+        header: request.headers.get("x-wafachat-signature"),
+        rawBody, secret: source.secret, nowMs: Date.now(),
+      });
+      if (!sig.ok && source.enforceSignature) return jsonResponse({ ok: false, error: "invalid signature" }, 401);
+      try { JSON.parse(rawBody); } catch { return jsonResponse({ ok: false, error: "invalid json" }, 400); }
+      const eventId = await ctx.runMutation(internal.ingest.events.captureEvent, {
+        sourceKey: source.sourceKey, kind,
+        rawHeaders: JSON.stringify({ "x-wafachat-source": sourceKey }),
+        rawBody, signatureOk: sig.ok,
+      });
+      try {
+        await ctx.runMutation(internal.ingest.core.processEvent, { eventId });
+      } catch (e) {
+        await ctx.runMutation(internal.ingest.events.markFailed, { eventId, error: (e as Error).message || String(e) });
+      }
+      return jsonResponse({ ok: true, eventId });
+    }),
+  });
+}
+
+genericIngestRoute("/ingest/message", "generic.message");
+genericIngestRoute("/ingest/lead", "generic.lead");
+
 export default http;
