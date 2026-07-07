@@ -44,7 +44,7 @@ peluang positioning.
 |---|---|---|
 | Rebuild dari nol? | **TIDAK — evolusi ke multi-tenant** | Nilai WaFaChat = logika yang sudah teruji data nyata (Queen score, Arena, CR pelanggan-unik, deteksi closing, SLA jam-aktif, Rincian). Rebuild membuang bukti kerja berbulan-bulan; refactor platform layer di sekitarnya. |
 | Bangun BSP sendiri (ala Kirim.dev)? | **TIDAK** | Itu pasar crowded yang mau dihindari. Jadilah layer di ATAS semua BSP. Jangka menengah: daftar **Meta Tech Provider** (Embedded Signup) agar tenant bisa connect WABA langsung — menghapus ketergantungan tanpa jadi BSP. |
-| Convex diganti? | **TIDAK (untuk sekarang)** | Kecepatan dev terbukti; realtime gratis; zero ops. Mitigasi lock-in & biaya: arsitektur event+rollup (lihat §4) membuat storage layer portable — migrasi ke Postgres jadi opsi enak SETELAH ada revenue, bukan prasyarat. |
+| Convex diganti? | **TIDAK (untuk sekarang)** | Kecepatan dev terbukti; realtime gratis; zero ops. Mitigasi lock-in & biaya: arsitektur event+rollup (lihat §4) membuat storage layer portable — migrasi ke Postgres jadi opsi enak SETELAH ada revenue, bukan prasyarat. **Data latensi (diukur 2026-07-07 dari Indonesia):** query ringan median 273ms, query berat (laporan 1 hari) 517ms — Convex di US East. Diterima untuk dashboard (tim internal 5 orang pakai harian tanpa keluhan kecepatan). **Kriteria ganti (gerbang Fase 2, ke Postgres region SG — Supabase/Neon):** (a) tenant komplain kecepatan, (b) p95 load panel > 2 detik, (c) biaya Convex tak proporsional per tenant, (d) tuntutan data residency. |
 | n8n bagian dari produk? | **TIDAK** | n8n = alat prototyping internal. Semua glue per-customer dipindah ke Ingestion API yang diproduktisasi. |
 
 ---
