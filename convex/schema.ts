@@ -61,6 +61,7 @@ export default defineSchema({
     csPhone: v.optional(v.string()),
     provider: v.optional(v.string()),
     providerNumberId: v.optional(v.string()),
+    providerNumberIds: v.optional(v.array(v.string())), // one CS can own >1 WABA number (e.g. Nabila has 2)
     orderAutomationEnabled: v.boolean(),
     aiAssistantEnabled: v.boolean(),
     reportingEnabled: v.boolean(),
@@ -74,6 +75,51 @@ export default defineSchema({
   })
     .index("by_normalizedName", ["normalizedName"])
     .index("by_active", ["isActive"]),
+
+  // ── Ingestion API (Fase 1) ────────────────────────────────────────────────
+  // Capture-first: every inbound webhook is stored raw BEFORE processing, so a
+  // processing bug never loses data and failed events replay from OUR table,
+  // not the vendor's dead-letter UI. (Incident 2026-07-07.)
+  ingestEvents: defineTable({
+    sourceKey: v.string(),
+    kind: v.string(), // "message.event" | "lead.created" | "generic.message" | "generic.lead" | "unknown"
+    rawHeaders: v.string(), // JSON string of the relevant header subset
+    rawBody: v.string(),
+    signatureOk: v.boolean(),
+    status: v.union(
+      v.literal("received"),
+      v.literal("processed"),
+      v.literal("failed"),
+      v.literal("skipped"),
+    ),
+    error: v.optional(v.string()),
+    skipReason: v.optional(v.string()),
+    resultRef: v.optional(v.string()),
+    receivedAt: v.number(),
+    processedAt: v.optional(v.number()),
+    replayOf: v.optional(v.id("ingestEvents")),
+  })
+    .index("by_status_receivedAt", ["status", "receivedAt"])
+    .index("by_receivedAt", ["receivedAt"]),
+
+  ingestSources: defineTable({
+    sourceKey: v.string(),
+    name: v.string(),
+    kind: v.union(v.literal("kirimdev"), v.literal("berdu"), v.literal("custom")),
+    secret: v.string(),
+    orgId: v.optional(v.string()),
+    enabled: v.boolean(),
+    // false = log-only: record signatureOk but accept the request. Prevents a
+    // wrong HMAC construction from 401-ing every delivery and getting the NEW
+    // subscription auto-disabled. Flip true after live verification.
+    enforceSignature: v.boolean(),
+    createdAt: v.number(),
+  }).index("by_sourceKey", ["sourceKey"]),
+
+  alertState: defineTable({
+    alertKey: v.string(), // "silence" | "failure-spike"
+    lastSentAt: v.number(),
+  }).index("by_alertKey", ["alertKey"]),
 
   messages: defineTable({
     conversationId: v.id("conversations"),
