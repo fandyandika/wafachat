@@ -89,3 +89,21 @@ test("sources mutations require admin", async () => {
     sourceKey: "x", name: "x", kind: "custom", secret: "s", enabled: true, enforceSignature: false,
   })).rejects.toThrow(/admin/);
 });
+
+test("dailyStats aggregates by status and kind", async () => {
+  const t = convexTest(schema);
+  const e1 = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "s", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true,
+  });
+  await t.mutation(internal.ingest.events.markProcessed, { eventId: e1 });
+  await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "s", kind: "lead.created", rawHeaders: "{}", rawBody: "{}", signatureOk: true,
+  });
+  const stats = await asAdmin(t).query(api.ingest.events.dailyStats, {
+    dayStartMs: Date.now() - 3_600_000, dayEndMs: Date.now() + 3_600_000,
+  });
+  expect(stats).toMatchObject({
+    received: 1, processed: 1, skipped: 0, failed: 0,
+    byKind: { "message.event": 1, "lead.created": 1 },
+  });
+});

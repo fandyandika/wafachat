@@ -88,3 +88,20 @@ export const listRecent = query({
     return ctx.db.query("ingestEvents").withIndex("by_receivedAt").order("desc").take(limit);
   },
 });
+
+export const dailyStats = query({
+  args: { dayStartMs: v.number(), dayEndMs: v.number() },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, "ingest.events.dailyStats");
+    const rows = await ctx.db
+      .query("ingestEvents")
+      .withIndex("by_receivedAt", (q) => q.gte("receivedAt", args.dayStartMs).lte("receivedAt", args.dayEndMs))
+      .collect();
+    const out = { received: 0, processed: 0, skipped: 0, failed: 0, byKind: {} as Record<string, number> };
+    for (const r of rows) {
+      out[r.status]++;
+      out.byKind[r.kind] = (out.byKind[r.kind] ?? 0) + 1;
+    }
+    return out;
+  },
+});
