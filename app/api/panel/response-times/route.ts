@@ -3,6 +3,7 @@ import { unstable_cache } from 'next/cache';
 import { ConvexHttpClient } from 'convex/browser';
 import { api } from '@/convex/_generated/api';
 import { verifySession } from '@/lib/auth-jwt';
+import { signConvexToken } from '@/lib/convex-token';
 
 // On-demand fetch for response-time stats. getResponseTimes scans the whole messages
 // table for the window, and was live-subscribed on Dashboard/Performance/Laporan — so
@@ -16,8 +17,14 @@ const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
 // All opens within the TTL — across ALL users — now share one Convex read. The
 // stats aggregate a whole day, so 2 minutes of staleness is invisible.
 const getResponseTimesCached = unstable_cache(
-  async (startAt: number, endAt: number, csName?: string) =>
-    convex.query(api.responseTime.getResponseTimes, { startAt, endAt, csName }),
+  async (startAt: number, endAt: number, csName?: string) => {
+    // Server-minted identity: the route already verified the caller's session; the
+    // cached result is shared across users, so a fixed server principal is correct.
+    convex.setAuth(
+      await signConvexToken({ userId: 'server:response-times', role: 'admin', name: 'server', email: 'server@wafachat' }),
+    );
+    return convex.query(api.responseTime.getResponseTimes, { startAt, endAt, csName });
+  },
   ['panel-response-times'],
   { revalidate: 120 },
 );
