@@ -141,6 +141,7 @@ Jangkar nilai: *"1 closing tambahan per hari sudah membayar langganan sebulan."*
 
 | Paket | Harga | Batas | Isi |
 |---|---|---|---|
+| **Solo** | Rp 99–149rb/bln | 1 CS | Laporan + realtime closing/respon (wedge akuisisi: owner 1 CS pun butuh visibilitas realtime — tanpa ini dia nunggu rekap 24 jam; upsell alami saat timnya tumbuh) |
 | **Starter** | Rp 299rb/bln | ≤ 3 CS | Laporan, Arena, SLA, leaderboard |
 | **Growth** | Rp 799rb/bln | ≤ 10 CS | + connector, follow-up funnel, Rincian, WA digest owner |
 | **Pro** | Rp 1,5–2jt/bln | unlimited, multi-cabang | + API, AI quality review, prioritas support |
@@ -215,6 +216,61 @@ adalah aset — pertahankan perilakunya (142 test hijau sebagai kontrak).
 
 **Definisi selesai per langkah:** test existing tetap hijau + test baru untuk perilaku
 multi-tenant (isolasi org adalah kasus uji nomor satu).
+
+---
+
+## 11. Playbook onboarding & koneksi (per platform)
+
+**Pola tunggal:** tiap org dapat **1 URL webhook unik + secret** → ditempel di platform
+tenant → event pertama masuk → **Field Mapper** memetakan field mereka ke skema kita →
+tersimpan. Setup pertama untuk sebuah platform = investasi: mapping-nya disimpan sebagai
+**preset**, tenant berikutnya di platform yang sama tinggal klik.
+
+| Tipe platform | Cara connect | Effort |
+|---|---|---|
+| Berdu | Preset (payload sudah dikuasai dari operasional sendiri) | ±5 menit |
+| Scalev / OrderOnline / Mengantar / LP builder ber-webhook | Mapping sekali → jadi preset publik | 30 mnt pertama, 5 mnt berikutnya |
+| LP custom | Universal webhook + mapper manual | 15–30 menit |
+| Tanpa webhook | Import CSV / input manual | fallback |
+
+**Model setup bertahap:**
+1. **Alpha (5–10 tenant): white-glove penuh** via WA/screen-share — setiap sesi setup
+   sekaligus menghasilkan preset + dokumentasi. White-glove di market Indonesia =
+   selling point, bukan kelemahan.
+2. **Beta: onboarding wizard** in-product (pilih platform → copy URL → test event →
+   daftar CS + alias → aturan closing → connect BSP) + tombol "minta bantuan via WA".
+3. **Skala:** 80% self-serve (preset lengkap); white-glove jadi fitur paket Pro.
+
+**Formulir intake calon tenant (1 halaman):** platform order, BSP WA, jumlah CS, contoh
+format pesan closing, jam operasional. Hasilnya = requirement matrix yang menentukan
+urutan preset yang dibangun.
+
+## 12. Jalur Meta API resmi (Tech Provider)
+
+**Prinsip: bukan blocker.** Hari 1 cukup BSP-agnostic (konsumsi webhook BSP tenant).
+Jalur resmi dikerjakan PARALEL mulai fase 2:
+
+1. **Legalitas**: badan usaha (PT/CV) → **Business Verification** di Meta Business
+   Manager (dokumen legal, domain, email bisnis). Durasi: hari–minggu.
+2. **Meta App + produk WhatsApp** → ajukan **App Review + Embedded Signup**
+   (demonstrasi use case). Durasi: minggu.
+3. **Hasil**: tombol "Hubungkan WhatsApp" di dashboard WaFaChat — tenant login Facebook,
+   WABA-nya ter-connect langsung (pesan mengalir dari Meta ke kita tanpa BSP perantara).
+   Mode **coexistence** (CS tetap pakai WA Business App di HP — model yang sudah terbukti
+   di operasional internal) tersedia via Cloud API.
+4. Estimasi total: 1–3 bulan, biaya kecil (legalitas + waktu).
+
+**Kenapa ini penting jangka menengah:** menghapus ketergantungan pada BSP pihak ketiga
+(risiko §8 nomor 1) TANPA menjadikan kita BSP anti-ban — kita tetap layer monitoring.
+
+## 13. Langkah pertama (actionable, minggu ini)
+
+1. **Rekrut 3–5 alpha tenant** dari jaringan sendiri. Framing: *"gratis 3 bulan sebagai
+   alpha user — syaratnya feedback mingguan + bersedia jadi case study"* (komitmen, bukan
+   sekadar gratisan).
+2. **Sebar formulir intake** (§11) ke tiap calon → requirement matrix nyata.
+3. Setelah **≥2 komitmen** → mulai **Fase 0 (hardening)**: auth semua function, cabut
+   hardcode, CS ber-ID. Prasyarat sebelum data orang lain masuk ke sistem.
 
 ---
 
