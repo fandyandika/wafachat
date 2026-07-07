@@ -124,14 +124,17 @@ multi-tenant) · Midtrans/Xendit (billing IDR) · Sentry · Vercel.
 | Fase | Durasi | Isi | Kriteria lulus |
 |---|---|---|---|
 | **0 — Hardening** | 2–4 minggu | §3 poin 1–3 | Aman dipakai orang selain internal |
-| **1 — Multi-tenant alpha** | 1–2 bulan | Org/member/role, onboarding wizard, universal webhook + mapper, closing-rule builder, CS ber-ID | **3–5 seller kenalan pakai GRATIS dan datanya akurat** |
-| **2 — Beta berbayar** | 2–3 bulan | Billing, rollup engine, rebranding + UX, landing page, connector Berdu/Scalev + 2 BSP | 10–20 tenant bayar; churn rendah |
+| **1 — Self-tenant testing** | 1–2 bulan | Org/member/role, universal webhook + mapper, closing-rule builder, CS ber-ID. **Owner = tenant #1–#3 sendiri**: org Berdu (produksi existing), org Scalev (test), org LP platform (beli paket test). | Ketiga org jalan akurat end-to-end; preset Berdu/Scalev/LP terbentuk; onboarding terdokumentasi (tulisan + video) |
+| **2 — Early access** | 2–3 bulan | Onboarding wizard + video, rebranding + UX, landing page, rollup engine, lalu buka trial ke seller luar — **produk sudah settle, bukan uji coba** | 10–20 tenant luar aktif; churn rendah → baru billing |
 | **3 — Diferensiasi** | kuartal berikutnya | Gamifikasi configurable (hadiah harian/mingguan/bulanan, SPV view, WA digest ke owner), audit lengkap, mobile polish | Fitur yang kompetitor tidak punya |
 | **4 — AI di bawah monitoring** | setelahnya | AI chat-quality review (skor kepatuhan script/tone per CS), benchmark AI-vs-human | AI sebagai alat ukur, bukan core |
 
-> ⚠️ Aturan fase 1: **jangan tulis satu baris kode billing sebelum 5 tenant gratisan sukses.**
-> Mereka akan mengekspos semua asumsi pustakaislam-specific yang tidak disadari
-> (format closing, jam cutoff, cara bagi leads, istilah).
+> ⚠️ Prinsip fase 1 (keputusan owner, 2026-07-07): **JANGAN jadikan seller luar kelinci
+> percobaan.** Produk ini menyentuh WhatsApp jualan orang — bug di WA CS tenant luar =
+> trust hangus + reputasi buruk menyebar di komunitas target. Validasi platform-platform
+> dilakukan dengan AKUN SENDIRI (Berdu existing, Scalev, beli paket LP untuk test).
+> Seller luar baru masuk saat onboarding sudah mulus + terdokumentasi (fase 2).
+> Billing tetap paling akhir: setelah tenant luar terbukti betah.
 
 ---
 
@@ -263,14 +266,17 @@ Jalur resmi dikerjakan PARALEL mulai fase 2:
 **Kenapa ini penting jangka menengah:** menghapus ketergantungan pada BSP pihak ketiga
 (risiko §8 nomor 1) TANPA menjadikan kita BSP anti-ban — kita tetap layer monitoring.
 
-## 13. Langkah pertama (actionable, minggu ini)
+## 13. Langkah pertama (revisi 2026-07-07 — self-test first)
 
-1. **Rekrut 3–5 alpha tenant** dari jaringan sendiri. Framing: *"gratis 3 bulan sebagai
-   alpha user — syaratnya feedback mingguan + bersedia jadi case study"* (komitmen, bukan
-   sekadar gratisan).
-2. **Sebar formulir intake** (§11) ke tiap calon → requirement matrix nyata.
-3. Setelah **≥2 komitmen** → mulai **Fase 0 (hardening)**: auth semua function, cabut
-   hardcode, CS ber-ID. Prasyarat sebelum data orang lain masuk ke sistem.
+1. **Fase 0 (hardening) langsung jalan** — tidak menunggu komitmen siapa pun: auth semua
+   function, cabut hardcode → per-org settings, CS ber-ID.
+2. **Owner jadi tenant #1–#3 sendiri**: org Berdu (produksi existing) · org Scalev (test;
+   pernah dipakai, tinggal connect) · org LP platform (beli paket termurah untuk test).
+   Dari sini lahir preset + dokumentasi onboarding (tulisan & video) yang teruji.
+3. **Legalitas**: rencana pendirian PT ~31 Juli 2026 → begitu berdiri, mulai proses Meta
+   Business Verification → Tech Provider (§12) berjalan paralel.
+4. **Early access ke seller luar** HANYA setelah #2 settle — onboarding mulus, video siap,
+   zero kelinci percobaan.
 
 ---
 
