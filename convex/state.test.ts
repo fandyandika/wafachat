@@ -17,6 +17,7 @@ test("startOfJakartaDayMs: Jakarta midnight <= now and within today", () => {
 
 test("listConversations: closed bounded to today (Jakarta); active+handover always", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const now = Date.now();
   await t.run(async (ctx) => {
     const base = { customerName: "X", assignedCsName: "CS A", aiEnabled: true, note: "", createdAt: now };
@@ -36,6 +37,7 @@ test("listConversations: closed bounded to today (Jakarta); active+handover alwa
 
 test("listConversations: includeClosed=false omits closed entirely", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const now = Date.now();
   await t.run(async (ctx) => {
     const base = { customerName: "X", assignedCsName: "CS A", aiEnabled: true, note: "", createdAt: now };
@@ -50,6 +52,7 @@ test("listConversations: includeClosed=false omits closed entirely", async () =>
 
 test("listOrderCountersByPrefix returns sorted present counters for the date prefix only", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const now = Date.now();
   await t.run(async (ctx) => {
     const base = { customerPhone: "62811", customerName: "X", productName: "P", products: "P", productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "", assignedCsName: "Risma", source: "berdu" as const, aiEligible: false, updatedAt: now, createdAt: now };
@@ -67,6 +70,7 @@ test("listOrderCountersByPrefix returns sorted present counters for the date pre
 
 test("upsertOrderFromN8n honors explicit createdAt on insert (reconciler backfill keeps real order time)", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const backdated = Date.UTC(2026, 5, 23, 18, 10, 43); // real Berdu order time, not now
   await t.mutation(internal.state.upsertOrderFromN8n, { phone: "6285735647633", csName: "Risma", order_id: "O-260624000009", createdAt: backdated });
   const order = await t.run(async (ctx) =>

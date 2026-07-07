@@ -8,6 +8,7 @@ const t0 = 1_750_000_000_000; // fixed ms within a single day
 
 test("getPerformance: leads=distinct customer, closing=distinct order, CR, cancelled excluded", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     // Same customer, 2 orders -> 1 lead (distinct phone)
     for (const orderId of ["O-1", "O-2"]) {
@@ -33,7 +34,7 @@ test("getPerformance: leads=distinct customer, closing=distinct order, CR, cance
     });
   });
 
-  const perf = await t.query(api.shippingRecaps.getPerformance, { startAt: t0 - DAY, endAt: t0 + DAY });
+  const perf = await asAdmin.query(api.shippingRecaps.getPerformance, { startAt: t0 - DAY, endAt: t0 + DAY });
   expect(perf.totalLeads).toBe(1);      // distinct customer
   expect(perf.totalClosing).toBe(1);    // cancelled excluded
   expect(perf.overallCr).toBe(100);     // 1/1
@@ -41,6 +42,7 @@ test("getPerformance: leads=distinct customer, closing=distinct order, CR, cance
 
 test("getDashboardSummary: leads/closings/cr from records, handovers from events", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     await ctx.db.insert("orders", { orderId: "O-1", customerPhone: "62811", customerName: "A",
       assignedCsName: "CS Aisyah", productName: "Quran", products: "Quran", productsSubtotal: "",
@@ -54,7 +56,7 @@ test("getDashboardSummary: leads/closings/cr from records, handovers from events
     await ctx.db.insert("events", { type: "handover", actor: "n8n", orderId: "O-1",
       customerPhone: "62811", metadata: {}, createdAt: t0 });
   });
-  const s = await t.query(api.metrics.getDashboardSummary, { startAt: t0 - DAY, endAt: t0 + DAY });
+  const s = await asAdmin.query(api.metrics.getDashboardSummary, { startAt: t0 - DAY, endAt: t0 + DAY });
   expect(s.leads).toBe(1);
   expect(s.closings).toBe(1);
   expect(s.cr).toBe(100);
@@ -63,6 +65,7 @@ test("getDashboardSummary: leads/closings/cr from records, handovers from events
 
 test("getTrend: buckets leads by order-date and closings by closing-date", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     await ctx.db.insert("orders", { orderId: "O-1", customerPhone: "62811", customerName: "A",
       assignedCsName: "CS Aisyah", productName: "Q", products: "Q", productsSubtotal: "", shippingCost: "",
@@ -74,7 +77,7 @@ test("getTrend: buckets leads by order-date and closings by closing-date", async
       paymentMethod: "cod", codValue: 1, total: 1, status: "ready", flags: [], sourceMessageText: "",
       version: 1, createdAt: t0, updatedAt: t0 });
   });
-  const trend = await t.query(api.metrics.getTrend, { startAt: t0 - DAY, endAt: t0 + 2 * DAY, bucket: "day" });
+  const trend = await asAdmin.query(api.metrics.getTrend, { startAt: t0 - DAY, endAt: t0 + 2 * DAY, bucket: "day" });
   const leadDay = trend.find((b) => b.leads === 1);
   const closeDay = trend.find((b) => b.closings === 1);
   expect(leadDay).toBeDefined();
@@ -84,6 +87,7 @@ test("getTrend: buckets leads by order-date and closings by closing-date", async
 
 test("getDuplicateOrders: groups repeat phones, flags accidental, excludes test+single+other-cs", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const base = {
     customerName: "A", products: "", productsSubtotal: "", shippingCost: "", total: "Rp1",
     shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu" as const,
@@ -103,7 +107,7 @@ test("getDuplicateOrders: groups repeat phones, flags accidental, excludes test+
     await ctx.db.insert("orders", { ...base, orderId: "O-T2", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran", createdAt: t0 + 1 });
   });
 
-  const dups = await t.query(api.metrics.getDuplicateOrders, { startAt: t0 - 1, endAt: t0 + DAY });
+  const dups = await asAdmin.query(api.metrics.getDuplicateOrders, { startAt: t0 - 1, endAt: t0 + DAY });
   expect(dups.length).toBe(2);
   const acc = dups.find((d) => d.phone === "62811")!;
   const non = dups.find((d) => d.phone === "62822")!;
@@ -112,6 +116,6 @@ test("getDuplicateOrders: groups repeat phones, flags accidental, excludes test+
   expect(non.likelyAccidental).toBe(false);  // diff product + far apart
 
   // csName filter: no orders for "CS B"
-  const none = await t.query(api.metrics.getDuplicateOrders, { startAt: t0 - 1, endAt: t0 + DAY, csName: "CS B" });
+  const none = await asAdmin.query(api.metrics.getDuplicateOrders, { startAt: t0 - 1, endAt: t0 + DAY, csName: "CS B" });
   expect(none.length).toBe(0);
 });

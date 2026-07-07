@@ -5,6 +5,7 @@ import { api, internal } from "./_generated/api";
 
 test("appendMessageFromN8n: same externalMessageId twice -> one row", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const args = {
     phone: "62811", order_id: "O-1", customerName: "A", csName: "CS Aisyah",
     role: "cs" as const, direction: "outbound" as const, content: "halo",
@@ -21,6 +22,7 @@ test("appendMessageFromN8n: same externalMessageId twice -> one row", async () =
 
 test("appendMessageFromN8n: outbound closing phrase -> exactly one recap + closing_detected event", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const base = {
     phone: "62811", order_id: "O-9", customerName: "A", csName: "CS Aisyah",
     role: "cs" as const, direction: "outbound" as const,
@@ -40,6 +42,7 @@ test("appendMessageFromN8n: outbound closing phrase -> exactly one recap + closi
 
 test("appendMessageFromN8n: inbound with phrase -> NO recap", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "62822", order_id: "O-10", role: "customer", direction: "inbound",
     content: "PEMESANAN BERHASIL?", messageType: "text", externalMessageId: "in1", createdAt: 2000,
@@ -50,6 +53,7 @@ test("appendMessageFromN8n: inbound with phrase -> NO recap", async () => {
 
 test("appendMessageFromN8n: outbound 'cod diproses' marker -> conversation closed LIVE", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "62844", order_id: "O-44", customerName: "A", csName: "CS Aisyah",
     role: "cs", direction: "outbound", content: "*PESANAN COD DIPROSES* ya kak",
@@ -62,6 +66,7 @@ test("appendMessageFromN8n: outbound 'cod diproses' marker -> conversation close
 
 test("appendMessageFromN8n: ordinary inbound -> conversation NOT closed", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "62845", order_id: "O-45", role: "customer", direction: "inbound",
     content: "halo kak mau tanya", messageType: "text", externalMessageId: "ord1", createdAt: 5000,
@@ -73,6 +78,7 @@ test("appendMessageFromN8n: ordinary inbound -> conversation NOT closed", async 
 
 test("appendMessageFromN8n: heals 'Unknown' conversation csName when a known CS arrives", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   // 1. Inbound with no csName -> fallback conversation assignedCsName "Unknown"
   await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "62833", role: "customer", direction: "inbound",
@@ -102,6 +108,7 @@ test("appendMessageFromN8n: heals 'Unknown' conversation csName when a known CS 
 // Feature #8: override cleared on inbound
 test("appendMessageFromN8n: inbound message clears followUpStageOverride", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const now = Date.now();
 
   // Create conversation with override set
@@ -130,6 +137,7 @@ test("appendMessageFromN8n: inbound message clears followUpStageOverride", async
 // Feature #10: KPI recording on closing
 test("appendMessageFromN8n: outbound closing phrase -> records followUpTouchesAtClose", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const now = Date.now();
   const HOUR = 3_600_000;
 

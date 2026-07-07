@@ -23,6 +23,7 @@ test("canonicalizeProduct: SKU-style closing names collapse into the order's can
 
 test("backfillFromMessages still upserts one recap for an outbound PEMESANAN BERHASIL", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     const convId = await ctx.db.insert("conversations", {
       orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "CS Aisyah",
@@ -34,7 +35,7 @@ test("backfillFromMessages still upserts one recap for an outbound PEMESANAN BER
       messageType: "text", source: "n8n", externalMessageId: "msg_1", createdAt: t0,
     });
   });
-  const res = await t.mutation(api.shippingRecaps.backfillFromMessages, {});
+  const res = await asAdmin.mutation(api.shippingRecaps.backfillFromMessages, {});
   expect(res.upserted).toBe(1);
   const recaps = await t.run(async (ctx) => ctx.db.query("shippingRecaps").collect());
   expect(recaps.length).toBe(1);
@@ -108,6 +109,7 @@ test("parseClosingMessage: CS template COD uses Harga as total", () => {
 
 test("getPerformance: closing groups under the order product name, not the message SKU", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     await ctx.db.insert("orders", {
       orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Risma",
@@ -123,7 +125,7 @@ test("getPerformance: closing groups under the order product name, not the messa
       version: 1, createdAt: t0, updatedAt: t0,
     });
   });
-  const perf = await t.query(api.shippingRecaps.getPerformance, { startAt: t0 - 1000, endAt: t0 + 1000 });
+  const perf = await asAdmin.query(api.shippingRecaps.getPerformance, { startAt: t0 - 1000, endAt: t0 + 1000 });
   const names = perf.products.map((row) => row.product);
   expect(names).toContain("Quran Mapping");
   expect(names).not.toContain("QURAN MAPPING 1 PCS");
@@ -134,6 +136,7 @@ test("getPerformance: closing groups under the order product name, not the messa
 
 test("renameCsName: renames CS across orders/recaps/conversations, others untouched", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const ord = { products: "", productName: "Q", productsSubtotal: "", shippingCost: "", total: "", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu" as const, aiEligible: true, createdAt: t0, updatedAt: t0 };
   await t.run(async (ctx) => {
     await ctx.db.insert("orders", { ...ord, orderId: "O-1", customerName: "A", customerPhone: "62811", assignedCsName: "Afisah" });
@@ -141,7 +144,7 @@ test("renameCsName: renames CS across orders/recaps/conversations, others untouc
     await ctx.db.insert("shippingRecaps", { orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "Afisah", recipientName: "A", recipientPhone: "x", recipientAddress: "", recipientDistrict: "", recipientCity: "", packageContent: "Q", paymentMethod: "cod" as const, flags: [], sourceMessageText: "", version: 1, closedAt: t0, status: "ready" as const, createdAt: t0, updatedAt: t0 });
     await ctx.db.insert("conversations", { orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Afisah", status: "active" as const, aiEnabled: false, note: "", createdAt: t0, updatedAt: t0 });
   });
-  const res = await t.mutation(api.shippingRecaps.renameCsName, { from: "Afisah", to: "Nabila" });
+  const res = await asAdmin.mutation(api.shippingRecaps.renameCsName, { from: "Afisah", to: "Nabila" });
   expect(res).toEqual({ from: "Afisah", to: "Nabila", orders: 1, recaps: 1, conversations: 1 });
   await t.run(async (ctx) => {
     const o1 = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-1")).unique();

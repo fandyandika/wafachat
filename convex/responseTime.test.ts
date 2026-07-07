@@ -15,6 +15,7 @@ const msgBase = {
 
 test("getResponseTimes: first-reply median/p90 + ongoing, template excluded, per-CS", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   let conv1: any, conv2: any, convX: any;
   await t.run(async (ctx) => {
     conv1 = await ctx.db.insert("conversations", { ...convBase, customerPhone: "62811", assignedCsName: "CS A" });
@@ -42,7 +43,7 @@ test("getResponseTimes: first-reply median/p90 + ongoing, template excluded, per
     await ins(convX, "6285715682110", "outbound", t0 + 3500, "text", "cs");
   });
 
-  const r = await t.query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 200000 });
+  const r = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 200000 });
   expect(r.cs.length).toBe(1);
   const a = r.cs[0];
   expect(a.csName).toBe("CS A");
@@ -58,6 +59,7 @@ test("getResponseTimes: first-reply median/p90 + ongoing, template excluded, per
 
 test("getResponseTimes: csName filter", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     const cA = await ctx.db.insert("conversations", { ...convBase, customerPhone: "62811", assignedCsName: "CS A" });
     const cB = await ctx.db.insert("conversations", { ...convBase, customerPhone: "62820", assignedCsName: "CS B" });
@@ -68,7 +70,7 @@ test("getResponseTimes: csName filter", async () => {
     await ins(cB, "62820", "inbound", t0 + 1000);
     await ins(cB, "62820", "outbound", t0 + 31000);
   });
-  const r = await t.query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 200000, csName: "CS B" });
+  const r = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 200000, csName: "CS B" });
   expect(r.cs.length).toBe(1);
   expect(r.cs[0].csName).toBe("CS B");
   expect(r.cs[0].firstReplyMedianMs).toBe(30000);
@@ -76,6 +78,7 @@ test("getResponseTimes: csName filter", async () => {
 
 test("getResponseTimes counts SLA breaches (active-hours)", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const wib = (h: number, mi: number) => Date.UTC(2026, 5, 24, h, mi) - 7 * 60 * 60 * 1000;
   await t.run(async (ctx) => {
     const conv = await ctx.db.insert("conversations", {
@@ -86,7 +89,7 @@ test("getResponseTimes counts SLA breaches (active-hours)", async () => {
     await ctx.db.insert("messages", { conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "inbound", role: "customer", messageType: "text", content: "hi", createdAt: wib(10, 0), source: "n8n" as const });
     await ctx.db.insert("messages", { conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "outbound", role: "cs", messageType: "text", content: "hai", createdAt: wib(10, 20), source: "n8n" as const });
   });
-  const res = await t.query(api.responseTime.getResponseTimes, { startAt: wib(0, 0), endAt: wib(23, 59) });
+  const res = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: wib(0, 0), endAt: wib(23, 59) });
   expect(res.overall.slaBreaches).toBe(1);
   const risma = res.cs.find((c) => c.csName === "Risma");
   expect(risma?.slaBreaches).toBe(1);

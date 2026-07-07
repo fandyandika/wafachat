@@ -8,6 +8,7 @@ const t0 = Date.now() - 86_400_000;
 
 test("listCs derives from csConfigs + DEFAULT_CONFIGS, NOT from orders (no 90-day scan)", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     // An order whose CS has no config: must NOT appear (order-scan discovery is removed).
     await ctx.db.insert("orders", { orderId: "O1", customerPhone: "62811", customerName: "A", productName: "X", products: "X", assignedCsName: "Ghost", productsSubtotal: "100", shippingCost: "10", total: "110", shippingAddress: "Addr", shippingDistrict: "Dist", shippingCity: "City", source: "berdu", aiEligible: true, createdAt: t0, updatedAt: t0 });
@@ -18,7 +19,7 @@ test("listCs derives from csConfigs + DEFAULT_CONFIGS, NOT from orders (no 90-da
       createdAt: t0, updatedAt: t0,
     });
   });
-  const rows = await t.query(api.cs.listCs, {});
+  const rows = await asAdmin.query(api.cs.listCs, {});
   const keys = rows.map((r) => r.key);
   // Built-in defaults always present:
   expect(keys).toContain("aisyah");
@@ -34,14 +35,15 @@ test("listCs derives from csConfigs + DEFAULT_CONFIGS, NOT from orders (no 90-da
 
 test("setCsAvatar stores avatarStorageId and replacing removes the old file", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const id1 = await t.run(async (ctx) => await ctx.storage.store(new Blob(["a"], { type: "image/png" })));
-  await t.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id1 as Id<"_storage"> });
+  await asAdmin.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id1 as Id<"_storage"> });
   let cfg = await t.run(async (ctx) =>
     ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", "aisyah")).unique());
   expect(cfg?.avatarStorageId).toBe(id1);
 
   const id2 = await t.run(async (ctx) => await ctx.storage.store(new Blob(["b"], { type: "image/png" })));
-  await t.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id2 as Id<"_storage"> });
+  await asAdmin.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id2 as Id<"_storage"> });
   cfg = await t.run(async (ctx) =>
     ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", "aisyah")).unique());
   expect(cfg?.avatarStorageId).toBe(id2);
@@ -50,9 +52,10 @@ test("setCsAvatar stores avatarStorageId and replacing removes the old file", as
 
 test("clearCsAvatar removes the photo and deletes the storage object", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const id1 = await t.run(async (ctx) => await ctx.storage.store(new Blob(["a"], { type: "image/png" })));
-  await t.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id1 as Id<"_storage"> });
-  await t.mutation(api.cs.clearCsAvatar, { csName: "Aisyah" });
+  await asAdmin.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id1 as Id<"_storage"> });
+  await asAdmin.mutation(api.cs.clearCsAvatar, { csName: "Aisyah" });
   const cfg = await t.run(async (ctx) =>
     ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", "aisyah")).unique());
   expect(cfg?.avatarStorageId).toBeUndefined();

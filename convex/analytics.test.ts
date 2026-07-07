@@ -16,6 +16,7 @@ const recBase = {
 
 test("getCsLeaderboard: per-CS metrics + delta vs prior window, ranked", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     // current window [t0, t0+DAY]: CS A = 2 leads 1 closing; CS B = 1 lead 0 closing
     await ctx.db.insert("orders", { ...ordBase, orderId: "O-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
@@ -26,7 +27,7 @@ test("getCsLeaderboard: per-CS metrics + delta vs prior window, ranked", async (
     await ctx.db.insert("orders", { ...ordBase, orderId: "O-0", customerPhone: "62810", assignedCsName: "CS A", productName: "Q", createdAt: t0 - DAY / 2, updatedAt: t0 });
   });
 
-  const rows = await t.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
+  const rows = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
   expect(rows[0].csName).toBe("CS A"); // most closings first
   const a = rows.find((r) => r.csName === "CS A")!;
   expect(a.leads).toBe(2);
@@ -39,6 +40,7 @@ test("getCsLeaderboard: per-CS metrics + delta vs prior window, ranked", async (
 
 test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     // "Hard": 4 leads, 0 closing -> CR 0 (hardest)
     for (let i = 0; i < 4; i++) await ctx.db.insert("orders", { ...ordBase, orderId: `H${i}`, customerPhone: `6280${i}`, assignedCsName: "CS A", productName: "Hard", createdAt: t0, updatedAt: t0 });
@@ -50,7 +52,7 @@ test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
     // "Rare": 2 leads -> filtered out (minLeads default 3)
     for (let i = 0; i < 2; i++) await ctx.db.insert("orders", { ...ordBase, orderId: `R${i}`, customerPhone: `6282${i}`, assignedCsName: "CS A", productName: "Rare", createdAt: t0, updatedAt: t0 });
   });
-  const rows = await t.query(api.analytics.getProductDifficulty, { startAt: t0 - 1, endAt: t0 + DAY });
+  const rows = await asAdmin.query(api.analytics.getProductDifficulty, { startAt: t0 - 1, endAt: t0 + DAY });
   expect(rows.length).toBe(2);               // Hard + Easy (Rare filtered)
   expect(rows[0].productName).toBe("Hard");  // CR asc -> hardest first
   expect(rows[0].cr).toBe(0);
@@ -60,6 +62,7 @@ test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
 
 test("getPeriodReport: week period, current vs prior week + per-CS", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     // current week (anchor day): CS A = 2 leads, 1 closing, revenue 50000
     await ctx.db.insert("orders", { ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
@@ -68,7 +71,7 @@ test("getPeriodReport: week period, current vs prior week + per-CS", async () =>
     // prior week (anchor - 7 days): 1 lead
     await ctx.db.insert("orders", { ...ordBase, orderId: "P1", customerPhone: "62820", assignedCsName: "CS A", productName: "Q", createdAt: t0 - 7 * DAY, updatedAt: t0 });
   });
-  const r = await t.query(api.analytics.getPeriodReport, { period: "week", anchor: t0 });
+  const r = await asAdmin.query(api.analytics.getPeriodReport, { period: "week", anchor: t0 });
   expect(r.leads).toBe(2);
   expect(r.closings).toBe(1);
   expect(r.revenue).toBe(50000);
@@ -80,6 +83,7 @@ test("getPeriodReport: week period, current vs prior week + per-CS", async () =>
 
 test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     // CS A: 3 leads on product Q (one is a duplicate phone), 2 closings, discount 40000 total
     await ctx.db.insert("orders", { ...ordBase, orderId: "A1", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
@@ -93,7 +97,7 @@ test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async (
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "A9", customerPhone: "62899", customerName: "A", csName: "CS A", packageContent: "Quran Mapping", closedAt: t0, total: 100000, status: "cancelled", createdAt: t0, updatedAt: t0 });
   });
 
-  const r = await t.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
+  const r = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
   const a = r.cs.find((c) => c.csName === "CS A")!;
   expect(a.leads).toBe(2);          // 62811 (deduped) + 62812; internal phone excluded
   expect(a.duplicates).toBe(1);     // A3 shares 62811 with A1
@@ -112,14 +116,15 @@ test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async (
 
 test("getDailyReport: per-CS totals match getCsLeaderboard (no drift)", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     await ctx.db.insert("orders", { ...ordBase, orderId: "O-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
     await ctx.db.insert("orders", { ...ordBase, orderId: "O-2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
     await ctx.db.insert("orders", { ...ordBase, orderId: "O-3", customerPhone: "62813", assignedCsName: "CS B", productName: "Q", createdAt: t0, updatedAt: t0 });
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
-  const report = await t.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
-  const board = await t.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
+  const report = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
+  const board = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
   for (const row of board) {
     if (row.leads === 0 && row.closings === 0) continue; // omitted in the report
     const card = report.cs.find((c) => c.csName === row.csName);
@@ -132,13 +137,14 @@ test("getDailyReport: per-CS totals match getCsLeaderboard (no drift)", async ()
 
 test("getDailyReport: cross-window closing canonicalizes product via order (no SKU fragment)", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     // lead created BEFORE the window; canonical product "Quran Mapping"
     await ctx.db.insert("orders", { ...ordBase, orderId: "OW1", customerPhone: "62830", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0 - DAY, updatedAt: t0 });
     // closing INSIDE the window; packageContent uses the SKU name; linked via orderIdBerdu
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "OW1", customerPhone: "62830", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0 + 1000, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
-  const r = await t.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
+  const r = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
   const a = r.cs.find((c) => c.csName === "CS A")!;
   expect(a.products).toHaveLength(1);
   expect(a.products[0].product).toBe("Quran Mapping"); // canonical, NOT "QURAN MAPPING 1 PCS"
@@ -150,6 +156,7 @@ test("getDailyReport: cross-window closing canonicalizes product via order (no S
 
 test("getCsLeaderboard honors csName via csKey (CS Aisyah == Aisyah)", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const t0_new = Date.parse("2026-06-22T10:00:00+07:00");
   await t.run(async (ctx) => {
     await ctx.db.insert("orders", { ...ordBase, orderId: "O1", customerPhone: "62811", customerName: "A", productName: "Quran Mapping", assignedCsName: "Aisyah", createdAt: t0_new, updatedAt: t0_new });
@@ -157,15 +164,16 @@ test("getCsLeaderboard honors csName via csKey (CS Aisyah == Aisyah)", async () 
   });
   const start = Date.parse("2026-06-22T00:00:00+07:00");
   const end = Date.parse("2026-06-23T00:00:00+07:00");
-  const all = await t.query(api.analytics.getCsLeaderboard, { startAt: start, endAt: end });
+  const all = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: start, endAt: end });
   expect(all.length).toBe(2);
-  const filtered = await t.query(api.analytics.getCsLeaderboard, { startAt: start, endAt: end, csName: "CS Aisyah" });
+  const filtered = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: start, endAt: end, csName: "CS Aisyah" });
   expect(filtered.length).toBe(1);
   expect(filtered[0].csName).toBe("Aisyah");
 });
 
 test("getDailyReport merges raw name variants of one CS into a single card (no fragmentation)", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     // Same CS, two raw name-forms: orders + main recap use "Aisyah"; one stray recap "CS Aisyah".
     await ctx.db.insert("orders", { ...ordBase, orderId: "V-1", customerPhone: "62831", assignedCsName: "Aisyah", productName: "Q", createdAt: t0, updatedAt: t0 });
@@ -173,7 +181,7 @@ test("getDailyReport merges raw name variants of one CS into a single card (no f
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "V-1", customerPhone: "62831", customerName: "A", csName: "Aisyah", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "V-9", customerPhone: "62839", customerName: "B", csName: "CS Aisyah", closedAt: t0, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
-  const r = await t.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
+  const r = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
   const aisyah = r.cs.filter((c: { csName: string }) => /aisyah/i.test(c.csName));
   expect(aisyah.length).toBe(1); // ONE merged card, not two
   expect(aisyah[0].leads).toBe(2); // unique order customers
@@ -182,6 +190,7 @@ test("getDailyReport merges raw name variants of one CS into a single card (no f
 
 test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const t0_new = Date.parse("2026-06-22T10:00:00+07:00");
   await t.run(async (ctx) => {
     // current week: CS Aisyah = 2 leads, 1 closing, revenue 50000; CS Risma = 1 lead, 0 closing
@@ -192,14 +201,14 @@ test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () =
   });
   const anchor = t0_new;
   // Query all CSs
-  const allReport = await t.query(api.analytics.getPeriodReport, { period: "week", anchor });
+  const allReport = await asAdmin.query(api.analytics.getPeriodReport, { period: "week", anchor });
   expect(allReport.leads).toBe(3);
   expect(allReport.closings).toBe(1);
   expect(allReport.revenue).toBe(50000);
   expect(allReport.perCs.length).toBe(2);
 
   // Query filtered by "CS Aisyah" (should match normalized "Aisyah")
-  const aisyahReport = await t.query(api.analytics.getPeriodReport, { period: "week", anchor, csName: "CS Aisyah" });
+  const aisyahReport = await asAdmin.query(api.analytics.getPeriodReport, { period: "week", anchor, csName: "CS Aisyah" });
   expect(aisyahReport.leads).toBe(2);
   expect(aisyahReport.closings).toBe(1);
   expect(aisyahReport.revenue).toBe(50000);
@@ -209,7 +218,7 @@ test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () =
   expect(aisyahReport.perCs[0].closings).toBe(1);
 
   // Query filtered by "Risma" (exact match)
-  const rismaReport = await t.query(api.analytics.getPeriodReport, { period: "week", anchor, csName: "Risma" });
+  const rismaReport = await asAdmin.query(api.analytics.getPeriodReport, { period: "week", anchor, csName: "Risma" });
   expect(rismaReport.leads).toBe(1);
   expect(rismaReport.closings).toBe(0);
   expect(rismaReport.revenue).toBe(0);
@@ -219,6 +228,7 @@ test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () =
 
 test("CR uses unique CUSTOMERS: an order-double closing twice does not inflate the rate", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await t.run(async (ctx) => {
     // CS A: 2 unique customers; customer 62811 double-orders and BOTH orders close.
     await ctx.db.insert("orders", { ...ordBase, orderId: "D-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
@@ -229,7 +239,7 @@ test("CR uses unique CUSTOMERS: an order-double closing twice does not inflate t
   });
 
   // Daily report: closings stay order-level (volume: 2), CR is customer-level (1 of 2 leads = 50%).
-  const daily = await t.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
+  const daily = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
   const a = daily.cs.find((c: { csName: string }) => c.csName === "CS A")!;
   expect(a.leads).toBe(2);
   expect(a.closings).toBe(2); // both orders count as volume + revenue
@@ -237,12 +247,13 @@ test("CR uses unique CUSTOMERS: an order-double closing twice does not inflate t
   expect(daily.totals.cr).toBe(50);
 
   // Leaderboard mirrors the same CR semantics.
-  const rows = await t.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
+  const rows = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
   expect(rows[0].cr).toBe(50);
 });
 
 test("getCsDetail: counted closings match card semantics; cancelled + boundary surfaced; leads with double count", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const H = 3_600_000;
   await t.run(async (ctx) => {
     // Leads: 3 orders, 2 unique customers (62841 doubles)
@@ -257,7 +268,7 @@ test("getCsDetail: counted closings match card semantics; cancelled + boundary s
     // Other CS in window must not leak in
     await ctx.db.insert("orders", { ...ordBase, orderId: "X-1", customerPhone: "62851", assignedCsName: "CS B", productName: "Q", createdAt: t0 + H, updatedAt: t0 });
   });
-  const d = await t.query(api.analytics.getCsDetail, { startAt: t0, endAt: t0 + DAY, csName: "CS A" });
+  const d = await asAdmin.query(api.analytics.getCsDetail, { startAt: t0, endAt: t0 + DAY, csName: "CS A" });
   expect(d.counts).toEqual({ closings: 2, leadsUnique: 2, leadOrders: 3 });
   expect(d.closings.map((c: { orderIdBerdu: string | null }) => c.orderIdBerdu)).toEqual(["W-1", "W-3"]);
   expect(d.excludedCancelled).toHaveLength(1);
