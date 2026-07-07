@@ -1,11 +1,49 @@
 'use client';
 
-import { ReactNode, useMemo } from 'react';
-import { ConvexProvider, ConvexReactClient, useConvexAuth } from 'convex/react';
+import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import { ConvexProviderWithAuth, ConvexReactClient, useConvexAuth } from 'convex/react';
+
+// Custom-auth integration (Fase 0): the panel's identity reaches Convex as a
+// short-lived RS256 token exchanged from the httpOnly session cookie
+// (/api/auth/convex-token), validated by Convex against our JWKS.
+//
+// ConvexProviderWithAuth is the supported pattern for this — it drives the token
+// lifecycle (fetch, refresh, clear) from the useAuth contract below. Re-checking on
+// pathname changes keeps the state correct across login/logout navigations without
+// remounting the provider.
+function useSessionAuth() {
+  const pathname = usePathname();
+  const [st, setSt] = useState<{ loaded: boolean; authed: boolean }>({ loaded: false, authed: false });
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/auth/convex-token')
+      .then((r) => { if (!cancelled) setSt({ loaded: true, authed: r.ok }); })
+      .catch(() => { if (!cancelled) setSt({ loaded: true, authed: false }); });
+    return () => { cancelled = true; };
+  }, [pathname]);
+
+  const fetchAccessToken = useCallback(async () => {
+    try {
+      const r = await fetch('/api/auth/convex-token');
+      if (!r.ok) return null;
+      const body = (await r.json()) as { token?: string };
+      return body.token ?? null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  return useMemo(
+    () => ({ isLoading: !st.loaded, isAuthenticated: st.authed, fetchAccessToken }),
+    [st.loaded, st.authed, fetchAccessToken],
+  );
+}
 
 // Hold rendering until the auth handshake resolves (authenticated OR confirmed
-// anonymous). Without this, the first queries fire before the token is attached —
-// harmless while authz is permissive, but they would be REJECTED once enforcement
+// anonymous). Without this, first-mount queries would fire before the token is
+// attached — harmless while authz is permissive, but rejected once enforcement
 // flips, leaving one-shot snapshot fetches stuck on an error until reload.
 function AuthReadyGate({ children }: { children: ReactNode }) {
   const { isLoading } = useConvexAuth();
@@ -19,27 +57,12 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
     if (!convexUrl) {
       throw new Error('NEXT_PUBLIC_CONVEX_URL is not configured');
     }
-    const client = new ConvexReactClient(convexUrl);
-    // Attach the panel identity to every Convex call: exchange the httpOnly session
-    // cookie for a short-lived RS256 token (validated via convex/auth.config.ts).
-    // Unauthenticated visitors (login page) resolve to null = anonymous, which is
-    // fine — guarded functions handle rejection (convex/authz.ts).
-    client.setAuth(async () => {
-      try {
-        const res = await fetch('/api/auth/convex-token');
-        if (!res.ok) return null;
-        const body = (await res.json()) as { token?: string };
-        return body.token ?? null;
-      } catch {
-        return null;
-      }
-    });
-    return client;
+    return new ConvexReactClient(convexUrl);
   }, []);
 
   return (
-    <ConvexProvider client={convex}>
+    <ConvexProviderWithAuth client={convex} useAuth={useSessionAuth}>
       <AuthReadyGate>{children}</AuthReadyGate>
-    </ConvexProvider>
+    </ConvexProviderWithAuth>
   );
 }
