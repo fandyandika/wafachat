@@ -77,3 +77,27 @@ test("upsertOrderFromN8n honors explicit createdAt on insert (reconciler backfil
     ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-260624000009")).unique());
   expect(order?.createdAt).toBe(backdated);
 });
+
+test("upsertOrderFromN8n updates explicit createdAt on existing order", async () => {
+  const t = convexTest(schema);
+  const replayedAt = Date.parse("2026-07-07T14:15:45.000Z");
+  const orderedAt = Date.parse("2026-07-07T12:45:04.316Z");
+  await t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6285735647633",
+    csName: "Nabila",
+    order_id: "O-260707000251",
+    createdAt: replayedAt,
+  });
+  await t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6285735647633",
+    csName: "Nabila",
+    order_id: "O-260707000251",
+    createdAt: orderedAt,
+  });
+  const order = await t.run(async (ctx) =>
+    ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-260707000251")).unique());
+  const conversation = await t.run(async (ctx) =>
+    ctx.db.query("conversations").withIndex("by_orderId", (q) => q.eq("orderId", "O-260707000251")).unique());
+  expect(order?.createdAt).toBe(orderedAt);
+  expect(conversation?.createdAt).toBe(orderedAt);
+});

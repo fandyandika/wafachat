@@ -289,7 +289,10 @@ export const upsertOrderFromN8n = internalMutation({
       .unique();
 
     if (existingOrder) {
-      await ctx.db.patch(existingOrder._id, orderPayload);
+      await ctx.db.patch(existingOrder._id, {
+        ...orderPayload,
+        ...(args.createdAt !== undefined ? { createdAt: args.createdAt } : {}),
+      });
     } else {
       await ctx.db.insert("orders", { ...orderPayload, createdAt: args.createdAt ?? now });
     }
@@ -310,6 +313,7 @@ export const upsertOrderFromN8n = internalMutation({
             : existingConversation.status === "closed" || aiEligible ? "active"
             : existingConversation.status,
           aiEnabled: aiEligible,
+          ...(args.createdAt !== undefined ? { createdAt: args.createdAt } : {}),
           updatedAt: now,
         });
       } else {
@@ -321,7 +325,7 @@ export const upsertOrderFromN8n = internalMutation({
           status: "active",
           aiEnabled: aiEligible,
           note: "",
-          createdAt: now,
+          createdAt: args.createdAt ?? now,
           updatedAt: now,
         });
       }
