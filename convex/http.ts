@@ -205,7 +205,7 @@ http.route({
     const source = await ctx.runQuery(internal.ingest.sources.getBySourceKey, {
       sourceKey: "kirimdev-pustakaislam",
     });
-    if (!source || !source.enabled) return jsonResponse({ ok: false, error: "unknown source" }, 404);
+    if (!source || !source.enabled) { console.warn("[ingest] unknown/disabled source; acked 200 to avoid vendor auto-disable"); return jsonResponse({ ok: true, ignored: "unknown or disabled source" }, 200); }
 
     const sig = await verifySignature({
       header: request.headers.get("x-kirim-signature"),
@@ -250,7 +250,7 @@ http.route({
     const rawBody = await request.text();
     if (rawBody.length > MAX_BODY_BYTES) return jsonResponse({ ok: false, error: "payload too large" }, 400);
     const source = await ctx.runQuery(internal.ingest.sources.getBySourceKey, { sourceKey: "berdu-pustakaislam" });
-    if (!source || !source.enabled) return jsonResponse({ ok: false, error: "unknown source" }, 404);
+    if (!source || !source.enabled) { console.warn("[ingest] unknown/disabled source; acked 200 to avoid vendor auto-disable"); return jsonResponse({ ok: true, ignored: "unknown or disabled source" }, 200); }
     const sig = await verifySignature({
       header: request.headers.get("x-wafachat-signature"),
       rawBody, secret: source.secret, nowMs: Date.now(),
@@ -292,7 +292,7 @@ function genericIngestRoute(path: string, kind: "generic.message" | "generic.lea
       const source = sourceKey
         ? await ctx.runQuery(internal.ingest.sources.getBySourceKey, { sourceKey })
         : null;
-      if (!source || !source.enabled) return jsonResponse({ ok: false, error: "unknown source" }, 404);
+      if (!source || !source.enabled) { console.warn("[ingest] unknown/disabled source; acked 200 to avoid vendor auto-disable"); return jsonResponse({ ok: true, ignored: "unknown or disabled source" }, 200); }
       const sig = await verifySignature({
         header: request.headers.get("x-wafachat-signature"),
         rawBody, secret: source.secret, nowMs: Date.now(),
