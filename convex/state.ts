@@ -219,6 +219,143 @@ async function getConversationForArgs(ctx: { db: any }, args: { orderId?: string
   return null;
 }
 
+export async function upsertOrderCore(
+  ctx: any,
+  args: {
+    phone: string;
+    csName: string;
+    csNumber?: string;
+    productName?: string;
+    products?: string;
+    productsSubtotal?: string;
+    shippingCost?: string;
+    total?: string;
+    customerName?: string;
+    shippingAddress?: string;
+    shippingDistrict?: string;
+    shippingCity?: string;
+    order_id?: string;
+    createdAt?: number;
+  },
+) {
+  const now = Date.now();
+  const phone = normalizePhone(args.phone);
+  const orderId = args.order_id || makeOrderKey({ phone, productName: args.productName });
+  const customerName = args.customerName || "";
+  const csConfig = await getCsFeatureConfig(ctx, args.csName);
+  const reportable = csConfig.isActive && csConfig.reportingEnabled;
+  const aiEligible = reportable && csConfig.aiAssistantEnabled;
+
+  const existingCustomer = await ctx.db
+    .query("customers")
+    .withIndex("by_phone", (q: any) => q.eq("phone", phone))
+    .unique();
+
+  if (existingCustomer) {
+    await ctx.db.patch(existingCustomer._id, {
+      name: customerName || existingCustomer.name,
+      lastSeenAt: now,
+    });
+  } else {
+    await ctx.db.insert("customers", {
+      phone,
+      name: customerName,
+      firstSeenAt: now,
+      lastSeenAt: now,
+    });
+  }
+
+  const orderPayload = {
+    orderId,
+    customerPhone: phone,
+    customerName,
+    assignedCsName: args.csName,
+    assignedCsNumber: args.csNumber,
+    productName: args.productName || "",
+    products: args.products || "",
+    productsSubtotal: args.productsSubtotal || "",
+    shippingCost: args.shippingCost || "",
+    total: args.total || "",
+    shippingAddress: args.shippingAddress || "",
+    shippingDistrict: args.shippingDistrict || "",
+    shippingCity: args.shippingCity || "",
+    source: "berdu" as const,
+    aiEligible,
+    updatedAt: now,
+  };
+
+  const existingOrder = await ctx.db
+    .query("orders")
+    .withIndex("by_orderId", (q: any) => q.eq("orderId", orderId))
+    .unique();
+
+  if (existingOrder) {
+    await ctx.db.patch(existingOrder._id, {
+      ...orderPayload,
+      ...(args.createdAt !== undefined ? { createdAt: args.createdAt } : {}),
+    });
+  } else {
+    await ctx.db.insert("orders", { ...orderPayload, createdAt: args.createdAt ?? now });
+  }
+
+  let conversationId: Id<"conversations"> | null = null;
+  if (reportable) {
+    const existingConversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_orderId", (q: any) => q.eq("orderId", orderId))
+      .unique();
+
+    if (existingConversation) {
+      conversationId = existingConversation._id;
+      await ctx.db.patch(existingConversation._id, {
+        customerName,
+        assignedCsName: args.csName,
+        status: existingConversation.status === "active" ? "active"
+          : existingConversation.status === "closed" || aiEligible ? "active"
+          : existingConversation.status,
+        aiEnabled: aiEligible,
+        ...(args.createdAt !== undefined ? { createdAt: args.createdAt } : {}),
+        updatedAt: now,
+      });
+    } else {
+      conversationId = await ctx.db.insert("conversations", {
+        orderId,
+        customerPhone: phone,
+        customerName,
+        assignedCsName: args.csName,
+        status: "active",
+        aiEnabled: aiEligible,
+        note: "",
+        createdAt: args.createdAt ?? now,
+        updatedAt: now,
+      });
+    }
+
+    await patchStatsWithKey(ctx, {
+      field: "orders",
+      keyField: "orderKeys",
+      key: makeOrderKey({ orderId, phone, productName: args.productName }),
+    });
+  }
+
+  await ctx.db.insert("events", {
+    conversationId: conversationId ?? undefined,
+    orderId,
+    customerPhone: phone,
+    type: "order_upserted",
+    actor: "n8n",
+    metadata: {
+      aiEligible,
+      reportable,
+      orderAutomationEnabled: csConfig.orderAutomationEnabled,
+      csName: args.csName,
+    },
+    createdAt: now,
+  });
+
+  return { success: true, phone, orderId, aiEligible, reportable, conversationId };
+}
+
 export const upsertOrderFromN8n = internalMutation({
   args: {
     phone: v.string(),
@@ -236,124 +373,7 @@ export const upsertOrderFromN8n = internalMutation({
     order_id: v.optional(v.string()),
     createdAt: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const now = Date.now();
-    const phone = normalizePhone(args.phone);
-    const orderId = args.order_id || makeOrderKey({ phone, productName: args.productName });
-    const customerName = args.customerName || "";
-    const csConfig = await getCsFeatureConfig(ctx, args.csName);
-    const reportable = csConfig.isActive && csConfig.reportingEnabled;
-    const aiEligible = reportable && csConfig.aiAssistantEnabled;
-
-    const existingCustomer = await ctx.db
-      .query("customers")
-      .withIndex("by_phone", (q) => q.eq("phone", phone))
-      .unique();
-
-    if (existingCustomer) {
-      await ctx.db.patch(existingCustomer._id, {
-        name: customerName || existingCustomer.name,
-        lastSeenAt: now,
-      });
-    } else {
-      await ctx.db.insert("customers", {
-        phone,
-        name: customerName,
-        firstSeenAt: now,
-        lastSeenAt: now,
-      });
-    }
-
-    const orderPayload = {
-      orderId,
-      customerPhone: phone,
-      customerName,
-      assignedCsName: args.csName,
-      assignedCsNumber: args.csNumber,
-      productName: args.productName || "",
-      products: args.products || "",
-      productsSubtotal: args.productsSubtotal || "",
-      shippingCost: args.shippingCost || "",
-      total: args.total || "",
-      shippingAddress: args.shippingAddress || "",
-      shippingDistrict: args.shippingDistrict || "",
-      shippingCity: args.shippingCity || "",
-      source: "berdu" as const,
-      aiEligible,
-      updatedAt: now,
-    };
-
-    const existingOrder = await ctx.db
-      .query("orders")
-      .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
-      .unique();
-
-    if (existingOrder) {
-      await ctx.db.patch(existingOrder._id, {
-        ...orderPayload,
-        ...(args.createdAt !== undefined ? { createdAt: args.createdAt } : {}),
-      });
-    } else {
-      await ctx.db.insert("orders", { ...orderPayload, createdAt: args.createdAt ?? now });
-    }
-
-    let conversationId: Id<"conversations"> | null = null;
-    if (reportable) {
-      const existingConversation = await ctx.db
-        .query("conversations")
-        .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
-        .unique();
-
-      if (existingConversation) {
-        conversationId = existingConversation._id;
-        await ctx.db.patch(existingConversation._id, {
-          customerName,
-          assignedCsName: args.csName,
-          status: existingConversation.status === "active" ? "active"
-            : existingConversation.status === "closed" || aiEligible ? "active"
-            : existingConversation.status,
-          aiEnabled: aiEligible,
-          ...(args.createdAt !== undefined ? { createdAt: args.createdAt } : {}),
-          updatedAt: now,
-        });
-      } else {
-        conversationId = await ctx.db.insert("conversations", {
-          orderId,
-          customerPhone: phone,
-          customerName,
-          assignedCsName: args.csName,
-          status: "active",
-          aiEnabled: aiEligible,
-          note: "",
-          createdAt: args.createdAt ?? now,
-          updatedAt: now,
-        });
-      }
-
-      await patchStatsWithKey(ctx, {
-        field: "orders",
-        keyField: "orderKeys",
-        key: makeOrderKey({ orderId, phone, productName: args.productName }),
-      });
-    }
-
-    await ctx.db.insert("events", {
-      conversationId: conversationId ?? undefined,
-      orderId,
-      customerPhone: phone,
-      type: "order_upserted",
-      actor: "n8n",
-      metadata: {
-        aiEligible,
-        reportable,
-        orderAutomationEnabled: csConfig.orderAutomationEnabled,
-        csName: args.csName,
-      },
-      createdAt: now,
-    });
-
-    return { success: true, phone, orderId, aiEligible, reportable, conversationId };
-  },
+  handler: async (ctx, args) => upsertOrderCore(ctx, args),
 });
 
 // Reconciler support: list the present per-day order counters for a Berdu date

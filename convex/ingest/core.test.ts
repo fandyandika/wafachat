@@ -134,3 +134,32 @@ test("replayAllFailed replays every failed event", async () => {
   const failed = await asAdmin(t).query(api.ingest.events.listRecent, { status: "failed" });
   expect(failed).toHaveLength(0);
 });
+
+test("lead.created ingests order via upsertOrderCore with preserved createdAt", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("csConfigs", {
+      normalizedName: "cs azelia", csName: "CS Azelia",
+      orderAutomationEnabled: false, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: Date.now(), updatedAt: Date.now(),
+    });
+  });
+  const raw = JSON.stringify({ order: {
+    id: "O-260708000123", created_at: "2026-07-08T09:15:00+07:00", assigned_to_staff: "B-Z28TdYc",
+    shipping_cost: 15000, total: 100000,
+    shipping_address: { phone: "085799533626", firstName: "Kurn", address: "Jl. Mawar 1", district: "Coblong", city: "Bandung" },
+    products: [{ name: "Buku Sirah", price: 85000, count: 1 }],
+  }});
+  const eventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}", rawBody: raw, signatureOk: true,
+  });
+  await t.mutation(internal.ingest.core.processEvent, { eventId });
+  await t.run(async (ctx) => {
+    const orders = await ctx.db.query("orders").collect();
+    expect(orders).toHaveLength(1);
+    expect(orders[0]).toMatchObject({
+      orderId: "O-260708000123",
+      createdAt: Date.parse("2026-07-08T09:15:00+07:00"),
+    });
+  });
+});

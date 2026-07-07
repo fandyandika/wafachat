@@ -242,4 +242,47 @@ http.route({
   }),
 });
 
+// Task 10: Berdu webhook route. Task 11 will replace the stub with real import.
+async function fetchBerduOrderDetail(_orderId: string): Promise<any | null> {
+  return null;
+}
+
+http.route({
+  path: "/webhooks/berdu",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const rawBody = await request.text();
+    if (rawBody.length > MAX_BODY_BYTES) return jsonResponse({ ok: false, error: "payload too large" }, 400);
+    const source = await ctx.runQuery(internal.ingest.sources.getBySourceKey, { sourceKey: "berdu-pustakaislam" });
+    if (!source || !source.enabled) return jsonResponse({ ok: false, error: "unknown source" }, 404);
+    const sig = await verifySignature({
+      header: request.headers.get("x-wafachat-signature"),
+      rawBody, secret: source.secret, nowMs: Date.now(),
+    });
+    if (!sig.ok && source.enforceSignature) return jsonResponse({ ok: false, error: "invalid signature" }, 401);
+    let parsedBody: any;
+    try { parsedBody = JSON.parse(rawBody); } catch { return jsonResponse({ ok: false, error: "invalid json" }, 400); }
+
+    // Thin payload (order_id only) -> enrich BEFORE capture so the stored
+    // rawBody is the full order (replayable without re-fetching).
+    let effectiveBody = rawBody;
+    if (!parsedBody.shipping_address && !parsedBody.order?.shipping_address && parsedBody.order_id) {
+      const detail = await fetchBerduOrderDetail(String(parsedBody.order_id));
+      if (detail) effectiveBody = JSON.stringify({ order: detail });
+    }
+
+    const eventId = await ctx.runMutation(internal.ingest.events.captureEvent, {
+      sourceKey: source.sourceKey, kind: "lead.created",
+      rawHeaders: JSON.stringify({ "content-type": request.headers.get("content-type") ?? "" }),
+      rawBody: effectiveBody, signatureOk: sig.ok,
+    });
+    try {
+      await ctx.runMutation(internal.ingest.core.processEvent, { eventId });
+    } catch (e) {
+      await ctx.runMutation(internal.ingest.events.markFailed, { eventId, error: (e as Error).message || String(e) });
+    }
+    return jsonResponse({ ok: true, eventId });
+  }),
+});
+
 export default http;

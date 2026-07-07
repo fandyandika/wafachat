@@ -3,6 +3,8 @@ import { internalMutation, mutation } from "../_generated/server";
 import { requireAdmin } from "../authz";
 import { appendMessageCore } from "../messages";
 import { parseKirimdevWebhook } from "./kirimdevAdapter";
+import { parseBerduOrderDetail } from "./berduAdapter";
+import { upsertOrderCore } from "../state";
 
 // Resolve CS display name from a WABA phone_number_id via csConfigs.
 // Matches BOTH the legacy single field and the new array field.
@@ -46,7 +48,21 @@ export async function processCapturedEvent(
     return { status: "processed", resultRef: String(result?.messageId ?? "") };
   }
 
-  // Task 10 adds "lead.created"; Task 12 adds "generic.message"/"generic.lead".
+  if (event.kind === "lead.created") {
+    const parsed = parseBerduOrderDetail((body as any).order ?? body);
+    if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
+    const e = parsed.event;
+    const result = await upsertOrderCore(ctx, {
+      phone: e.phone, csName: e.csName, customerName: e.customerName,
+      productName: e.productName, products: e.products, productsSubtotal: e.productsSubtotal,
+      shippingCost: e.shippingCost, total: e.total,
+      shippingAddress: e.shippingAddress, shippingDistrict: e.shippingDistrict,
+      shippingCity: e.shippingCity, order_id: e.orderId, createdAt: e.createdAt,
+    });
+    return { status: "processed", resultRef: String(result?.orderId ?? e.orderId) };
+  }
+
+  // Task 12 adds "generic.message"/"generic.lead".
   return { status: "skipped", skipReason: `unsupported kind ${event.kind}` };
 }
 
