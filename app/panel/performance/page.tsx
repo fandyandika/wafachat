@@ -10,13 +10,29 @@ import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-q
 import { PerformancePanel } from '@/components/panel/performance-panel';
 import type { PerformanceData } from '@/components/panel/types';
 import { Button } from '@/components/ui/button';
+import { LiveTodayDashboard } from '@/components/panel/live-today-dashboard';
+import { WindowModeToggle, type WindowMode } from '@/components/panel/window-mode-toggle';
 
 function fmtUpdatedAt(ms: number | null): string {
   if (!ms) return 'Belum dimuat';
   return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
 }
 
+// DEFAULT owner view = "Hari ini" (live, calendar-day) — one cheap query. The heavier
+// 16:00-period Performance below is only mounted when the owner toggles to it (lazy).
 export default function PerformancePage() {
+  const [mode, setMode] = useState<WindowMode>('live');
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <WindowModeToggle mode={mode} onChange={setMode} />
+      </div>
+      {mode === 'live' ? <LiveTodayDashboard /> : <PerformanceWork />}
+    </div>
+  );
+}
+
+function PerformanceWork() {
   const { startAt, endAt, csName } = usePanelFilters();
   const [responseRefreshKey, setResponseRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);

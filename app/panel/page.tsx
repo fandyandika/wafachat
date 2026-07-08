@@ -35,13 +35,31 @@ import { fmtTime, formatRupiah, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { useResponseTimes } from '@/components/panel/use-response-times';
 import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
+import { LiveTodayDashboard } from '@/components/panel/live-today-dashboard';
+import { WindowModeToggle, type WindowMode } from '@/components/panel/window-mode-toggle';
 
 function fmtUpdatedAt(ms: number | null): string {
   if (!ms) return 'Belum dimuat';
   return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
 }
 
+// DEFAULT owner view = "Hari ini" (live, calendar-day) — ONE cheap query. The heavier
+// 16:00-period dashboard (summary + duplicates + performance + trend + response-time) is
+// only mounted when the owner toggles to "Periode kerja" (lazy — those queries never run
+// on the default view).
 export default function DashboardPage() {
+  const [mode, setMode] = useState<WindowMode>('live');
+  return (
+    <div className="space-y-4">
+      <div className="flex justify-end">
+        <WindowModeToggle mode={mode} onChange={setMode} />
+      </div>
+      {mode === 'live' ? <LiveTodayDashboard /> : <DashboardWork />}
+    </div>
+  );
+}
+
+function DashboardWork() {
   const { startAt, endAt, csName, jakartaDate, range } = usePanelFilters();
   const [respRefreshKey, setRespRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);

@@ -3,7 +3,7 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings, LogOut, Activity } from 'lucide-react';
+import { Bot, LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings, LogOut } from 'lucide-react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
@@ -13,7 +13,6 @@ import { useMe } from '@/components/panel/use-me';
 
 const NAV = [
   { href: '/panel', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/panel/live', label: 'Live Hari Ini', icon: Activity },
   { href: '/panel/performance', label: 'Performance', icon: BarChart3 },
   { href: '/panel/laporan', label: 'Laporan', icon: ClipboardList },
   { href: '/panel/follow-up', label: 'Follow-up', icon: Send },
