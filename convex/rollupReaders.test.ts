@@ -857,3 +857,25 @@ runTest("followUpEffectivenessFromRollups matches legacy (multi-window range)", 
 
   expect(rollup).toEqual(legacy);
 });
+
+// Smoke test: public query delegation to rollup reader
+runTest("public getDailyReport (admin identity) matches rollup reader for seeded window", async (t) => {
+  const publicResult = await t.withIdentity({
+    subject: "a1",
+    role: "admin",
+    name: "Admin",
+    email: "a@w",
+  }).query(api.analytics.getDailyReport, { startAt: w1Start, endAt: w1End });
+
+  const readerResult = await t.run(async (ctx) =>
+    (await import("./rollupReaders")).dailyReportFromRollups(ctx, { startAt: w1Start, endAt: w1End })
+  );
+
+  expect(publicResult).toEqual(readerResult);
+  // Verify the result has expected structure
+  expect(publicResult).toHaveProperty("totals");
+  expect(publicResult).toHaveProperty("cs");
+  expect(publicResult.totals).toHaveProperty("leads");
+  expect(publicResult.totals).toHaveProperty("closings");
+  expect(publicResult.totals).toHaveProperty("cr");
+});

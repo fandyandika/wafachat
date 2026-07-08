@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { csKey, isInternalTestPhone, normalizeCsName } from "./lib";
 import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
 import { internal } from "./_generated/api";
+import { followUpEffectivenessFromRollups } from "./rollupReaders";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
@@ -405,11 +406,9 @@ export const getAutoFollowUp = query({
 });
 
 // Feature #10: KPI — follow-up effectiveness
-export const getFollowUpEffectiveness = query({
+export const getFollowUpEffectivenessLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "followUp.getFollowUpEffectiveness");
-    await requireMember(ctx, "followUp.getAutoFollowUp");
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
     const recaps = await ctx.db
       .query("shippingRecaps")
@@ -436,6 +435,15 @@ export const getFollowUpEffectiveness = query({
     );
 
     return { totalClosings, fromFollowUp, byStage: byTouches };
+  },
+});
+
+export const getFollowUpEffectiveness = query({
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "followUp.getFollowUpEffectiveness");
+    await requireMember(ctx, "followUp.getAutoFollowUp");
+    return followUpEffectivenessFromRollups(ctx, args);
   },
 });
 

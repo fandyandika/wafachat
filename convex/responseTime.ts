@@ -1,14 +1,14 @@
-import { query } from "./_generated/server";
+import { query, internalQuery } from "./_generated/server";
 import { requireMember } from "./authz";
 import { v } from "convex/values";
 import { isInternalTestPhone, csKey } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile, pairResponseEvents, isSlaBreach, type RtMessage } from "./responseTimeMath";
+import { responseTimesFromSamples } from "./rollupReaders";
 
-export const getResponseTimes = query({
+export const getResponseTimesLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "responseTime.getResponseTimes");
     const msgs = (
       await ctx.db
         .query("messages")
@@ -99,5 +99,13 @@ export const getResponseTimes = query({
       overall: { firstReplyMedianMs: median(overallFirst), firstReplyCount: overallFirst.length, slaBreaches: overallSlaBreaches },
       cs,
     };
+  },
+});
+
+export const getResponseTimes = query({
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "responseTime.getResponseTimes");
+    return responseTimesFromSamples(ctx, args);
   },
 });

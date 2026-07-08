@@ -1,12 +1,12 @@
-import { query } from "./_generated/server";
+import { query, internalQuery } from "./_generated/server";
 import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
+import { dashboardSummaryFromRollups, trendFromRollups } from "./rollupReaders";
 
-export const getDashboardSummary = query({
+export const getDashboardSummaryLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "metrics.getDashboardSummary");
     const orders = await ctx.db.query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
@@ -51,6 +51,14 @@ export const getDashboardSummary = query({
   },
 });
 
+export const getDashboardSummary = query({
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "metrics.getDashboardSummary");
+    return dashboardSummaryFromRollups(ctx, args);
+  },
+});
+
 function bucketKey(ts: number, bucket: "day" | "week" | "month"): string {
   const d = getJakartaDate(ts); // YYYY-MM-DD (Asia/Jakarta)
   if (bucket === "month") return d.slice(0, 7);
@@ -63,11 +71,10 @@ function bucketKey(ts: number, bucket: "day" | "week" | "month"): string {
   return d;
 }
 
-export const getTrend = query({
+export const getTrendLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(),
     bucket: v.union(v.literal("day"), v.literal("week"), v.literal("month")), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "metrics.getTrend");
     const key = args.csName ? csKey(args.csName) : null;
     const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
     const orders = (await ctx.db.query("orders")
@@ -90,6 +97,15 @@ export const getTrend = query({
       const closings = closeSets.get(b)?.size ?? 0;
       return { bucket: b, leads, closings, cr: leads > 0 ? Math.round((closings / leads) * 1000) / 10 : 0 };
     });
+  },
+});
+
+export const getTrend = query({
+  args: { startAt: v.number(), endAt: v.number(),
+    bucket: v.union(v.literal("day"), v.literal("week"), v.literal("month")), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "metrics.getTrend");
+    return trendFromRollups(ctx, args);
   },
 });
 

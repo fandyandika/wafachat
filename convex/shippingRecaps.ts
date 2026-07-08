@@ -2,9 +2,14 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { isInternalTestPhone, csKey } from "./lib";
+import { isInternalTestPhone, csKey, canonicalizeProduct as canonicalizeProductLib, normalizeProductName as normalizeProductNameLib } from "./lib";
 import { getActiveClosingPhrases } from "./closingRules";
 import { bumpForOrderDoc, bumpForRecapDoc } from "./rollups";
+import { performanceFromRollups } from "./rollupReaders";
+
+// Re-export from lib for backward compatibility
+export const canonicalizeProduct = canonicalizeProductLib;
+export const normalizeProductName = normalizeProductNameLib;
 
 type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
@@ -203,35 +208,6 @@ function normalizeComparable(value: string | undefined): string {
   return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-export function normalizeProductName(value: string | undefined): string {
-  return cleanMarkdown(value ?? "")
-    .replace(/\(\s*\d+\s*x\s*\)/gi, "")
-    .replace(/\s+-\s+Pilih Paket:.*/i, "")
-    .replace(/\s+/g, " ")
-    .trim() || "Tanpa Data Produk";
-}
-
-// A closing with no matching order carries the message's SKU-style name
-// ("QURAN MAPPING 1 PCS") instead of the order's display name, which fragments the
-// per-product breakdown. Collapse every known variant to one canonical display name so
-// leads and closings group identically. Each keyword is unique within the catalog;
-// unknown products fall through unchanged (never mis-merged).
-const PRODUCT_ALIASES: Array<{ canonical: string; match: RegExp }> = [
-  { canonical: "Quran Mapping", match: /quran mapping/i },
-  { canonical: "Al Qur'an Medis [A5] dengan Hadis Medis + Jurnal Kesehatan", match: /medis/i },
-  { canonical: "7 Surat Istimewa", match: /surat/i },
-  { canonical: "Sound Book: Learning How To Do Shalat", match: /sound book|learning.*shalat/i },
-  { canonical: "Alquran Tulis Tazyin 1 Jilid", match: /tazyin/i },
-  { canonical: "Kumpulan Doa Berbagai Acara & Keperluan", match: /kumpulan doa|doa acara/i },
-];
-
-export function canonicalizeProduct(value: string | undefined): string {
-  const name = normalizeProductName(value);
-  for (const { canonical, match } of PRODUCT_ALIASES) {
-    if (match.test(name)) return canonical;
-  }
-  return name;
-}
 
 export function normalizeCsName(value: string | undefined): string {
   const name = cleanMarkdown(value ?? "") || "Tanpa Data CS";
@@ -1215,7 +1191,7 @@ export const repairRecipientNamesFromOrders = mutation({
   },
 });
 
-export const getPerformance = query({
+export const getPerformanceLegacy = internalQuery({
   args: {
     startAt: v.number(),
     endAt: v.number(),
@@ -1223,7 +1199,6 @@ export const getPerformance = query({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "shippingRecaps.getPerformance");
     const key = args.csName ? csKey(args.csName) : null;
     const orders = await ctx.db
       .query("orders")
@@ -1370,6 +1345,19 @@ export const getPerformance = query({
         cr: row.leads > 0 ? Math.round((row.closing / row.leads) * 1000) / 10 : 0,
       })),
     };
+  },
+});
+
+export const getPerformance = query({
+  args: {
+    startAt: v.number(),
+    endAt: v.number(),
+    includeInferredDiscount: v.optional(v.boolean()),
+    csName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "shippingRecaps.getPerformance");
+    return performanceFromRollups(ctx, args);
   },
 });
 

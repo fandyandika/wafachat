@@ -1,5 +1,5 @@
-import { windowKeyFor, windowRangeForKey, csKey as csKeyOf, getJakartaDate, normalizePhone, isInternalTestPhone } from "./lib";
-import { canonicalizeProduct, normalizeCsName } from "./shippingRecaps";
+import { windowKeyFor, windowRangeForKey, csKey as csKeyOf, getJakartaDate, normalizePhone, isInternalTestPhone, canonicalizeProduct } from "./lib";
+import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile } from "./responseTimeMath";
 
 /**

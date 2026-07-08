@@ -1,8 +1,9 @@
-import { query } from "./_generated/server";
+import { query, internalQuery } from "./_generated/server";
 import { requireMember } from "./authz";
 import { v } from "convex/values";
-import { normalizePhone, isInternalTestPhone, csKey } from "./lib";
-import { normalizeCsName, canonicalizeProduct } from "./shippingRecaps";
+import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct } from "./lib";
+import { normalizeCsName } from "./shippingRecaps";
+import { dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRollups, periodReportFromRollups } from "./rollupReaders";
 
 // leads/closedCust are keyed by customer PHONE (unique customers); closings by ORDER
 // (orderIdBerdu) — order-level is right for volume + revenue (a double-ordering customer
@@ -43,10 +44,9 @@ function aggName(a: CsAgg): string {
   return Array.from(a.rawCounts.entries()).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "";
 }
 
-export const getCsLeaderboard = query({
+export const getCsLeaderboardLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getCsLeaderboard");
     const len = args.endAt - args.startAt;
     const cur = await computeCsAgg(ctx, args.startAt, args.endAt, args.csName);
     const prev = await computeCsAgg(ctx, args.startAt - len, args.startAt - 1, args.csName);
@@ -74,6 +74,14 @@ export const getCsLeaderboard = query({
   },
 });
 
+export const getCsLeaderboard = query({
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getCsLeaderboard");
+    return leaderboardFromRollups(ctx, args);
+  },
+});
+
 async function computeProductAgg(ctx: any, startAt: number, endAt: number, csName?: string) {
   const key = csName ? csKey(csName) : null;
   const orders = (
@@ -98,10 +106,9 @@ async function computeProductAgg(ctx: any, startAt: number, endAt: number, csNam
   return { leads, closings };
 }
 
-export const getProductDifficulty = query({
+export const getProductDifficultyLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getProductDifficulty");
     const minLeads = args.minLeads ?? 3;
     const len = args.endAt - args.startAt;
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
@@ -118,6 +125,14 @@ export const getProductDifficulty = query({
       });
     rows.sort((a, b) => a.cr - b.cr || b.leads - a.leads);
     return rows;
+  },
+});
+
+export const getProductDifficulty = query({
+  args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getProductDifficulty");
+    return productDifficultyFromRollups(ctx, args);
   },
 });
 
@@ -146,10 +161,9 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
   return { start, end, prevStart, prevEnd: start - 1, label };
 }
 
-export const getPeriodReport = query({
+export const getPeriodReportLegacy = internalQuery({
   args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getPeriodReport");
     const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
     const cur = await computeCsAgg(ctx, start, end, args.csName);
@@ -178,6 +192,14 @@ export const getPeriodReport = query({
       prevLeads: prevT.leads, prevClosings: prevT.closings, prevCr: cr(prevT.closedCust, prevT.leads), prevRevenue: prevT.revenue,
       perCs,
     };
+  },
+});
+
+export const getPeriodReport = query({
+  args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getPeriodReport");
+    return periodReportFromRollups(ctx, args);
   },
 });
 
@@ -293,10 +315,9 @@ export const getCsDetail = query({
 // Daily CS report on a 16:00→16:00 WIB window. Mirrors computeCsAgg's dedup/exclusion
 // rules exactly (so totals match the Performance page), adding discount + per-CS×product
 // nesting + a duplicate-phone count (a judging aid for the CS-reported "Mis Rep").
-export const getDailyReport = query({
+export const getDailyReportLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getDailyReport");
     const orders = (
       await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
@@ -424,5 +445,13 @@ export const getDailyReport = query({
       },
       cs,
     };
+  },
+});
+
+export const getDailyReport = query({
+  args: { startAt: v.number(), endAt: v.number() },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getDailyReport");
+    return dailyReportFromRollups(ctx, args);
   },
 });
