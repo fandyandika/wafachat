@@ -35,20 +35,22 @@ export type RollupValues = {
 export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey: string): Promise<RollupValues | null> {
   const { startAt, endAt } = windowRangeForKey(windowKey);
 
-  // Fetch orders in window, filter by csKey and exclude internal test phones
+  // Fetch THIS CS's orders in the window via the csKey index — a per-CS slice, not the
+  // whole window (kills the O(window^2) write-amplification). Exclude internal test phones.
   const orders = (
-    await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-  ).filter((o: any) => !isInternalTestPhone(o.customerPhone) && csKeyOf(o.assignedCsName) === csKeyArg);
+    await ctx.db.query("orders")
+      .withIndex("by_csKey_createdAt", (q: any) => q.eq("csKey", csKeyArg).gte("createdAt", startAt).lte("createdAt", endAt))
+      .collect()
+  ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
 
-  // Fetch recaps in window, exclude cancelled, filter by csKey and exclude internal test phones
-  const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone) && csKeyOf(r.csName) === csKeyArg);
-
-  // Fetch ALL cancelled/cancelled_after_export recaps to count them (no csKey filter for cancelled)
-  const allCancelled = (
-    await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-  ).filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && !isInternalTestPhone(r.customerPhone) && csKeyOf(r.csName) === csKeyArg);
+  // Fetch THIS CS's recaps in the window in ONE read; split active vs cancelled in memory.
+  const recapsAll = (
+    await ctx.db.query("shippingRecaps")
+      .withIndex("by_csKey_closedAt", (q: any) => q.eq("csKey", csKeyArg).gte("closedAt", startAt).lte("closedAt", endAt))
+      .collect()
+  ).filter((r: any) => !isInternalTestPhone(r.customerPhone));
+  const recaps = recapsAll.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export");
+  const allCancelled = recapsAll.filter((r: any) => r.status === "cancelled" || r.status === "cancelled_after_export");
 
   // Resolve a closing's product to the matched in-window order's name, falling back to the recap's packageContent
   const latestOrderByPhone = new Map<string, any>();
@@ -268,6 +270,10 @@ export async function recomputeWindowImpl(ctx: any, windowKey: string): Promise<
     await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
   for (const o of orders) {
+    // Self-heal: stamp csKey if a doc predates the field or a write site missed it.
+    // No-op in prod (backfill + write-path guarantee csKey); keeps the by_csKey_* reads
+    // in computeRollupValues correct even for stragglers. Runs only in trueUp/backfill.
+    if (o.csKey === undefined) await ctx.db.patch(o._id, { csKey: csKeyOf(o.assignedCsName) });
     keys.add(csKeyOf(o.assignedCsName));
   }
 
@@ -276,6 +282,7 @@ export async function recomputeWindowImpl(ctx: any, windowKey: string): Promise<
     await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
   ).filter((r: any) => !isInternalTestPhone(r.customerPhone));
   for (const r of recaps) {
+    if (r.csKey === undefined) await ctx.db.patch(r._id, { csKey: csKeyOf(r.csName) });
     keys.add(csKeyOf(r.csName));
   }
 

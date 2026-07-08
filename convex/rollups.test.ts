@@ -2,10 +2,20 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { windowRangeForKey, windowKeyFor } from "./lib";
+import { windowRangeForKey, windowKeyFor, csKey } from "./lib";
 
 const W = "2026-07-08";
 const t0 = windowRangeForKey(W).startAt + 3_600_000;
+
+// Test seeds insert orders/recaps raw (bypassing the write-path that stamps csKey), so
+// mirror the prod invariant: every doc carries csKey = csKey(rawName). computeRollupValues
+// reads by the by_csKey_* index, so a seed without csKey would be invisible. Idempotent.
+async function stampCsKeys(ctx: any) {
+  for (const o of await ctx.db.query("orders").collect())
+    if (o.csKey === undefined) await ctx.db.patch(o._id, { csKey: csKey(o.assignedCsName) });
+  for (const r of await ctx.db.query("shippingRecaps").collect())
+    if (r.csKey === undefined) await ctx.db.patch(r._id, { csKey: csKey(r.csName) });
+}
 
 async function seed(t: ReturnType<typeof convexTest>) {
   await t.run(async (ctx) => {
@@ -16,6 +26,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     await ctx.db.insert("shippingRecaps", { customerPhone: "6281000000001", customerName: "A", csName: "Azelia", orderIdBerdu: "O-1", status: "exported", total: 100000, discount: 5000, followUpTouchesAtClose: 2, sourceMessageId: "m1", packageContent: "Buku Sirah", closedAt: t0 + 10, recipientName: "A", recipientPhone: "6281000000001", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
     await ctx.db.insert("shippingRecaps", { customerPhone: "6281000000002", customerName: "B", csName: "Azelia", orderIdBerdu: "O-3", status: "delivered", total: 200000, packageContent: "Quran Medis", closedAt: t0 + 11, recipientName: "B", recipientPhone: "6281000000002", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
     await ctx.db.insert("shippingRecaps", { customerPhone: "6281000000005", customerName: "C", csName: "Azelia", orderIdBerdu: "O-9", status: "cancelled", total: 50000, packageContent: "Buku Sirah", closedAt: t0 + 12, recipientName: "C", recipientPhone: "6281000000005", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
+    await stampCsKeys(ctx);
   });
 }
 
@@ -56,6 +67,7 @@ test("orphan recap attributed via order fallback like legacy", async () => {
   await t.run(async (ctx) => {
     await ctx.db.insert("orders", { orderId: "O-7", customerPhone: "6281000000007", customerName: "C", assignedCsName: "Lila", productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "90000", shippingCost: "0", total: "90000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0, updatedAt: t0 } as any);
     await ctx.db.insert("shippingRecaps", { customerPhone: "6281000000007", customerName: "C", csName: "Lila", orderIdBerdu: "O-7", status: "ready", total: 90000, packageContent: "Buku Sirah", closedAt: t0 + 5, recipientName: "C", recipientPhone: "6281000000007", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
+    await stampCsKeys(ctx);
   });
   await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
   const rows = await t.run(async (ctx) =>
@@ -277,6 +289,8 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
     } as any);
   });
 
+  await t.run(stampCsKeys);
+
   // Create a conversation for the messages
   let convId: string;
   await t.run(async (ctx) => {
@@ -493,6 +507,7 @@ test("backfillRange: processes 2 seeded windows with nextFromKey null", async ()
     } as any);
   });
 
+  await t.run(stampCsKeys);
   // Backfill from A to B
   const result = await t.withIdentity(adminIdentity).mutation(api.rollups.backfillRange, {
     fromKey: windowA,
@@ -696,6 +711,7 @@ test("debugRollupParity: detects when rollup data matches fresh computation", as
     } as any);
   });
 
+  await t.run(stampCsKeys);
   // Compute rollup
   await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
 
@@ -738,6 +754,7 @@ test("debugRollupParity: detects corrupted rollup field", async () => {
     } as any);
   });
 
+  await t.run(stampCsKeys);
   // Compute rollup
   await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
 
@@ -790,6 +807,7 @@ test("debugRollupParity: detects corrupted csName field", async () => {
     } as any);
   });
 
+  await t.run(stampCsKeys);
   // Compute rollup
   await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
 
