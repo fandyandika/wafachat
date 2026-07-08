@@ -154,6 +154,24 @@ export const upsert = mutation({
   },
 });
 
+// Map a CS to one or more WABA phone_number_ids so the Ingestion API can attribute
+// messages/closings to the right CS without n8n (replaces the hardcoded n8n map).
+// Patches only providerNumberIds — preserves all other config fields.
+export const setProviderNumberIds = mutation({
+  args: { csName: v.string(), providerNumberIds: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, "csConfigs.setProviderNumberIds");
+    const normalizedName = normalizeCsName(args.csName);
+    const existing = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName))
+      .unique();
+    if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
+    await ctx.db.patch(existing._id, { providerNumberIds: args.providerNumberIds, updatedAt: Date.now() });
+    return { success: true, csName: args.csName, providerNumberIds: args.providerNumberIds };
+  },
+});
+
 // Rename a CS's display name in place (patches the stored config's csName + normalizedName).
 // Historical orders/recaps keep their raw name but still group under this CS via csKey on the
 // panel, so no data migration is needed for a cosmetic rename (e.g. "CS Aisyah" -> "Aisyah").
