@@ -44,3 +44,30 @@ test("csKey collapses the 'CS ' prefix so config and data names match", () => {
   // does not over-strip a name that legitimately starts with "cs"
   expect(csKey("Cynthia Sari")).toBe("cynthiasari");
 });
+
+import { describe } from "vitest";
+import { fourPmWibMs, windowKeyFor, windowRangeForKey, windowKeyToday } from "./lib";
+
+describe("report window helpers (16:00 WIB)", () => {
+  test("fourPmWibMs = 09:00 UTC of that date", () => {
+    expect(fourPmWibMs(2026, 6, 8)).toBe(Date.UTC(2026, 6, 8, 9, 0, 0));
+  });
+  test("windowKeyFor: 15:59 WIB belongs to yesterday's window; 16:00 to today's", () => {
+    expect(windowKeyFor(Date.UTC(2026, 6, 8, 8, 59, 59))).toBe("2026-07-07");
+    expect(windowKeyFor(Date.UTC(2026, 6, 8, 9, 0, 0))).toBe("2026-07-08");
+  });
+  test("windowRangeForKey roundtrips", () => {
+    const r = windowRangeForKey("2026-07-08");
+    expect(r.startAt).toBe(fourPmWibMs(2026, 6, 8));
+    expect(r.endAt).toBe(fourPmWibMs(2026, 6, 9));
+    expect(windowKeyFor(r.startAt)).toBe("2026-07-08");
+    expect(windowKeyFor(r.endAt - 1)).toBe("2026-07-08");
+  });
+  test("windowKeyToday delegates to windowKeyFor", () => {
+    const now = Date.UTC(2026, 6, 8, 3, 0, 0); // 10:00 WIB -> window opened 7 Jul 16:00
+    expect(windowKeyToday(now)).toBe("2026-07-07");
+  });
+  test("year boundary", () => {
+    expect(windowKeyFor(Date.UTC(2026, 0, 1, 1, 0, 0))).toBe("2025-12-31");
+  });
+});
