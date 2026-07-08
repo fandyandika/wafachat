@@ -244,3 +244,127 @@ test("backfillCsNameByOrderIds bumps old and new csKey rows", async () => {
   expect(newRow).toBeDefined();
   expect(newRow!.closings).toBe(1);
 });
+
+test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sample → gone", async () => {
+  const t = convexTest(schema);
+  const today = "2026-07-08";
+  const range = windowRangeForKey(today);
+  const msgTime = range.startAt + 3_600_000;
+
+  // First create an order so the rollup will have data
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", {
+      orderId: "O-TRUE-UP",
+      customerPhone: "6281000000099",
+      customerName: "TrueUp Test",
+      assignedCsName: "CS TrueUp",
+      productName: "Test Product",
+      products: "Test Product",
+      productsSubtotal: "100000",
+      shippingCost: "0",
+      total: "100000",
+      shippingAddress: "",
+      shippingDistrict: "",
+      shippingCity: "",
+      source: "berdu",
+      aiEligible: false,
+      createdAt: msgTime,
+      updatedAt: msgTime,
+    } as any);
+  });
+
+  // Create a conversation for the messages
+  let convId: string;
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", {
+      orderId: "O-TRUE-UP",
+      customerPhone: "6281000000099",
+      customerName: "TrueUp Test",
+      assignedCsName: "CS TrueUp",
+      status: "active",
+      aiEnabled: false,
+      note: "",
+      createdAt: msgTime,
+      updatedAt: msgTime,
+    } as any);
+  });
+
+  // Add messages: inbound -> outbound (creates a response sample)
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "6281000000099",
+    order_id: "O-TRUE-UP",
+    customerName: "TrueUp Test",
+    csName: "CS TrueUp",
+    role: "customer",
+    direction: "inbound",
+    content: "Hi",
+    messageType: "text",
+    createdAt: msgTime,
+  });
+
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "6281000000099",
+    order_id: "O-TRUE-UP",
+    customerName: "TrueUp Test",
+    csName: "CS TrueUp",
+    role: "cs",
+    direction: "outbound",
+    content: "Hello!",
+    messageType: "text",
+    createdAt: msgTime + 10 * 60 * 1000, // 10 min later
+  });
+
+  // Force an initial rollup so we have something to corrupt
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: today });
+
+  // Corrupt a rollup field
+  await t.run(async (ctx) => {
+    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", today)).collect();
+    if (rollups.length > 0) {
+      await ctx.db.patch(rollups[0]._id, { leadOrders: 999 }); // corrupt field
+    }
+  });
+
+  // Insert a bogus sample outside the message-derived pairs
+  await t.run(async (ctx) => {
+    await ctx.db.insert("responseSamples", {
+      csKey: "trueup",
+      csName: "CS TrueUp",
+      conversationId: convId as any,
+      deltaMs: 999999,
+      inboundAt: msgTime + 100 * 60 * 1000, // way in future
+      slaBreach: false,
+      createdAt: msgTime + 100 * 60 * 1000,
+    } as any);
+  });
+
+  // Verify before true-up: bogus sample exists, rollup is corrupted
+  await t.run(async (ctx) => {
+    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", today)).collect();
+    const rollup = rollups.find((r: any) => r.csKey === "trueup");
+    expect(rollup!.leadOrders).toBe(999); // Corrupted
+    const samples = await ctx.db.query("responseSamples").collect();
+    expect(samples.length).toBe(2); // 1 correct + 1 bogus
+  });
+
+  // Run trueUp action - manually do the steps
+  await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey: today });
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: today });
+
+  // Verify: rollup field is corrected (not 999)
+  await t.run(async (ctx) => {
+    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", today)).collect();
+    const rollup = rollups.find((r: any) => r.csKey === "trueup");
+    expect(rollup).toBeDefined();
+    expect(rollup!.leadOrders).not.toBe(999);
+    expect(rollup!.leadOrders).toBe(1); // One order in window
+  });
+
+  // Verify: bogus sample is gone, correct sample is present
+  await t.run(async (ctx) => {
+    const samples = await ctx.db.query("responseSamples").collect();
+    expect(samples.length).toBe(1); // only the correct one from the message pair
+    expect(samples[0].inboundAt).toBe(msgTime);
+    expect(samples[0].createdAt).toBe(msgTime + 10 * 60 * 1000);
+  });
+});

@@ -46,11 +46,8 @@ export function percentile(nums: number[], p: number): number | null {
   return s[Math.min(rank, s.length) - 1];
 }
 
-export function pairResponseEvents(msgs: RtMessage[]): { firstReplyMs: number | null; allReplyMs: number[]; firstInboundAt: number | null; firstReplyAt: number | null } {
-  const allReplyMs: number[] = [];
-  let firstReplyMs: number | null = null;
-  let firstInboundAt: number | null = null;
-  let firstReplyAt: number | null = null;
+export function pairResponsePairs(msgs: RtMessage[]): Array<{ inboundAt: number; replyAt: number; gapMs: number }> {
+  const pairs: Array<{ inboundAt: number; replyAt: number; gapMs: number }> = [];
   let pendingInboundAt: number | null = null;
   for (const m of msgs) {
     if (m.direction === "inbound") {
@@ -59,20 +56,20 @@ export function pairResponseEvents(msgs: RtMessage[]): { firstReplyMs: number | 
     }
     const isReply = m.messageType !== "template" && m.role !== "system";
     if (isReply && pendingInboundAt !== null) {
-      // Active-hours elapsed (same 05:30-18:00 WIB clock as the SLA) so after-hours/overnight
-      // waits don't unfairly inflate the median. But a chat that happens ENTIRELY off-hours
-      // would collapse to 0 active min — which would falsely rank an evening-shift CS as
-      // "instant". So fall back to wall-clock when there's no active time. Stored as ms.
       const activeMs = Math.round(businessMinutesBetween(pendingInboundAt, m.createdAt) * 60_000);
       const gap = activeMs > 0 ? activeMs : m.createdAt - pendingInboundAt;
-      allReplyMs.push(gap);
-      if (firstReplyMs === null) {
-        firstReplyMs = gap;
-        firstInboundAt = pendingInboundAt;
-        firstReplyAt = m.createdAt;
-      }
+      pairs.push({ inboundAt: pendingInboundAt, replyAt: m.createdAt, gapMs: gap });
       pendingInboundAt = null;
     }
   }
+  return pairs;
+}
+
+export function pairResponseEvents(msgs: RtMessage[]): { firstReplyMs: number | null; allReplyMs: number[]; firstInboundAt: number | null; firstReplyAt: number | null } {
+  const pairs = pairResponsePairs(msgs);
+  const allReplyMs = pairs.map((p) => p.gapMs);
+  const firstReplyMs = pairs.length > 0 ? pairs[0].gapMs : null;
+  const firstInboundAt = pairs.length > 0 ? pairs[0].inboundAt : null;
+  const firstReplyAt = pairs.length > 0 ? pairs[0].replyAt : null;
   return { firstReplyMs, allReplyMs, firstInboundAt, firstReplyAt };
 }

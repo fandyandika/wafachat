@@ -1,5 +1,17 @@
 import { expect, test } from "vitest";
-import { median, percentile, pairResponseEvents, type RtMessage } from "./responseTimeMath";
+import { median, percentile, pairResponseEvents, pairResponsePairs, type RtMessage } from "./responseTimeMath";
+
+test("pairResponsePairs: [in,out,in,out] → 2 pairs with correct gaps", () => {
+  const r = pairResponsePairs([
+    m("inbound", 1000, "text", "customer"),     // first inbound
+    m("outbound", 61000),                       // CS reply 60s later
+    m("inbound", 100000, "button", "customer"), // second inbound
+    m("outbound", 130000),                      // reply 30s later
+  ]);
+  expect(r).toHaveLength(2);
+  expect(r[0]).toEqual({ inboundAt: 1000, replyAt: 61000, gapMs: 60000 });
+  expect(r[1]).toEqual({ inboundAt: 100000, replyAt: 130000, gapMs: 30000 });
+});
 
 test("median: odd, even, empty", () => {
   expect(median([3, 1, 2])).toBe(2);

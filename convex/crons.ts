@@ -41,4 +41,11 @@ crons.daily(
   {},
 );
 
+crons.daily(
+  "rollup true-up",
+  { hourUTC: 20, minuteUTC: 0 }, // 03:00 WIB, after ingest retention
+  internal.rollups.trueUp,
+  {},
+);
+
 export default crons;

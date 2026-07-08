@@ -1,7 +1,9 @@
 import { v } from "convex/values";
-import { internalMutation } from "./_generated/server";
-import { csKey as csKeyOf, isInternalTestPhone, normalizePhone, windowKeyFor, windowRangeForKey } from "./lib";
+import { internalMutation, internalAction } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { csKey as csKeyOf, isInternalTestPhone, normalizePhone, windowKeyFor, windowRangeForKey, windowKeyToday } from "./lib";
 import { canonicalizeProduct } from "./shippingRecaps";
+import { pairResponsePairs, isSlaBreach, type RtMessage } from "./responseTimeMath";
 
 const PRODUCT_CAP = 50;
 
@@ -222,41 +224,137 @@ export async function bumpForRecapDoc(ctx: any, before: any | null, after: any |
   for (const { k, w } of pairs.values()) await computeRollupRow(ctx, k, w);
 }
 
+export async function recomputeWindowImpl(ctx: any, windowKey: string): Promise<number> {
+  const { startAt, endAt } = windowRangeForKey(windowKey);
+  const keys = new Set<string>();
+
+  // Collect csKeys from orders in the window
+  const orders = (
+    await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+  ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
+  for (const o of orders) {
+    keys.add(csKeyOf(o.assignedCsName));
+  }
+
+  // Collect csKeys from recaps in the window (including orphan attribution)
+  const recaps = (
+    await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+  ).filter((r: any) => !isInternalTestPhone(r.customerPhone));
+  for (const r of recaps) {
+    keys.add(csKeyOf(r.csName));
+  }
+
+  // Collect csKeys from existing dailyRollups rows in the window (so stale rows get zeroed/deleted)
+  const existingRollups = (
+    await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", windowKey)).collect()
+  );
+  for (const row of existingRollups) {
+    keys.add(row.csKey);
+  }
+
+  // Recompute all csKeys in the window
+  for (const k of keys) {
+    await computeRollupRow(ctx, k, windowKey);
+  }
+
+  return keys.size;
+}
+
 export const recomputeWindow = internalMutation({
   args: { windowKey: v.string() },
   handler: async (ctx, args) => {
-    const { startAt, endAt } = windowRangeForKey(args.windowKey);
-    const keys = new Set<string>();
+    const csKeys = await recomputeWindowImpl(ctx, args.windowKey);
+    return { windowKey: args.windowKey, csKeys };
+  },
+});
 
-    // Collect csKeys from orders in the window
-    const orders = (
-      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-    ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
-    for (const o of orders) {
-      keys.add(csKeyOf(o.assignedCsName));
+export async function rebuildSamplesForWindowImpl(ctx: any, windowKey: string): Promise<number> {
+  const { startAt, endAt } = windowRangeForKey(windowKey);
+
+  // Delete all responseSamples in this window
+  const existingSamples = (
+    await ctx.db.query("responseSamples").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+  );
+  for (const sample of existingSamples) {
+    await ctx.db.delete(sample._id);
+  }
+
+  // Fetch messages in window, grouped by conversation (exactly like responseTime.getResponseTimes)
+  const msgs = (
+    await ctx.db
+      .query("messages")
+      .withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt))
+      .collect()
+  ).filter((m: any) => !isInternalTestPhone(m.customerPhone));
+
+  // Group by conversation, preserving ascending createdAt order
+  const byConv = new Map<string, RtMessage[]>();
+  const convOrder: string[] = [];
+  const convIdByKey = new Map<string, any>();
+  for (const m of msgs) {
+    const key = String(m.conversationId);
+    let arr = byConv.get(key);
+    if (!arr) {
+      arr = [];
+      byConv.set(key, arr);
+      convOrder.push(key);
+      convIdByKey.set(key, m.conversationId);
+    }
+    arr.push({ direction: m.direction, messageType: m.messageType, role: m.role, createdAt: m.createdAt });
+  }
+
+  // Fetch conversation docs to get assignedCsName (exactly like responseTime.getResponseTimes)
+  const convDocs = await Promise.all(convOrder.map((key) => ctx.db.get(convIdByKey.get(key))));
+  const csByKey = new Map<string, string>();
+  convOrder.forEach((key, i) => csByKey.set(key, (convDocs[i] as any)?.assignedCsName || "Unknown"));
+
+  // For each conversation, pair messages and insert samples
+  let sampleCount = 0;
+  for (const key of convOrder) {
+    const pairs = pairResponsePairs(byConv.get(key)!);
+    const raw = csByKey.get(key) || "Unknown";
+    const ck = csKeyOf(raw);
+    const convId = convIdByKey.get(key);
+
+    for (const pair of pairs) {
+      await ctx.db.insert("responseSamples", {
+        csKey: ck,
+        csName: raw,
+        conversationId: convId,
+        deltaMs: pair.gapMs,
+        inboundAt: pair.inboundAt,
+        slaBreach: isSlaBreach(pair.inboundAt, pair.replyAt),
+        createdAt: pair.replyAt,
+      });
+      sampleCount++;
+    }
+  }
+
+  return sampleCount;
+}
+
+export const rebuildSamplesForWindow = internalMutation({
+  args: { windowKey: v.string() },
+  handler: async (ctx, args) => {
+    const sampleCount = await rebuildSamplesForWindowImpl(ctx, args.windowKey);
+    return { windowKey: args.windowKey, samplesRebuilt: sampleCount };
+  },
+});
+
+export const trueUp = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Derive "yesterday" and "today" windows
+    const today = windowKeyToday();
+    const todayRange = windowRangeForKey(today);
+    const yesterday = windowKeyFor(todayRange.startAt - 1);
+
+    // Rebuild samples for both windows
+    for (const windowKey of [yesterday, today]) {
+      await ctx.runMutation(internal.rollups.rebuildSamplesForWindow, { windowKey });
+      await ctx.runMutation(internal.rollups.recomputeWindow, { windowKey });
     }
 
-    // Collect csKeys from recaps in the window (including orphan attribution)
-    const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-    ).filter((r: any) => !isInternalTestPhone(r.customerPhone));
-    for (const r of recaps) {
-      keys.add(csKeyOf(r.csName));
-    }
-
-    // Collect csKeys from existing dailyRollups rows in the window (so stale rows get zeroed/deleted)
-    const existingRollups = (
-      await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", args.windowKey)).collect()
-    );
-    for (const row of existingRollups) {
-      keys.add(row.csKey);
-    }
-
-    // Recompute all csKeys in the window
-    for (const k of keys) {
-      await computeRollupRow(ctx, k, args.windowKey);
-    }
-
-    return { windowKey: args.windowKey, csKeys: keys.size };
+    return { yesterday, today, status: "ok" };
   },
 });
