@@ -119,16 +119,16 @@ export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey:
     if (touchCount >= 3) fuH3 += 1;
   }
 
-  // Per-product aggregation (leads = raw order count to match getProductDifficulty)
-  const productMap = new Map<string, { rawLeads: number; closings: Set<string> }>();
+  // Per-product aggregation (leads = distinct customers to match getDailyReport)
+  const productMap = new Map<string, { leads: Set<string>; closings: Set<string> }>();
   for (const o of orders) {
     const p = canonicalizeProduct(o.productName || o.products);
     let prod = productMap.get(p);
     if (!prod) {
-      prod = { rawLeads: 0, closings: new Set() };
+      prod = { leads: new Set(), closings: new Set() };
       productMap.set(p, prod);
     }
-    prod.rawLeads += 1;
+    prod.leads.add(normalizePhone(o.customerPhone));
   }
 
   for (const r of closingsList) {
@@ -137,7 +137,7 @@ export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey:
     const p = canonicalizeProduct(matched?.productName || matched?.products || r.packageContent);
     let prod = productMap.get(p);
     if (!prod) {
-      prod = { rawLeads: 0, closings: new Set() };
+      prod = { leads: new Set(), closings: new Set() };
       productMap.set(p, prod);
     }
     prod.closings.add(r.orderIdBerdu || cphone);
@@ -145,7 +145,7 @@ export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey:
 
   // Build byProduct array, cap at 50 + overflow bucket
   const productsEntries = Array.from(productMap.entries())
-    .map(([product, p]) => ({ product, leads: p.rawLeads, closings: p.closings.size }))
+    .map(([product, p]) => ({ product, leads: p.leads.size, closings: p.closings.size }))
     .filter((p) => p.leads > 0 || p.closings > 0)
     .sort((x, y) => y.leads - x.leads || x.product.localeCompare(y.product));
 
