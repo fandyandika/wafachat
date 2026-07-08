@@ -1,13 +1,35 @@
 import { v } from "convex/values";
-import { internalMutation, internalAction } from "./_generated/server";
+import { mutation, query, internalMutation, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { requireAdmin } from "./authz";
 import { csKey as csKeyOf, isInternalTestPhone, normalizePhone, windowKeyFor, windowRangeForKey, windowKeyToday } from "./lib";
 import { canonicalizeProduct } from "./shippingRecaps";
 import { pairResponsePairs, isSlaBreach, type RtMessage } from "./responseTimeMath";
 
 const PRODUCT_CAP = 50;
 
-export async function computeRollupRow(ctx: any, csKeyArg: string, windowKey: string): Promise<void> {
+export type RollupValues = {
+  windowKey: string;
+  csKey: string;
+  csName: string;
+  leadOrders: number;
+  leadsCust: number;
+  closings: number;
+  closedCust: number;
+  cancelled: number;
+  manualClosings: number;
+  delivered: number;
+  revenue: number;
+  discount: number;
+  fuClosings: number;
+  fuH1: number;
+  fuH2: number;
+  fuH3: number;
+  byProduct: Array<{ product: string; leads: number; closings: number }>;
+  updatedAt: number;
+};
+
+export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey: string): Promise<RollupValues | null> {
   const { startAt, endAt } = windowRangeForKey(windowKey);
 
   // Fetch orders in window, filter by csKey and exclude internal test phones
@@ -158,6 +180,37 @@ export async function computeRollupRow(ctx: any, csKeyArg: string, windowKey: st
   const isEmpty = leads.size === 0 && closingsList.length === 0 && allCancelled.length === 0;
 
   if (isEmpty) {
+    // Return null for empty windows (caller will delete)
+    return null;
+  }
+
+  // Return computed values
+  return {
+    windowKey,
+    csKey: csKeyArg,
+    csName,
+    leadOrders: rawLeads,
+    leadsCust: leads.size,
+    closings: closingsList.length,
+    closedCust: closedCust.size,
+    cancelled: allCancelled.length,
+    manualClosings,
+    delivered,
+    revenue,
+    discount,
+    fuClosings,
+    fuH1,
+    fuH2,
+    fuH3,
+    byProduct,
+    updatedAt: Date.now(),
+  };
+}
+
+export async function computeRollupRow(ctx: any, csKeyArg: string, windowKey: string): Promise<void> {
+  const values = await computeRollupValues(ctx, csKeyArg, windowKey);
+
+  if (values === null) {
     // Delete existing row
     const existing = await ctx.db
       .query("dailyRollups")
@@ -173,31 +226,10 @@ export async function computeRollupRow(ctx: any, csKeyArg: string, windowKey: st
       .withIndex("by_window_cs", (q: any) => q.eq("windowKey", windowKey).eq("csKey", csKeyArg))
       .unique();
 
-    const row = {
-      windowKey,
-      csKey: csKeyArg,
-      csName,
-      leadOrders: rawLeads,
-      leadsCust: leads.size,
-      closings: closingsList.length,
-      closedCust: closedCust.size,
-      cancelled: allCancelled.length,
-      manualClosings,
-      delivered,
-      revenue,
-      discount,
-      fuClosings,
-      fuH1,
-      fuH2,
-      fuH3,
-      byProduct,
-      updatedAt: Date.now(),
-    };
-
     if (existing) {
-      await ctx.db.patch(existing._id, row);
+      await ctx.db.patch(existing._id, values);
     } else {
-      await ctx.db.insert("dailyRollups", row);
+      await ctx.db.insert("dailyRollups", values);
     }
   }
 }
@@ -356,5 +388,174 @@ export const trueUp = internalAction({
     }
 
     return { yesterday, today, status: "ok" };
+  },
+});
+
+export const oldestWindowKey = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx, "rollups.oldestWindowKey");
+
+    // Get the first order by createdAt asc
+    const order = await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", 0)).first();
+
+    if (!order) {
+      return null;
+    }
+
+    return windowKeyFor(order.createdAt);
+  },
+});
+
+export const backfillRange = mutation({
+  args: { fromKey: v.string(), toKey: v.string() },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, "rollups.backfillRange");
+
+    const processed: string[] = [];
+    let currentKey = args.fromKey;
+    let nextFromKey: string | null = null;
+
+    // Iterate up to 40 windows
+    for (let i = 0; i < 40; i++) {
+      if (currentKey > args.toKey) {
+        break;
+      }
+
+      // Execute both rebuild and recompute for this window
+      await rebuildSamplesForWindowImpl(ctx, currentKey);
+      await recomputeWindowImpl(ctx, currentKey);
+
+      processed.push(currentKey);
+
+      // Derive next key
+      const { endAt } = windowRangeForKey(currentKey);
+      currentKey = windowKeyFor(endAt);
+
+      // Check if we'd exceed the range
+      if (currentKey > args.toKey && i < 39) {
+        break;
+      }
+    }
+
+    // If currentKey is still <= toKey, set nextFromKey for caller to continue
+    if (currentKey <= args.toKey) {
+      nextFromKey = currentKey;
+    }
+
+    return { processed, nextFromKey };
+  },
+});
+
+export const debugRollupParity = query({
+  args: { windowKey: v.string() },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, "rollups.debugRollupParity");
+
+    const { startAt, endAt } = windowRangeForKey(args.windowKey);
+    const mismatches: Array<{ csKey: string; field: string; stored: any; fresh: any }> = [];
+
+    // Fetch all csKeys in the window
+    const keys = new Set<string>();
+
+    // From orders
+    const orders = (
+      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
+    for (const o of orders) {
+      keys.add(csKeyOf(o.assignedCsName));
+    }
+
+    // From recaps
+    const recaps = (
+      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+    ).filter((r: any) => !isInternalTestPhone(r.customerPhone));
+    for (const r of recaps) {
+      keys.add(csKeyOf(r.csName));
+    }
+
+    // From existing rollups
+    const storedRollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", args.windowKey)).collect();
+    const storedMap = new Map<string, any>();
+    for (const row of storedRollups) {
+      keys.add(row.csKey);
+      storedMap.set(row.csKey, row);
+    }
+
+    // Compute fresh for each csKey
+    for (const csKey of keys) {
+      const fresh = await computeRollupValues(ctx, csKey, args.windowKey);
+      const stored = storedMap.get(csKey);
+
+      // Compare
+      if (!fresh && !stored) {
+        // Both empty, no mismatch
+        continue;
+      }
+
+      if (!fresh && stored) {
+        // Fresh is empty but stored exists - mismatch
+        mismatches.push({
+          csKey,
+          field: "(entire row)",
+          stored: stored,
+          fresh: null,
+        });
+        continue;
+      }
+
+      if (fresh && !stored) {
+        // Fresh exists but stored doesn't - mismatch
+        mismatches.push({
+          csKey,
+          field: "(entire row)",
+          stored: null,
+          fresh: fresh,
+        });
+        continue;
+      }
+
+      // Both exist, compare field by field (excluding updatedAt which always changes)
+      const fieldsToCheck = [
+        "leadOrders", "leadsCust", "closings", "closedCust", "cancelled",
+        "manualClosings", "delivered", "revenue", "discount",
+        "fuClosings", "fuH1", "fuH2", "fuH3",
+      ];
+
+      for (const field of fieldsToCheck) {
+        const storedVal = stored[field];
+        const freshVal = fresh[field as keyof RollupValues];
+        if (freshVal !== storedVal) {
+          mismatches.push({
+            csKey,
+            field,
+            stored: storedVal,
+            fresh: freshVal,
+          });
+        }
+      }
+
+      // Compare byProduct as JSON (sort by leads desc then product name asc, same as computeRollupValues)
+      const sortByLeads = (a: any, b: any) => b.leads - a.leads || a.product.localeCompare(b.product);
+      const storedProductsSorted = [...(stored.byProduct ?? [])].sort(sortByLeads);
+      const freshProductsSorted = [...(fresh.byProduct ?? [])].sort(sortByLeads);
+      const storedProductsJson = JSON.stringify(storedProductsSorted);
+      const freshProductsJson = JSON.stringify(freshProductsSorted);
+      if (storedProductsJson !== freshProductsJson) {
+        mismatches.push({
+          csKey,
+          field: "byProduct",
+          stored: stored.byProduct,
+          fresh: fresh.byProduct,
+        });
+      }
+    }
+
+    return {
+      windowKey: args.windowKey,
+      mismatches,
+      storedRows: storedRollups.length,
+      freshRows: keys.size,
+    };
   },
 });

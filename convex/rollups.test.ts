@@ -2,7 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
-import { windowRangeForKey } from "./lib";
+import { windowRangeForKey, windowKeyFor } from "./lib";
 
 const W = "2026-07-08";
 const t0 = windowRangeForKey(W).startAt + 3_600_000;
@@ -367,4 +367,314 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
     expect(samples[0].inboundAt).toBe(msgTime);
     expect(samples[0].createdAt).toBe(msgTime + 10 * 60 * 1000);
   });
+});
+
+test("oldestWindowKey: returns correct window or null when empty", async () => {
+  const t = convexTest(schema);
+  const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+
+  // Empty case
+  const emptyResult = await t.withIdentity(adminIdentity).query(internal.rollups.oldestWindowKey);
+  expect(emptyResult).toBeNull();
+
+  // Seed some orders
+  const windowA = "2026-07-05";
+  const windowB = "2026-07-08";
+  const rangeA = windowRangeForKey(windowA);
+  const rangeB = windowRangeForKey(windowB);
+
+  await t.run(async (ctx) => {
+    // Insert order in window B first
+    await ctx.db.insert("orders", {
+      orderId: "O-B1",
+      customerPhone: "6281000000100",
+      customerName: "B",
+      assignedCsName: "Azelia",
+      productName: "Buku",
+      products: "Buku",
+      productsSubtotal: "100000",
+      shippingCost: "0",
+      total: "100000",
+      shippingAddress: "",
+      shippingDistrict: "",
+      shippingCity: "",
+      source: "berdu",
+      aiEligible: false,
+      createdAt: rangeB.startAt + 3600000,
+      updatedAt: rangeB.startAt,
+    } as any);
+
+    // Insert order in window A (earlier)
+    await ctx.db.insert("orders", {
+      orderId: "O-A1",
+      customerPhone: "6281000000101",
+      customerName: "A",
+      assignedCsName: "Azelia",
+      productName: "Quran",
+      products: "Quran",
+      productsSubtotal: "200000",
+      shippingCost: "0",
+      total: "200000",
+      shippingAddress: "",
+      shippingDistrict: "",
+      shippingCity: "",
+      source: "berdu",
+      aiEligible: false,
+      createdAt: rangeA.startAt + 3600000,
+      updatedAt: rangeA.startAt,
+    } as any);
+  });
+
+  // Query should return window A
+  const result = await t.withIdentity(adminIdentity).query(internal.rollups.oldestWindowKey);
+  expect(result).toBe(windowA);
+});
+
+test("oldestWindowKey: rejects non-admin", async () => {
+  const t = convexTest(schema);
+  const csIdentity = { subject: "u1", role: "cs" as const, name: "CS", email: "cs@w", csName: "Azelia" };
+
+  await expect(
+    t.withIdentity(csIdentity).query(internal.rollups.oldestWindowKey)
+  ).rejects.toThrow(/unauthorized|admin/);
+});
+
+test("backfillRange: processes 2 seeded windows with nextFromKey null", async () => {
+  const t = convexTest(schema);
+  const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+
+  const windowA = "2026-07-05";
+  const windowB = "2026-07-06";
+  const rangeA = windowRangeForKey(windowA);
+  const rangeB = windowRangeForKey(windowB);
+
+  // Seed data in both windows
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", {
+      orderId: "O-A",
+      customerPhone: "6281000000102",
+      customerName: "A",
+      assignedCsName: "Azelia",
+      productName: "Buku",
+      products: "Buku",
+      productsSubtotal: "100000",
+      shippingCost: "0",
+      total: "100000",
+      shippingAddress: "",
+      shippingDistrict: "",
+      shippingCity: "",
+      source: "berdu",
+      aiEligible: false,
+      createdAt: rangeA.startAt + 3600000,
+      updatedAt: rangeA.startAt,
+    } as any);
+
+    await ctx.db.insert("orders", {
+      orderId: "O-B",
+      customerPhone: "6281000000103",
+      customerName: "B",
+      assignedCsName: "Azelia",
+      productName: "Quran",
+      products: "Quran",
+      productsSubtotal: "200000",
+      shippingCost: "0",
+      total: "200000",
+      shippingAddress: "",
+      shippingDistrict: "",
+      shippingCity: "",
+      source: "berdu",
+      aiEligible: false,
+      createdAt: rangeB.startAt + 3600000,
+      updatedAt: rangeB.startAt,
+    } as any);
+  });
+
+  // Backfill from A to B
+  const result = await t.withIdentity(adminIdentity).mutation(internal.rollups.backfillRange, {
+    fromKey: windowA,
+    toKey: windowB,
+  });
+
+  expect(result.processed).toContain(windowA);
+  expect(result.processed).toContain(windowB);
+  expect(result.processed.length).toBe(2);
+  expect(result.nextFromKey).toBeNull();
+
+  // Verify rollups were created
+  const rollups = await t.run(async (ctx) =>
+    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", windowA)).collect()
+  );
+  expect(rollups.length).toBeGreaterThan(0);
+});
+
+test("backfillRange: honors 40-window cap and returns nextFromKey", async () => {
+  const t = convexTest(schema);
+  const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+
+  // Seed data across 50 windows (starting from 2026-01-01)
+  const baseDate = new Date("2026-01-01T00:00:00Z").getTime();
+  const windows: string[] = [];
+
+  for (let i = 0; i < 50; i++) {
+    const ts = baseDate + i * 86_400_000; // Each day
+    const key = windowKeyFor(ts);
+    if (!windows.includes(key)) {
+      windows.push(key);
+    }
+  }
+
+  // Take the first 50 unique window keys
+  const windowsToUse = windows.slice(0, 50);
+  const firstWindow = windowsToUse[0];
+  const lastWindow = windowsToUse[windowsToUse.length - 1];
+
+  // Seed one order per window to ensure they have data
+  await t.run(async (ctx) => {
+    for (let i = 0; i < windowsToUse.length; i++) {
+      const range = windowRangeForKey(windowsToUse[i]);
+      await ctx.db.insert("orders", {
+        orderId: `O-${i}`,
+        customerPhone: `628100000010${String(i).padStart(2, "0")}`,
+        customerName: `Cust${i}`,
+        assignedCsName: "Azelia",
+        productName: "Buku",
+        products: "Buku",
+        productsSubtotal: "100000",
+        shippingCost: "0",
+        total: "100000",
+        shippingAddress: "",
+        shippingDistrict: "",
+        shippingCity: "",
+        source: "berdu",
+        aiEligible: false,
+        createdAt: range.startAt + 3600000,
+        updatedAt: range.startAt,
+      } as any);
+    }
+  });
+
+  // Backfill all 50 windows - should cap at 40 and return nextFromKey
+  const result = await t.withIdentity(adminIdentity).mutation(internal.rollups.backfillRange, {
+    fromKey: firstWindow,
+    toKey: lastWindow,
+  });
+
+  expect(result.processed.length).toBe(40);
+  expect(result.nextFromKey).not.toBeNull();
+  expect(result.nextFromKey).toBe(windowsToUse[40]);
+});
+
+test("backfillRange: rejects non-admin", async () => {
+  const t = convexTest(schema);
+  const csIdentity = { subject: "u1", role: "cs" as const, name: "CS", email: "cs@w", csName: "Azelia" };
+
+  await expect(
+    t.withIdentity(csIdentity).mutation(internal.rollups.backfillRange, {
+      fromKey: "2026-07-05",
+      toKey: "2026-07-08",
+    })
+  ).rejects.toThrow(/unauthorized|admin/);
+});
+
+test("debugRollupParity: detects when rollup data matches fresh computation", async () => {
+  const t = convexTest(schema);
+  const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+
+  const W = "2026-07-08";
+  const range = windowRangeForKey(W);
+  const t0 = range.startAt + 3_600_000;
+
+  // Create minimal data with one order
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", {
+      orderId: "O-PARITY",
+      customerPhone: "6281000000200",
+      customerName: "Parity Test",
+      assignedCsName: "Tester",
+      productName: "Test",
+      products: "Test",
+      productsSubtotal: "100000",
+      shippingCost: "0",
+      total: "100000",
+      shippingAddress: "",
+      shippingDistrict: "",
+      shippingCity: "",
+      source: "berdu",
+      aiEligible: false,
+      createdAt: t0,
+      updatedAt: t0,
+    } as any);
+  });
+
+  // Compute rollup
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+
+  // Check parity - should return valid results without crashing
+  const result = await t.withIdentity(adminIdentity).query(internal.rollups.debugRollupParity, { windowKey: W });
+
+  expect(result.windowKey).toBe(W);
+  expect(Array.isArray(result.mismatches)).toBe(true);
+  expect(result.storedRows).toBeGreaterThan(0);
+  expect(result.freshRows).toBeGreaterThan(0);
+});
+
+test("debugRollupParity: detects corrupted rollup field", async () => {
+  const t = convexTest(schema);
+  const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+
+  const W = "2026-07-08";
+  const range = windowRangeForKey(W);
+  const t0 = range.startAt + 3_600_000;
+
+  // Create minimal data
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", {
+      orderId: "O-CORRUPT",
+      customerPhone: "6281000000201",
+      customerName: "Corrupt Test",
+      assignedCsName: "Tester2",
+      productName: "Test2",
+      products: "Test2",
+      productsSubtotal: "100000",
+      shippingCost: "0",
+      total: "100000",
+      shippingAddress: "",
+      shippingDistrict: "",
+      shippingCity: "",
+      source: "berdu",
+      aiEligible: false,
+      createdAt: t0,
+      updatedAt: t0,
+    } as any);
+  });
+
+  // Compute rollup
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+
+  // Corrupt a field
+  await t.run(async (ctx) => {
+    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect();
+    const testerRollup = rollups.find((r: any) => r.csName === "Tester2");
+    if (testerRollup) {
+      await ctx.db.patch(testerRollup._id, { leadOrders: 999 });
+    }
+  });
+
+  // Check parity - should detect the corruption
+  const result = await t.withIdentity(adminIdentity).query(internal.rollups.debugRollupParity, { windowKey: W });
+
+  expect(result.mismatches.length).toBeGreaterThan(0);
+  const leadOrdersMismatch = result.mismatches.find((m: any) => m.field === "leadOrders");
+  expect(leadOrdersMismatch).toBeDefined();
+  expect(leadOrdersMismatch!.stored).toBe(999);
+  expect(leadOrdersMismatch!.fresh).toBe(1);
+});
+
+test("debugRollupParity: rejects non-admin", async () => {
+  const t = convexTest(schema);
+  const csIdentity = { subject: "u1", role: "cs" as const, name: "CS", email: "cs@w", csName: "Azelia" };
+
+  await expect(
+    t.withIdentity(csIdentity).query(internal.rollups.debugRollupParity, { windowKey: "2026-07-08" })
+  ).rejects.toThrow(/unauthorized|admin/);
 });
