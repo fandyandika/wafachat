@@ -210,15 +210,25 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     const deltaMs = activeMs > 0 ? activeMs : createdAt - conversation.rtPendingInboundAt;
     const csName = conversation.assignedCsName ?? args.csName ?? "Unknown";
     const csKeyValue = csKey(csName);
-    await ctx.db.insert("responseSamples", {
-      csKey: csKeyValue,
-      csName,
-      conversationId: conversation._id,
-      deltaMs,
-      inboundAt: conversation.rtPendingInboundAt,
-      slaBreach: isSlaBreach(conversation.rtPendingInboundAt, createdAt),
-      createdAt,
-    });
+
+    // Wrap sample extraction in try/catch to prevent message ingestion failure.
+    // If sampling fails, true-up/live retry can still pair; we log the error and continue.
+    // On failure, we CLEAR rtPendingInboundAt anyway so we don't leave the conversation in pending state forever.
+    try {
+      await ctx.db.insert("responseSamples", {
+        csKey: csKeyValue,
+        csName,
+        conversationId: conversation._id,
+        deltaMs,
+        inboundAt: conversation.rtPendingInboundAt,
+        slaBreach: isSlaBreach(conversation.rtPendingInboundAt, createdAt),
+        createdAt,
+      });
+    } catch (e) {
+      console.warn("[rt-sample] extraction failed; true-up will heal", (e as Error).message);
+    }
+
+    // Always clear pending regardless of sample extraction success
     convPatch.rtPendingInboundAt = undefined;
   }
   // Heal CS attribution: adopt a known CS when the existing conversation is still

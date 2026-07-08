@@ -2,9 +2,9 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { isInternalTestPhone, csKey, canonicalizeProduct as canonicalizeProductLib, normalizeProductName as normalizeProductNameLib } from "./lib";
+import { isInternalTestPhone, csKey, canonicalizeProduct as canonicalizeProductLib, normalizeProductName as normalizeProductNameLib, windowKeyFor } from "./lib";
 import { getActiveClosingPhrases } from "./closingRules";
-import { bumpForOrderDoc, bumpForRecapDoc } from "./rollups";
+import { bumpForOrderDoc, bumpForRecapDoc, computeRollupRow } from "./rollups";
 import { performanceFromRollups } from "./rollupReaders";
 
 // Re-export from lib for backward compatibility
@@ -878,6 +878,8 @@ export const markExported = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markExported");
     const now = Date.now();
+    const pairs = new Map<string, { k: string; w: string }>();
+
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
       if (!row) continue;
@@ -889,7 +891,15 @@ export const markExported = mutation({
         updatedAt: now,
       });
       const after = await ctx.db.get(recapId);
-      await bumpForRecapDoc(ctx, before, after);
+
+      // Collect affected pairs for batch rollup computation
+      for (const doc of [before, after]) {
+        if (!doc?.closedAt) continue;
+        const k = csKey(doc.csName);
+        const w = windowKeyFor(doc.closedAt);
+        pairs.set(`${k}|${w}`, { k, w });
+      }
+
       await ctx.db.insert("events", {
         conversationId: row.conversationId,
         orderId: row.orderIdBerdu,
@@ -900,6 +910,12 @@ export const markExported = mutation({
         createdAt: now,
       });
     }
+
+    // Single batch rollup computation for all affected cs+window pairs
+    for (const { k, w } of pairs.values()) {
+      await computeRollupRow(ctx, k, w);
+    }
+
     return { success: true, count: args.recapIds.length, exportBatchId: args.exportBatchId };
   },
 });
@@ -909,13 +925,23 @@ export const markDelivered = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markDelivered");
     const now = Date.now();
+    const pairs = new Map<string, { k: string; w: string }>();
+
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
       if (!row) continue;
       const before = row;
       await ctx.db.patch(recapId, { status: "delivered", deliveredAt: now, updatedAt: now });
       const after = await ctx.db.get(recapId);
-      await bumpForRecapDoc(ctx, before, after);
+
+      // Collect affected pairs for batch rollup computation
+      for (const doc of [before, after]) {
+        if (!doc?.closedAt) continue;
+        const k = csKey(doc.csName);
+        const w = windowKeyFor(doc.closedAt);
+        pairs.set(`${k}|${w}`, { k, w });
+      }
+
       await ctx.db.insert("events", {
         conversationId: row.conversationId,
         orderId: row.orderIdBerdu,
@@ -926,6 +952,12 @@ export const markDelivered = mutation({
         createdAt: now,
       });
     }
+
+    // Single batch rollup computation for all affected cs+window pairs
+    for (const { k, w } of pairs.values()) {
+      await computeRollupRow(ctx, k, w);
+    }
+
     return { success: true, count: args.recapIds.length };
   },
 });
@@ -949,13 +981,28 @@ export const markReadyBulk = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markReadyBulk");
     const now = Date.now();
+    const pairs = new Map<string, { k: string; w: string }>();
+
     for (const recapId of args.recapIds) {
       const before = await ctx.db.get(recapId);
       if (!before) continue;
       await ctx.db.patch(recapId, { status: "ready", flags: [], updatedAt: now });
       const after = await ctx.db.get(recapId);
-      await bumpForRecapDoc(ctx, before, after);
+
+      // Collect affected pairs for batch rollup computation
+      for (const doc of [before, after]) {
+        if (!doc?.closedAt) continue;
+        const k = csKey(doc.csName);
+        const w = windowKeyFor(doc.closedAt);
+        pairs.set(`${k}|${w}`, { k, w });
+      }
     }
+
+    // Single batch rollup computation for all affected cs+window pairs
+    for (const { k, w } of pairs.values()) {
+      await computeRollupRow(ctx, k, w);
+    }
+
     return { success: true, count: args.recapIds.length };
   },
 });
@@ -965,6 +1012,8 @@ export const markCancelledBulk = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markCancelledBulk");
     const now = Date.now();
+    const pairs = new Map<string, { k: string; w: string }>();
+
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
       if (!row) continue;
@@ -972,7 +1021,15 @@ export const markCancelledBulk = mutation({
       const before = row;
       await ctx.db.patch(recapId, { status, cancelReason: args.reason, cancelledAt: now, updatedAt: now });
       const after = await ctx.db.get(recapId);
-      await bumpForRecapDoc(ctx, before, after);
+
+      // Collect affected pairs for batch rollup computation
+      for (const doc of [before, after]) {
+        if (!doc?.closedAt) continue;
+        const k = csKey(doc.csName);
+        const w = windowKeyFor(doc.closedAt);
+        pairs.set(`${k}|${w}`, { k, w });
+      }
+
       await ctx.db.insert("events", {
         conversationId: row.conversationId,
         orderId: row.orderIdBerdu,
@@ -983,6 +1040,12 @@ export const markCancelledBulk = mutation({
         createdAt: now,
       });
     }
+
+    // Single batch rollup computation for all affected cs+window pairs
+    for (const { k, w } of pairs.values()) {
+      await computeRollupRow(ctx, k, w);
+    }
+
     return { success: true, count: args.recapIds.length };
   },
 });
@@ -1041,6 +1104,7 @@ export const importBerduVerifiedRows = internalMutation({
   handler: async (ctx, args) => {
     const now = Date.now();
     const results: Array<{ orderIdBerdu: string; recapId: Id<"shippingRecaps">; action: "inserted" | "updated" }> = [];
+    const pairs = new Map<string, { k: string; w: string }>();
 
     for (const row of args.rows) {
       const orderIdBerdu = normalizeOrderId(row.orderIdBerdu);
@@ -1098,7 +1162,14 @@ export const importBerduVerifiedRows = internalMutation({
           version: existing.version + 1,
         });
         const after = await ctx.db.get(existing._id);
-        await bumpForRecapDoc(ctx, before, after);
+
+        // Collect affected pairs for batch rollup computation
+        for (const doc of [before, after]) {
+          if (!doc?.closedAt) continue;
+          const k = csKey(doc.csName);
+          const w = windowKeyFor(doc.closedAt);
+          pairs.set(`${k}|${w}`, { k, w });
+        }
       } else {
         action = "inserted";
         recapId = await ctx.db.insert("shippingRecaps", {
@@ -1107,7 +1178,13 @@ export const importBerduVerifiedRows = internalMutation({
           createdAt: now,
         });
         const after = await ctx.db.get(recapId);
-        await bumpForRecapDoc(ctx, null, after);
+
+        // Collect affected pairs for batch rollup computation
+        if (after?.closedAt) {
+          const k = csKey(after.csName);
+          const w = windowKeyFor(after.closedAt);
+          pairs.set(`${k}|${w}`, { k, w });
+        }
       }
 
       await ctx.db.insert("events", {
@@ -1121,6 +1198,11 @@ export const importBerduVerifiedRows = internalMutation({
       });
 
       results.push({ orderIdBerdu, recapId, action });
+    }
+
+    // Single batch rollup computation for all affected cs+window pairs
+    for (const { k, w } of pairs.values()) {
+      await computeRollupRow(ctx, k, w);
     }
 
     return {

@@ -7,6 +7,9 @@ import { canonicalizeProduct } from "./shippingRecaps";
 import { pairResponsePairs, isSlaBreach, type RtMessage } from "./responseTimeMath";
 
 const PRODUCT_CAP = 50;
+// Production showed 40 windows exceeded Convex mutation limits.
+// Reduced to 10 for reliable performance; heavy-message windows may need 1.
+const BACKFILL_WINDOW_CAP = 10;
 
 export type RollupValues = {
   windowKey: string;
@@ -416,8 +419,8 @@ export const backfillRange = mutation({
     let currentKey = args.fromKey;
     let nextFromKey: string | null = null;
 
-    // Iterate up to 40 windows
-    for (let i = 0; i < 40; i++) {
+    // Iterate up to BACKFILL_WINDOW_CAP windows per call
+    for (let i = 0; i < BACKFILL_WINDOW_CAP; i++) {
       if (currentKey > args.toKey) {
         break;
       }
@@ -433,7 +436,7 @@ export const backfillRange = mutation({
       currentKey = windowKeyFor(endAt);
 
       // Check if we'd exceed the range
-      if (currentKey > args.toKey && i < 39) {
+      if (currentKey > args.toKey && i < BACKFILL_WINDOW_CAP - 1) {
         break;
       }
     }

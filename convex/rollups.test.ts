@@ -511,7 +511,7 @@ test("backfillRange: processes 2 seeded windows with nextFromKey null", async ()
   expect(rollups.length).toBeGreaterThan(0);
 });
 
-test("backfillRange: honors 40-window cap and returns nextFromKey", async () => {
+test("backfillRange: honors 10-window cap and returns nextFromKey", async () => {
   const t = convexTest(schema);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
@@ -557,15 +557,15 @@ test("backfillRange: honors 40-window cap and returns nextFromKey", async () => 
     }
   });
 
-  // Backfill all 50 windows - should cap at 40 and return nextFromKey
+  // Backfill all 50 windows - should cap at 10 and return nextFromKey
   const result = await t.withIdentity(adminIdentity).mutation(api.rollups.backfillRange, {
     fromKey: firstWindow,
     toKey: lastWindow,
   });
 
-  expect(result.processed.length).toBe(40);
+  expect(result.processed.length).toBe(10);
   expect(result.nextFromKey).not.toBeNull();
-  expect(result.nextFromKey).toBe(windowsToUse[40]);
+  expect(result.nextFromKey).toBe(windowsToUse[10]);
 });
 
 test("backfillRange: rejects non-admin", async () => {
@@ -578,6 +578,92 @@ test("backfillRange: rejects non-admin", async () => {
       toKey: "2026-07-08",
     })
   ).rejects.toThrow(/unauthorized|admin/);
+});
+
+test("importBerduVerifiedRows: batch import of 3 recaps same CS+window yields single correct rollup row", async () => {
+  const t = convexTest(schema);
+  const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+
+  const W = "2026-07-08";
+  const range = windowRangeForKey(W);
+  const closedAt = range.startAt + 3_600_000;
+
+  // Import 3 recaps all for the same CS and window (Azelia, W)
+  await t.mutation(internal.shippingRecaps.importBerduVerifiedRows, {
+    importBatchId: "batch-dedup-test",
+    rows: [
+      {
+        orderIdBerdu: "O-BATCH-1",
+        customerName: "Cust1",
+        customerPhone: "6281000000301",
+        csName: "Azelia",
+        orderedAt: range.startAt + 1000,
+        closedAt,
+        recipientName: "Rec1",
+        recipientPhone: "6281000000301",
+        recipientAddress: "Addr1",
+        recipientDistrict: "Dist1",
+        recipientCity: "City1",
+        packageContent: "Prod1",
+        paymentMethod: "cod" as const,
+        total: 100000,
+        sourceMessageText: "Test 1",
+      },
+      {
+        orderIdBerdu: "O-BATCH-2",
+        customerName: "Cust2",
+        customerPhone: "6281000000302",
+        csName: "Azelia",
+        orderedAt: range.startAt + 1000,
+        closedAt,
+        recipientName: "Rec2",
+        recipientPhone: "6281000000302",
+        recipientAddress: "Addr2",
+        recipientDistrict: "Dist2",
+        recipientCity: "City2",
+        packageContent: "Prod2",
+        paymentMethod: "transfer" as const,
+        itemPrice: 150000,
+        total: 150000,
+        sourceMessageText: "Test 2",
+      },
+      {
+        orderIdBerdu: "O-BATCH-3",
+        customerName: "Cust3",
+        customerPhone: "6281000000303",
+        csName: "Azelia",
+        orderedAt: range.startAt + 1000,
+        closedAt,
+        recipientName: "Rec3",
+        recipientPhone: "6281000000303",
+        recipientAddress: "Addr3",
+        recipientDistrict: "Dist3",
+        recipientCity: "City3",
+        packageContent: "Prod3",
+        paymentMethod: "cod" as const,
+        total: 200000,
+        sourceMessageText: "Test 3",
+      },
+    ],
+  });
+
+  // Force recompute
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+
+  // Verify rollup is correct and reflects all 3 recaps
+  const rows = await t.run(async (ctx) =>
+    ctx.db.query("dailyRollups").withIndex("by_window_cs", (q) => q.eq("windowKey", W).eq("csKey", "azelia")).collect()
+  );
+
+  expect(rows.length).toBe(1); // Single row for azelia in this window
+  const rollupRow = rows[0];
+
+  // Verify aggregations are correct
+  expect(rollupRow.closings).toBe(3); // Three recaps
+  expect(rollupRow.closedCust).toBe(3); // Three distinct customers
+  expect(rollupRow.revenue).toBe(100000 + 150000 + 200000); // Sum of totals
+  expect(rollupRow.csName).toBe("Azelia");
+  expect(rollupRow.windowKey).toBe(W);
 });
 
 test("debugRollupParity: detects when rollup data matches fresh computation", async () => {
