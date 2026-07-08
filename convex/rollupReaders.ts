@@ -435,53 +435,58 @@ export async function productDifficultyFromRollups(
   ctx: any,
   args: { startAt: number; endAt: number; minLeads?: number; csName?: string }
 ) {
+  // Note: This function reads from raw tables like the legacy getProductDifficulty
+  // because the rollups byProduct counts distinct customers, not raw orders.
+  // getProductDifficulty needs raw order counts per product.
+
   const key = args.csName ? csKeyOf(args.csName) : null;
   const minLeads = args.minLeads ?? 3;
   const len = args.endAt - args.startAt;
+  const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
 
-  // Current period
-  const keys = windowKeysForRange(args.startAt, args.endAt);
-  const curRollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
-  );
-  const curRollups = curRollupsByKey.flat();
+  // Helper to aggregate products from raw tables (counts raw orders for leads, not distinct customers)
+  const aggregateFromRawTables = async (startAt: number, endAt: number) => {
+    const orders = (
+      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    ).filter((o: any) => !isInternalTestPhone(o.customerPhone) && (!key || csKeyOf(o.assignedCsName) === key));
 
-  // Previous period
-  const prevKeys = windowKeysForRange(args.startAt - len, args.startAt - 1);
-  const prevRollupsByKey = await Promise.all(
-    prevKeys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
-  );
-  const prevRollups = prevRollupsByKey.flat();
+    const recaps = (
+      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+    ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone) && (!key || csKeyOf(r.csName) === key));
 
-  const aggregateByProduct = (rollups: typeof curRollups) => {
-    const map = new Map<string, { leads: number; closings: number }>();
-    for (const rollup of rollups) {
-      if (key && csKeyOf(rollup.csKey) !== key) continue;
-      for (const prod of rollup.byProduct) {
-        const p = map.get(prod.product) ?? { leads: 0, closings: 0 };
-        p.leads += prod.leads;
-        p.closings += prod.closings;
-        map.set(prod.product, p);
-      }
+    const leads = new Map<string, number>();
+    const closings = new Map<string, Set<string>>();
+
+    for (const o of orders) {
+      const p = canonicalizeProduct(o.productName || o.products);
+      leads.set(p, (leads.get(p) ?? 0) + 1);  // Raw order count
     }
-    return map;
+
+    for (const r of recaps) {
+      const p = canonicalizeProduct(r.packageContent);
+      const s = closings.get(p) ?? new Set<string>();
+      s.add(r.orderIdBerdu || normalizePhone(r.customerPhone));
+      closings.set(p, s);
+    }
+
+    return { leads, closings };
   };
 
-  const cur = aggregateByProduct(curRollups);
-  const prev = aggregateByProduct(prevRollups);
+  const cur = await aggregateFromRawTables(args.startAt, args.endAt);
+  const prev = await aggregateFromRawTables(args.startAt - len, args.startAt - 1);
 
-  const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-  const rows = Array.from(cur.entries())
-    .filter(([, p]) => p.leads >= minLeads)
-    .map(([productName, c]) => {
-      const prevLeads = prev.get(productName)?.leads ?? 0;
-      const prevClosings = prev.get(productName)?.closings ?? 0;
-      const crNow = cr(c.closings, c.leads);
+  const rows = Array.from(cur.leads.entries())
+    .filter(([, leads]) => leads >= minLeads)
+    .map(([productName, leads]) => {
+      const closings = cur.closings.get(productName)?.size ?? 0;
+      const prevLeads = prev.leads.get(productName) ?? 0;
+      const prevClosings = prev.closings.get(productName)?.size ?? 0;
+      const crNow = cr(closings, leads);
       const prevCr = cr(prevClosings, prevLeads);
       return {
         productName,
-        leads: c.leads,
-        closings: c.closings,
+        leads,
+        closings,
         cr: crNow,
         prevCr,
         deltaCr: Math.round((crNow - prevCr) * 10) / 10,
@@ -665,23 +670,35 @@ export async function performanceFromRollups(
     .withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
     .collect();
 
-  const validRecaps = recaps.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && (!key || csKeyOf(r.csName) === key));
-  const validOrders = orders.filter((o: any) => !isInternalTestPhone(o.customerPhone) && (!key || csKeyOf(o.assignedCsName) === key));
+  const realOrders = orders.filter((o: any) => !isInternalTestPhone(o.customerPhone) && (!key || csKeyOf(o.assignedCsName) === key));
+  const validCandidateRows = recaps.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && (!key || csKeyOf(r.csName) === key) && !isInternalTestPhone(r.customerPhone));
 
-  // Build product breakdown from raw data
+  // Deduplicate recaps by (orderIdBerdu || phone), keeping latest by closedAt
+  const latestClosingByKey = new Map<string, any>();
+  for (const recap of validCandidateRows) {
+    const recapKey = recap.orderIdBerdu || normalizePhone(recap.customerPhone);
+    const existing = latestClosingByKey.get(recapKey);
+    if (!existing || recap.closedAt > existing.closedAt) latestClosingByKey.set(recapKey, recap);
+  }
+  const validClosings = Array.from(latestClosingByKey.values());
+
+  // Deduplicate orders by phone, keeping latest by createdAt
   const latestOrderByPhone = new Map<string, any>();
-  for (const o of validOrders) {
+  for (const o of realOrders) {
     const p = normalizePhone(o.customerPhone);
     const ex = latestOrderByPhone.get(p);
     if (!ex || o.createdAt > ex.createdAt) latestOrderByPhone.set(p, o);
   }
+  const uniqueOrders = Array.from(latestOrderByPhone.values());
 
   // Fallback order lookup for closings whose orders aren't in the range
   const fbNeeded: Array<{ phone: string; orderIdBerdu?: string }> = [];
   const fbSeen = new Set<string>();
-  for (const r of validRecaps) {
+  for (const r of validClosings) {
     const phone = normalizePhone(r.customerPhone);
-    if (latestOrderByPhone.has(phone) || fbSeen.has(phone)) continue;
+    if (latestOrderByPhone.has(phone)) continue; // already covered by date-range orders
+    if (fbSeen.has(phone)) continue; // already fetched
+    if (r.packageContent && r.csName) continue; // no fallback needed
     fbSeen.add(phone);
     fbNeeded.push({ phone, orderIdBerdu: r.orderIdBerdu });
   }
@@ -704,14 +721,14 @@ export async function performanceFromRollups(
   const productMap = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number }>();
   const closedCustomers = new Set<string>();
 
-  for (const o of validOrders) {
+  for (const o of uniqueOrders) {
     const p = canonicalizeProduct(o.productName || o.products);
     const prod = productMap.get(p) ?? { product: p, leads: 0, closing: 0, revenue: 0, discount: 0 };
     prod.leads += 1;
     productMap.set(p, prod);
   }
 
-  for (const r of validRecaps) {
+  for (const r of validClosings) {
     const phone = normalizePhone(r.customerPhone);
     const matchedOrder = latestOrderByPhone.get(phone) ?? fallbackOrderByPhone.get(phone);
     const product = canonicalizeProduct(matchedOrder?.productName || matchedOrder?.products || r.packageContent);
@@ -731,9 +748,9 @@ export async function performanceFromRollups(
   const totalTransfer = recaps.filter((r: any) => r.paymentMethod === "transfer" && (!key || csKeyOf(r.csName) === key)).length;
 
   return {
-    totalLeads,
-    totalClosing,
-    overallCr: totalLeads > 0 ? Math.round((closedCustomers.size / totalLeads) * 1000) / 10 : 0,
+    totalLeads: uniqueOrders.length,
+    totalClosing: validClosings.length,
+    overallCr: uniqueOrders.length > 0 ? Math.round((closedCustomers.size / uniqueOrders.length) * 1000) / 10 : 0,
     totalCod,
     totalTransfer,
     totalRevenue,
