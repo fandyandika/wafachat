@@ -46,6 +46,10 @@ export async function fetchBerduOrderDetail(orderId: string): Promise<any | null
 export const runReconcile = internalAction({
   args: {},
   handler: async (ctx) => {
+    // Inert until Berdu creds are configured (M3). Skip BEFORE reading order counters so
+    // this 5-min cron does not poll all of today's orders for nothing while the order path
+    // still runs on n8n. (~all-today's-orders read * 288 runs/day of pure waste otherwise.)
+    if (!process.env.BERDU_APP_ID || !process.env.BERDU_USER_ID || !process.env.BERDU_APP_SECRET || !process.env.BERDU_HMAC_KEY) return;
     const datePrefix = wibDatePrefix(Date.now());
     const counters = await ctx.runQuery(internal.state.listOrderCountersByPrefix, { datePrefix });
     const gaps = computeGaps(counters.counters, counters.min, counters.max);
