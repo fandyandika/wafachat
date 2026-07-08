@@ -515,6 +515,9 @@ export const debugRollupParity = query({
         continue;
       }
 
+      // Neither exists -> nothing to compare (also narrows types for below).
+      if (!fresh || !stored) continue;
+
       // Both exist, compare field by field (excluding updatedAt which always changes)
       const fieldsToCheck = [
         "csName", "leadOrders", "leadsCust", "closings", "closedCust", "cancelled",
