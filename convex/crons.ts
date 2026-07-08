@@ -22,7 +22,7 @@ crons.hourly(
 
 crons.interval(
   "ingest silence detector",
-  { minutes: 5 },
+  { minutes: 15 }, // 15m cadence vs a 45m silence threshold — still detects in time; ~12->4 MB/day
   internal.ingest.monitor.checkHealth,
   {},
 );
