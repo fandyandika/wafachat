@@ -39,8 +39,6 @@ export async function responseTimesFromSamples(
   ctx: any,
   args: { startAt: number; endAt: number; csName?: string }
 ) {
-  const key = args.csName ? csKeyOf(args.csName) : null;
-
   // Fetch samples in range, sorted by createdAt
   const samples = (
     await ctx.db
@@ -49,11 +47,10 @@ export async function responseTimesFromSamples(
       .collect()
   ).sort((a: any, b: any) => a.createdAt - b.createdAt);
 
-  // Group by conversationId, preserving order
+  // Group by conversationId, preserving order (ALL samples, no filter - need global overall stats)
   const byConv = new Map<string, typeof samples>();
   const convOrder: string[] = [];
   for (const s of samples) {
-    if (key && csKeyOf(s.csKey) !== key) continue;
     const cKey = String(s.conversationId);
     if (!byConv.has(cKey)) convOrder.push(cKey);
     const arr = byConv.get(cKey) ?? [];
