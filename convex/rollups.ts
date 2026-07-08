@@ -538,12 +538,14 @@ export const debugRollupParity = query({
         }
       }
 
-      // Compare byProduct as JSON (sort by leads desc then product name asc, same as computeRollupValues)
+      // Compare byProduct CONTENT, key-order independent: Convex normalizes stored object
+      // key order (alphabetical) while fresh in-memory objects keep insertion order, so
+      // stringify-ing raw objects false-positives. Normalize to [product, leads, closings]
+      // tuples sorted by leads desc then product asc (same as computeRollupValues).
       const sortByLeads = (a: any, b: any) => b.leads - a.leads || a.product.localeCompare(b.product);
-      const storedProductsSorted = [...(stored.byProduct ?? [])].sort(sortByLeads);
-      const freshProductsSorted = [...(fresh.byProduct ?? [])].sort(sortByLeads);
-      const storedProductsJson = JSON.stringify(storedProductsSorted);
-      const freshProductsJson = JSON.stringify(freshProductsSorted);
+      const toTuples = (arr: any[]) => [...(arr ?? [])].sort(sortByLeads).map((p) => [p.product, p.leads, p.closings]);
+      const storedProductsJson = JSON.stringify(toTuples(stored.byProduct));
+      const freshProductsJson = JSON.stringify(toTuples(fresh.byProduct));
       if (storedProductsJson !== freshProductsJson) {
         mismatches.push({
           csKey,
