@@ -1,12 +1,10 @@
-import { query, internalQuery } from "./_generated/server";
+import { query, internalQuery, type QueryCtx } from "./_generated/server";
 import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
 import { dashboardSummaryFromRollups, trendFromRollups } from "./rollupReaders";
 
-export const getDashboardSummaryLegacy = internalQuery({
-  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => {
+export async function computeDashboardSummaryRaw(ctx: QueryCtx, args: { startAt: number; endAt: number; csName?: string }) {
     const orders = await ctx.db.query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
@@ -48,14 +46,20 @@ export const getDashboardSummaryLegacy = internalQuery({
       cancelled, handovers, activeChats,
       revenue: validRecaps.reduce((s, r) => s + (r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0), 0),
     };
-  },
+}
+
+export const getDashboardSummaryLegacy = internalQuery({
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => computeDashboardSummaryRaw(ctx, args),
 });
 
 export const getDashboardSummary = query({
-  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  // raw=true → calendar-day / any-range raw computation (cheap for a small "today" slice);
+  // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     await requireMember(ctx, "metrics.getDashboardSummary");
-    return dashboardSummaryFromRollups(ctx, args);
+    return args.raw ? computeDashboardSummaryRaw(ctx, args) : dashboardSummaryFromRollups(ctx, args);
   },
 });
 

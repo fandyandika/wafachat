@@ -35,7 +35,6 @@ import { fmtTime, formatRupiah, formatDuration } from '@/lib/format';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { useResponseTimes } from '@/components/panel/use-response-times';
 import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
-import { LiveTodayDashboard } from '@/components/panel/live-today-dashboard';
 import { WindowModeToggle, type WindowMode } from '@/components/panel/window-mode-toggle';
 
 function fmtUpdatedAt(ms: number | null): string {
@@ -43,31 +42,33 @@ function fmtUpdatedAt(ms: number | null): string {
   return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
 }
 
-// DEFAULT owner view = "Hari ini" (live, calendar-day) — ONE cheap query. The heavier
-// 16:00-period dashboard (summary + duplicates + performance + trend + response-time) is
-// only mounted when the owner toggles to "Periode kerja" (lazy — those queries never run
-// on the default view).
+// Same UI in both modes — only the DATA window changes. DEFAULT = "Hari ini" (live,
+// calendar-day midnight→now; raw queries, cheap for today's small slice). "Periode kerja"
+// = the 16:00 window from the range filter (rollup-backed). No layout change between modes.
 export default function DashboardPage() {
   const [mode, setMode] = useState<WindowMode>('live');
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <WindowModeToggle mode={mode} onChange={setMode} />
-      </div>
-      {mode === 'live' ? <LiveTodayDashboard /> : <DashboardWork />}
-    </div>
-  );
+  return <DashboardWork mode={mode} onModeChange={setMode} />;
 }
 
-function DashboardWork() {
-  const { startAt, endAt, csName, jakartaDate, range } = usePanelFilters();
+const JAK_OFFSET = 7 * 60 * 60 * 1000;
+function wibMidnight(now: number) { return Math.floor((now + JAK_OFFSET) / 86_400_000) * 86_400_000 - JAK_OFFSET; }
+
+function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange: (m: WindowMode) => void }) {
+  const { startAt: workStart, endAt: workEnd, csName, jakartaDate, range } = usePanelFilters();
   const [respRefreshKey, setRespRefreshKey] = useState(0);
+  // live = calendar-day (midnight WIB → now); work = 16:00-window. `now` captured on mount +
+  // each refresh so args stay stable. raw=true routes getDashboardSummary to its cheap raw path.
+  const now = useMemo(() => Date.now(), [respRefreshKey]);
+  const startAt = mode === 'live' ? wibMidnight(now) : workStart;
+  const endAt = mode === 'live' ? now : workEnd;
+  const rawMode = mode === 'live';
   const [refreshing, setRefreshing] = useState(false);
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
-  const periodLabel = ({ today: 'hari ini', yesterday: 'kemarin', '7d': '7 hari', '30d': '30 hari', month: 'bulan ini', custom: 'tanggal dipilih' } as const)[range];
+  const periodLabel = mode === 'live' ? 'hari ini' : ({ today: 'hari ini', yesterday: 'kemarin', '7d': '7 hari', '30d': '30 hari', month: 'bulan ini', custom: 'tanggal dipilih' } as const)[range];
 
   const filteredRangeArgs = useMemo(() => ({ startAt, endAt, csName }), [csName, endAt, startAt]);
+  const summaryArgs = useMemo(() => ({ startAt, endAt, csName, raw: rawMode }), [csName, endAt, startAt, rawMode]);
   const performanceArgs = useMemo(() => ({
     startAt,
     endAt,
@@ -85,7 +86,7 @@ function DashboardWork() {
     cancelled: number;
     handovers: number;
     revenue: number;
-  }>(api.metrics.getDashboardSummary, filteredRangeArgs);
+  }>(api.metrics.getDashboardSummary, summaryArgs);
 
   const duplicateOrders = useConvexSnapshotQuery<Array<{
     phone: string;
@@ -205,6 +206,7 @@ function DashboardWork() {
           <p className="text-xs text-muted-foreground">Snapshot analytics · update {fmtUpdatedAt(lastUpdatedAt)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <WindowModeToggle mode={mode} onChange={onModeChange} />
           <Button size="sm" variant="outline" className="h-9 gap-2" onClick={refreshAll} disabled={loading}>
             <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh

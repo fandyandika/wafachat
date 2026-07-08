@@ -44,9 +44,7 @@ function aggName(a: CsAgg): string {
   return Array.from(a.rawCounts.entries()).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "";
 }
 
-export const getCsLeaderboardLegacy = internalQuery({
-  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => {
+export async function computeCsLeaderboardRaw(ctx: any, args: { startAt: number; endAt: number; csName?: string }) {
     const len = args.endAt - args.startAt;
     const cur = await computeCsAgg(ctx, args.startAt, args.endAt, args.csName);
     const prev = await computeCsAgg(ctx, args.startAt - len, args.startAt - 1, args.csName);
@@ -71,14 +69,20 @@ export const getCsLeaderboardLegacy = internalQuery({
     });
     rows.sort((a, b) => b.closings - a.closings || b.leads - a.leads);
     return rows;
-  },
+}
+
+export const getCsLeaderboardLegacy = internalQuery({
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  handler: async (ctx, args) => computeCsLeaderboardRaw(ctx, args),
 });
 
 export const getCsLeaderboard = query({
-  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  // raw=true → calendar-day / any-range raw computation (cheap for a small "today" slice);
+  // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     await requireMember(ctx, "analytics.getCsLeaderboard");
-    return leaderboardFromRollups(ctx, args);
+    return args.raw ? computeCsLeaderboardRaw(ctx, args) : leaderboardFromRollups(ctx, args);
   },
 });
 

@@ -10,7 +10,6 @@ import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-q
 import { PerformancePanel } from '@/components/panel/performance-panel';
 import type { PerformanceData } from '@/components/panel/types';
 import { Button } from '@/components/ui/button';
-import { LiveTodayDashboard } from '@/components/panel/live-today-dashboard';
 import { WindowModeToggle, type WindowMode } from '@/components/panel/window-mode-toggle';
 
 function fmtUpdatedAt(ms: number | null): string {
@@ -18,28 +17,34 @@ function fmtUpdatedAt(ms: number | null): string {
   return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
 }
 
-// DEFAULT owner view = "Hari ini" (live, calendar-day) — one cheap query. The heavier
-// 16:00-period Performance below is only mounted when the owner toggles to it (lazy).
+// Same UI in both modes — only the DATA window changes. DEFAULT = "Hari ini" (live,
+// calendar-day midnight→now; raw queries, cheap for today's small slice). "Periode kerja"
+// = the 16:00 window from the range filter (rollup-backed). No layout change between modes.
 export default function PerformancePage() {
   const [mode, setMode] = useState<WindowMode>('live');
-  return (
-    <div className="space-y-3">
-      <div className="flex justify-end">
-        <WindowModeToggle mode={mode} onChange={setMode} />
-      </div>
-      {mode === 'live' ? <LiveTodayDashboard /> : <PerformanceWork />}
-    </div>
-  );
+  return <PerformanceWork mode={mode} onModeChange={setMode} />;
 }
 
-function PerformanceWork() {
-  const { startAt, endAt, csName } = usePanelFilters();
+const JAK_OFFSET = 7 * 60 * 60 * 1000;
+function wibMidnight(now: number) { return Math.floor((now + JAK_OFFSET) / 86_400_000) * 86_400_000 - JAK_OFFSET; }
+
+function PerformanceWork({ mode, onModeChange }: { mode: WindowMode; onModeChange: (m: WindowMode) => void }) {
+  const { startAt: workStart, endAt: workEnd, csName } = usePanelFilters();
   const [responseRefreshKey, setResponseRefreshKey] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
 
+  // live = calendar-day (midnight WIB → now); work = 16:00-window. `now` captured on mount +
+  // each refresh so args stay stable (no refetch loop). raw=true routes the rollup-backed
+  // queries to their cheap raw computation for the small "today" slice.
+  const now = useMemo(() => Date.now(), [responseRefreshKey]);
+  const startAt = mode === 'live' ? wibMidnight(now) : workStart;
+  const endAt = mode === 'live' ? now : workEnd;
+  const rawMode = mode === 'live';
+
   const rangeArgs = useMemo(() => ({ startAt, endAt }), [startAt, endAt]);
+  const leaderboardArgs = useMemo(() => ({ startAt, endAt, raw: rawMode }), [startAt, endAt, rawMode]);
   // Trend Harian tetap window 7 hari (anchored ke endAt, bukan Date.now) walau range default
   // "hari ini" — biar chart tetap berguna. 1 query ~2 MB.
   const trendArgs = useMemo(() => ({ startAt: endAt - 7 * 24 * 60 * 60 * 1000, endAt, bucket: 'day' as const }), [endAt]);
@@ -53,7 +58,7 @@ function PerformanceWork() {
   const csLeaderboard = useConvexSnapshotQuery<Array<{
     csName: string; leads: number; closings: number; cr: number; revenue: number;
     deltaLeads: number; deltaClosings: number; deltaCr: number;
-  }>>(api.analytics.getCsLeaderboard, rangeArgs);
+  }>>(api.analytics.getCsLeaderboard, leaderboardArgs);
   const productDifficulty = useConvexSnapshotQuery<Array<{ productName: string; leads: number; closings: number; cr: number; prevCr: number; deltaCr: number }>>(
     api.analytics.getProductDifficulty,
     rangeArgs,
@@ -99,6 +104,7 @@ function PerformanceWork() {
             Snapshot analytics · update {fmtUpdatedAt(lastUpdatedAt)}
           </p>
         </div>
+        <WindowModeToggle mode={mode} onChange={onModeChange} />
         <Button size="sm" variant="outline" className="h-9 gap-2" onClick={refreshAll} disabled={loading}>
           <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
           Refresh
