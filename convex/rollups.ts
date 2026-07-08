@@ -25,7 +25,7 @@ export type RollupValues = {
   fuH1: number;
   fuH2: number;
   fuH3: number;
-  byProduct: Array<{ product: string; leads: number; closings: number }>;  // leads = raw order count per product (matches getProductDifficulty)
+  byProduct: Array<{ product: string; leads: number; closings: number }>;  // leads = distinct customers per product (matches getDailyReport; getProductDifficulty reads raw)
   updatedAt: number;
 };
 
