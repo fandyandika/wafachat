@@ -280,5 +280,38 @@ Jalur resmi dikerjakan PARALEL mulai fase 2:
 
 ---
 
+## 14. Debt ledger — pintasan single-tenant → target SaaS
+
+> **Disiplin (owner, 2026-07-08):** bangun untuk Fandy dulu (self-test, tenant #1), TAPI tiap
+> tindakan wajib punya jalur ke target multi-tenant di dokumen ini — **jangan tambah kopling
+> single-tenant yang jadi jalan buntu.** Tiap pintasan yang diambil dicatat di sini + target-nya.
+> Semua ini SUDAH kompatibel dengan arsitektur (§4 event universal + rollup + ingestion API);
+> yang berubah nanti cuma "dari mana config dibaca": ENV/hardcode → tabel per-org.
+
+| Pintasan sekarang (single-tenant) | Lokasi | Target SaaS | Ref |
+|---|---|---|---|
+| Secret Berdu (`BERDU_APP_ID/SECRET/HMAC/USER_ID`) di **ENV Convex global** | Convex env | tabel `tenantIntegrations` per-org, secret **dienkripsi** app-side | §10.4 |
+| Source key **hardcoded** `berdu-pustakaislam` / `kirimdev-pustakaislam` | http.ts | source key **unik per-org**; route resolve org dari key/token | §11 |
+| `BERDU_STAFF_MAP` (staff Berdu → nama CS) hardcoded | berduAdapter.ts | `agentAliases` per-org (staffId → agentId) | §10.3 |
+| Attribution phone_number_id → CS via `csConfigs` (1 org) | csConfigs.ts | `agentAliases` per-org (phoneNumberId → agentId) | §10.3 |
+| CS = **string nama** + `csKey` normalisasi | seluruh analytics | `agents` ber-ID stabil + alias resolver | §3.4, §10.3 |
+| Frasa closing "PEMESANAN BERHASIL" | closingRules (sebagian sudah tabel) | closing-rule builder **per-org** | §3.6 |
+| Nomor internal/test `EXCLUDED_PHONES` hardcoded | state.ts | settings per-org | §3.2 |
+| Cutoff harian 16:00 WIB + timezone hardcoded | lib window helpers | timezone + jam cutoff **per-org** | §3.2 |
+| Belum ada `orgId` di tabel data | schema | `orgId` + index di **semua** tabel; isolasi = test #1 | §10.2 |
+| Kredensial diset manual (dashboard/CLI oleh dev) | operasional | **wizard onboarding self-serve** (paste/OAuth → DB) | §11 |
+| Webhook enrich sinkron fetch order (`fetchBerduOrderDetail` pakai ENV) | http.ts/reconciler | fetch pakai creds **per-org dari DB**; reconciler per-org | §4 |
+
+**Cara pakai ledger:** tiap kali kerja nambah pintasan single-tenant baru → tambah baris di
+sini + target-nya. Saat masuk Fase multi-tenant, ledger ini = checklist migrasi (tiap baris:
+pindah baca-config dari ENV/hardcode ke tabel per-org, tanpa ubah logika inti/rollup).
+
+Yang barusan dikerjakan (2026-07-08) dan **sudah SaaS-shaped**: Ingestion API (event universal
+lead.created/message.event) + rollup per-(csKey×window) + capture-first always-200 + dedup by
+orderId — semua ini portable ke multi-tenant tinggal tambah `orgId`. Pintasan-nya cuma di baris
+config/secret di atas, bukan di arsitektur.
+
+---
+
 *Dokumen ini hidup — revisi seiring temuan dari tenant alpha. Sumber keputusan historis:
 memory proyek + `docs/superpowers/specs/`.*
