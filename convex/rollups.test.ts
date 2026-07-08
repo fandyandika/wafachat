@@ -670,6 +670,58 @@ test("debugRollupParity: detects corrupted rollup field", async () => {
   expect(leadOrdersMismatch!.fresh).toBe(1);
 });
 
+test("debugRollupParity: detects corrupted csName field", async () => {
+  const t = convexTest(schema);
+  const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+
+  const W = "2026-07-08";
+  const range = windowRangeForKey(W);
+  const t0 = range.startAt + 3_600_000;
+
+  // Create minimal data with a specific CS name
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", {
+      orderId: "O-CSNAME",
+      customerPhone: "6281000000202",
+      customerName: "CSName Test",
+      assignedCsName: "OriginalCS",
+      productName: "Test3",
+      products: "Test3",
+      productsSubtotal: "100000",
+      shippingCost: "0",
+      total: "100000",
+      shippingAddress: "",
+      shippingDistrict: "",
+      shippingCity: "",
+      source: "berdu",
+      aiEligible: false,
+      createdAt: t0,
+      updatedAt: t0,
+    } as any);
+  });
+
+  // Compute rollup
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+
+  // Corrupt csName field
+  await t.run(async (ctx) => {
+    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect();
+    const csRollup = rollups.find((r: any) => r.csName === "OriginalCS");
+    if (csRollup) {
+      await ctx.db.patch(csRollup._id, { csName: "CorruptedCS" });
+    }
+  });
+
+  // Check parity - should detect the csName corruption
+  const result = await t.withIdentity(adminIdentity).query(internal.rollups.debugRollupParity, { windowKey: W });
+
+  expect(result.mismatches.length).toBeGreaterThan(0);
+  const csNameMismatch = result.mismatches.find((m: any) => m.field === "csName");
+  expect(csNameMismatch).toBeDefined();
+  expect(csNameMismatch!.stored).toBe("CorruptedCS");
+  expect(csNameMismatch!.fresh).toBe("OriginalCS");
+});
+
 test("debugRollupParity: rejects non-admin", async () => {
   const t = convexTest(schema);
   const csIdentity = { subject: "u1", role: "cs" as const, name: "CS", email: "cs@w", csName: "Azelia" };

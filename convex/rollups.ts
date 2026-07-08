@@ -517,7 +517,7 @@ export const debugRollupParity = query({
 
       // Both exist, compare field by field (excluding updatedAt which always changes)
       const fieldsToCheck = [
-        "leadOrders", "leadsCust", "closings", "closedCust", "cancelled",
+        "csName", "leadOrders", "leadsCust", "closings", "closedCust", "cancelled",
         "manualClosings", "delivered", "revenue", "discount",
         "fuClosings", "fuH1", "fuH2", "fuH3",
       ];
