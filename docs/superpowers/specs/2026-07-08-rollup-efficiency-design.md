@@ -44,14 +44,18 @@ dailyRollups: defineTable({
   .index("by_window_cs", ["windowKey", "csKey"])
   .index("by_windowKey", ["windowKey"]),
 
-// Fact mungil per reply terdeteksi (~100B). Sumber median/P90/SLA (Queen speed gate).
+// Fact mungil per reply-pair terdeteksi (~100B). Sumber median/P90/SLA (Queen speed gate).
+// CATATAN DESAIN: TANPA tag first/ongoing — "first reply" pada semantik existing adalah
+// pair PERTAMA DI DALAM window scan (window-dependent), jadi reader yang men-derive:
+// per window, sample paling awal per conversationId = "first", sisanya "ongoing".
+// Ini mereproduksi pairResponseEvents existing secara eksak.
 responseSamples: defineTable({
   csKey: v.string(),
   csName: v.string(),
   conversationId: v.id("conversations"),
-  kind: v.union(v.literal("first"), v.literal("ongoing")), // first reply vs balasan lanjutan
-  deltaMs: v.number(),
-  slaBreach: v.boolean(),       // first reply > 15 mnt (logika isSlaBreach existing)
+  deltaMs: v.number(),          // gap = activeMs (businessMinutesBetween) fallback wall-clock — logika pairResponseEvents persis
+  inboundAt: v.number(),        // inbound pembuka pair
+  slaBreach: v.boolean(),       // isSlaBreach(inboundAt, replyAt) — window-independent; reader hitung breach hanya utk sample yang jadi "first" di window-nya
   createdAt: v.number(),        // = createdAt outbound reply
 })
   .index("by_createdAt", ["createdAt"])
@@ -65,7 +69,7 @@ Semua metrik & filter existing dipertahankan persis: exclude `isInternalTestPhon
 - `windowKeyFor(ms)` — label date window 16:00 WIB berisi `ms` (port `fourPmWibMs`/`currentReportLabelDate` dari `components/panel/report-window.ts` ke `convex/lib.ts`; satu sumber kebenaran, FE re-export).
 - `computeRollupRow(ctx, csKey, windowKey)` — pure recompute: baca orders (`by_createdAt` dibound window, filter csKey) + recaps (`by_closedAt` dibound window, filter csKey; termasuk fallback lookup order by `by_orderId`/`by_customerPhone` utk atribusi CS/product recap yatim — logika sama dgn getDailyReport existing) → hasilkan seluruh field §3 → upsert row `by_window_cs`.
 - `bumpRollup(ctx, {csKeys, windowKey})` — dipanggil write-path; recompute tiap csKey yang kena. **Wajib dipanggil dari:** `upsertOrderCore` (order baru/patch), `upsertRecapFromMessage` (closing), `markLatestCancelledByPhone` + `undoCancelled` + `markClosing` (state.ts), `importBerduVerifiedRows`, `deleteOrder`, replay/manual patch (lewat core yang sama). Kalau `csName` berubah antar-write (mis. recap pindah CS), bump kedua csKey (lama+baru).
-- **Sample extraction** di `appendMessageCore`: saat insert pesan `outbound` non-template non-system → baca ≤2 pesan terakhir conversation (`by_conversation_createdAt` desc, sudah pola existing): kalau pesan sebelumnya `inbound` → sample `first`/`ongoing` (first = reply pertama setelah inbound streak; port logika pairing `responseTimeMath.ts` ke versi streaming 2-pesan; `deltaMs = out.createdAt - in.createdAt`). Dedup pesan by externalMessageId terjadi SEBELUM titik ini → sample tidak dobel saat replay.
+- **Sample extraction** di `appendMessageCore` — streaming O(1) dengan pairing state di conversation (field opsional baru `conversations.rtPendingInboundAt`): pesan `inbound` masuk → set field kalau masih kosong (= inbound pertama streak, semantik `pendingInboundAt` di `pairResponseEvents`); pesan `outbound` qualifying (messageType ≠ template, role ≠ system) masuk & field terisi → tulis 1 row `responseSamples` (`deltaMs` = activeMs `businessMinutesBetween` fallback wall-clock — rumus persis pairResponseEvents; `slaBreach` = isSlaBreach) lalu clear field. Dedup pesan by externalMessageId terjadi SEBELUM titik ini → sample tidak dobel saat replay. Out-of-order/backfill bisa mis-pair state → dikoreksi true-up nightly (rebuild exact via pairResponseEvents penuh).
 - **Nightly true-up** (`crons.daily` 20:00 UTC = 03:00 WIB): utk windowKey kemarin & hari-ini → delete+rebuild `responseSamples` window itu dari `messages` (scan bounded 1–2 hari, pakai `responseTimeMath` full = exact) + `computeRollupRow` semua csKey aktif. Koreksi mis-pairing out-of-order & path terlewat.
 - **Backfill action** (sekali, admin-triggered): loop windowKey dari data tertua → hari ini, `computeRollupRow` per window per csKey + rebuild samples per window. Bounded per iterasi; idempotent; bisa diulang.
 
