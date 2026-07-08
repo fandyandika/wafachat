@@ -374,6 +374,7 @@ export const upsertFromN8n = internalMutation({
       customerPhone: args.customerPhone,
       customerName: isGeneratedCustomerName(args.customerName) ? order?.customerName ?? conversation?.customerName ?? "" : args.customerName ?? order?.customerName ?? conversation?.customerName ?? "",
       csName: resolvedCsName,
+      csKey: csKey(resolvedCsName),
       csPhone: args.csPhone ?? order?.assignedCsNumber,
       orderedAt: order?.createdAt,
       closedAt,
@@ -465,6 +466,7 @@ export const createFromPanelClosing = mutation({
       customerPhone: args.customerPhone,
       customerName: order?.customerName ?? conversation?.customerName ?? "",
       csName: resolvedCsName,
+      csKey: csKey(resolvedCsName),
       csPhone: order?.assignedCsNumber,
       orderedAt: order?.createdAt,
       closedAt: now,
@@ -541,6 +543,7 @@ export async function upsertRecapFromMessage(
     customerPhone: message.customerPhone,
     customerName: order?.customerName ?? conversation?.customerName ?? "",
     csName: order?.assignedCsName ?? conversation?.assignedCsName ?? "",
+    csKey: csKey(order?.assignedCsName ?? conversation?.assignedCsName ?? ""),
     csPhone: order?.assignedCsNumber,
     orderedAt: order?.createdAt,
     closedAt: message.createdAt,
@@ -1128,6 +1131,7 @@ export const importBerduVerifiedRows = internalMutation({
         customerPhone,
         customerName: row.customerName || order?.customerName || conversation?.customerName || "",
         csName: row.csName || order?.assignedCsName || conversation?.assignedCsName || "",
+        csKey: csKey(row.csName || order?.assignedCsName || conversation?.assignedCsName || ""),
         csPhone: order?.assignedCsNumber,
         orderedAt: order?.createdAt ?? row.orderedAt,
         closedAt: row.closedAt,
@@ -1464,7 +1468,7 @@ export const backfillCsNameByOrderIds = mutation({
         .first();
       if (recap) {
         const recapBefore = recap;
-        await ctx.db.patch(recap._id, { csName: args.csName, updatedAt: now });
+        await ctx.db.patch(recap._id, { csName: args.csName, csKey: csKey(args.csName), updatedAt: now });
         const recapAfter = await ctx.db.get(recap._id);
         await bumpForRecapDoc(ctx, recapBefore, recapAfter);
         recapAction = "patched";
@@ -1476,7 +1480,7 @@ export const backfillCsNameByOrderIds = mutation({
         .unique();
       if (order) {
         const orderBefore = order;
-        await ctx.db.patch(order._id, { assignedCsName: args.csName, updatedAt: now });
+        await ctx.db.patch(order._id, { assignedCsName: args.csName, csKey: csKey(args.csName), updatedAt: now });
         const orderAfter = await ctx.db.get(order._id);
         await bumpForOrderDoc(ctx, orderBefore, orderAfter);
         orderAction = "patched";
@@ -1510,7 +1514,7 @@ export const renameCsName = mutation({
     for (const o of await ctx.db.query("orders").collect()) {
       if (o.assignedCsName === args.from) {
         const orderBefore = o;
-        await ctx.db.patch(o._id, { assignedCsName: args.to, updatedAt: now });
+        await ctx.db.patch(o._id, { assignedCsName: args.to, csKey: csKey(args.to), updatedAt: now });
         const orderAfter = await ctx.db.get(o._id);
         await bumpForOrderDoc(ctx, orderBefore, orderAfter);
         orders++;
@@ -1520,7 +1524,7 @@ export const renameCsName = mutation({
     for (const r of await ctx.db.query("shippingRecaps").collect()) {
       if (r.csName === args.from) {
         const recapBefore = r;
-        await ctx.db.patch(r._id, { csName: args.to, updatedAt: now });
+        await ctx.db.patch(r._id, { csName: args.to, csKey: csKey(args.to), updatedAt: now });
         const recapAfter = await ctx.db.get(r._id);
         await bumpForRecapDoc(ctx, recapBefore, recapAfter);
         recaps++;
@@ -1566,7 +1570,7 @@ export const backfillByPhone = mutation({
         .collect();
       for (const order of orders) {
         const orderBefore = order;
-        await ctx.db.patch(order._id, { customerName: entry.customerName, assignedCsName: entry.csName, updatedAt: now });
+        await ctx.db.patch(order._id, { customerName: entry.customerName, assignedCsName: entry.csName, csKey: csKey(entry.csName), updatedAt: now });
         const orderAfter = await ctx.db.get(order._id);
         await bumpForOrderDoc(ctx, orderBefore, orderAfter);
       }
@@ -1577,7 +1581,7 @@ export const backfillByPhone = mutation({
         .collect();
       for (const recap of recaps) {
         const recapBefore = recap;
-        await ctx.db.patch(recap._id, { customerName: entry.customerName, csName: entry.csName, updatedAt: now });
+        await ctx.db.patch(recap._id, { customerName: entry.customerName, csName: entry.csName, csKey: csKey(entry.csName), updatedAt: now });
         const recapAfter = await ctx.db.get(recap._id);
         await bumpForRecapDoc(ctx, recapBefore, recapAfter);
       }

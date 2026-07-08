@@ -2,7 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { startOfJakartaDayMs } from "./lib";
+import { startOfJakartaDayMs, csKey } from "./lib";
 
 const DAY = 86_400_000;
 
@@ -76,6 +76,18 @@ test("upsertOrderFromN8n honors explicit createdAt on insert (reconciler backfil
   const order = await t.run(async (ctx) =>
     ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-260624000009")).unique());
   expect(order?.createdAt).toBe(backdated);
+});
+
+test("upsertOrderCore stores csKey = csKey(assignedCsName) for a raw name variant", async () => {
+  const t = convexTest(schema);
+  await t.mutation(internal.state.upsertOrderFromN8n, { phone: "6285735647634", csName: "CS Aisyah", order_id: "O-CSKEY-1", createdAt: Date.UTC(2026, 6, 7, 10, 0, 0) });
+  const order = await t.run(async (ctx) =>
+    ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-CSKEY-1")).unique());
+  expect(order?.csKey).toBe(csKey("CS Aisyah"));
+  // the csKey index returns this order for its csKey slice
+  const viaIndex = await t.run(async (ctx) =>
+    ctx.db.query("orders").withIndex("by_csKey_createdAt", (q) => q.eq("csKey", csKey("CS Aisyah"))).collect());
+  expect(viaIndex.some((o) => o.orderId === "O-CSKEY-1")).toBe(true);
 });
 
 test("upsertOrderFromN8n updates explicit createdAt on existing order", async () => {

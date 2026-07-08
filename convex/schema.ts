@@ -14,6 +14,7 @@ export default defineSchema({
     customerPhone: v.string(),
     customerName: v.string(),
     assignedCsName: v.string(),
+    csKey: v.optional(v.string()), // = csKey(assignedCsName); powers by_csKey_createdAt (rollup per-CS slice reads)
     assignedCsNumber: v.optional(v.string()),
     productName: v.string(),
     products: v.string(),
@@ -32,7 +33,8 @@ export default defineSchema({
     .index("by_customerPhone", ["customerPhone"])
     .index("by_createdAt", ["createdAt"])
     .index("by_assignedCsName_createdAt", ["assignedCsName", "createdAt"])
-    .index("by_aiEligible_createdAt", ["aiEligible", "createdAt"]),
+    .index("by_aiEligible_createdAt", ["aiEligible", "createdAt"])
+    .index("by_csKey_createdAt", ["csKey", "createdAt"]),
 
   conversations: defineTable({
     orderId: v.string(),
@@ -240,6 +242,7 @@ export default defineSchema({
     customerPhone: v.string(),
     customerName: v.string(),
     csName: v.string(),
+    csKey: v.optional(v.string()), // = csKey(csName); powers by_csKey_closedAt (rollup per-CS slice reads)
     csPhone: v.optional(v.string()),
     orderedAt: v.optional(v.number()),
     closedAt: v.number(),
@@ -286,7 +289,8 @@ export default defineSchema({
     .index("by_closedAt", ["closedAt"])
     .index("by_status_closedAt", ["status", "closedAt"])
     .index("by_csName_closedAt", ["csName", "closedAt"])
-    .index("by_paymentMethod_closedAt", ["paymentMethod", "closedAt"]),
+    .index("by_paymentMethod_closedAt", ["paymentMethod", "closedAt"])
+    .index("by_csKey_closedAt", ["csKey", "closedAt"]),
 
   settings: defineTable({
     key: v.string(),
