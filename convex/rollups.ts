@@ -450,6 +450,41 @@ export const backfillRange = mutation({
   },
 });
 
+// One-time backfill: populate csKey on existing orders/recaps that predate the field.
+// Patches csKey ONLY (no rollup bump — the derived aggregates are unchanged since csKey
+// comes from the same name the rollups already grouped by). Idempotent: re-runnable.
+// Controller loops per table until { done: true }.
+export const backfillCsKey = mutation({
+  args: { table: v.union(v.literal("orders"), v.literal("shippingRecaps")), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, "rollups.backfillCsKey");
+    const limit = args.limit ?? 500;
+    const rows = await ctx.db
+      .query(args.table)
+      .filter((q: any) => q.eq(q.field("csKey"), undefined))
+      .take(limit);
+    for (const r of rows) {
+      const raw = args.table === "orders" ? (r as any).assignedCsName : (r as any).csName;
+      await ctx.db.patch(r._id, { csKey: csKeyOf(raw ?? "") });
+    }
+    return { table: args.table, patched: rows.length, done: rows.length < limit };
+  },
+});
+
+export const csKeyCoverage = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx, "rollups.csKeyCoverage");
+    const ordersMissing = (
+      await ctx.db.query("orders").filter((q: any) => q.eq(q.field("csKey"), undefined)).collect()
+    ).length;
+    const recapsMissing = (
+      await ctx.db.query("shippingRecaps").filter((q: any) => q.eq(q.field("csKey"), undefined)).collect()
+    ).length;
+    return { ordersMissing, recapsMissing };
+  },
+});
+
 export const debugRollupParity = query({
   args: { windowKey: v.string() },
   handler: async (ctx, args) => {
