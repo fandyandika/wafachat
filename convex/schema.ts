@@ -47,6 +47,7 @@ export default defineSchema({
     followUpStageAt: v.optional(v.number()),
     followUpStageOverride: v.optional(v.number()), // manual override: 1, 2, or 3; cleared on reply/send
     followUpArchivedAt: v.optional(v.number()),     // timestamp when manually archived
+    rtPendingInboundAt: v.optional(v.number()), // response-time pairing state (first inbound of current streak)
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -120,6 +121,48 @@ export default defineSchema({
     alertKey: v.string(), // "silence" | "failure-spike"
     lastSentAt: v.number(),
   }).index("by_alertKey", ["alertKey"]),
+
+  // ── Rollup efficiency (specs/2026-07-08-rollup-efficiency-design.md) ──────
+  // 1 row per (csKey, 16:00-WIB window). Recomputed-bounded on every order/recap
+  // write; idempotent (row = pure function of raw rows) -> drift impossible.
+  dailyRollups: defineTable({
+    windowKey: v.string(),
+    csKey: v.string(),
+    csName: v.string(),
+    orgId: v.optional(v.string()),
+    leadOrders: v.number(),
+    leadsCust: v.number(),
+    closings: v.number(),
+    closedCust: v.number(),
+    cancelled: v.number(),
+    manualClosings: v.number(),
+    delivered: v.number(),
+    revenue: v.number(),
+    discount: v.number(),
+    fuClosings: v.number(),
+    fuH1: v.number(),
+    fuH2: v.number(),
+    fuH3: v.number(),
+    byProduct: v.array(v.object({ product: v.string(), leads: v.number(), closings: v.number() })),
+    updatedAt: v.number(),
+  })
+    .index("by_window_cs", ["windowKey", "csKey"])
+    .index("by_windowKey", ["windowKey"]),
+
+  // Tiny fact row per detected reply pair. NO first/ongoing tag: "first" is
+  // window-dependent (earliest pair per conversation WITHIN the queried window),
+  // so readers derive it — exactly reproducing pairResponseEvents semantics.
+  responseSamples: defineTable({
+    csKey: v.string(),
+    csName: v.string(),
+    conversationId: v.id("conversations"),
+    deltaMs: v.number(),
+    inboundAt: v.number(),
+    slaBreach: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_cs_createdAt", ["csKey", "createdAt"]),
 
   messages: defineTable({
     conversationId: v.id("conversations"),
