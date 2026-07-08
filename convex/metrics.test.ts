@@ -1,7 +1,8 @@
 import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { windowKeyFor } from "./lib";
 
 const DAY = 86_400_000;
 const t0 = 1_750_000_000_000; // fixed ms within a single day
@@ -56,6 +57,11 @@ test("getDashboardSummary: leads/closings/cr from records, handovers from events
     await ctx.db.insert("events", { type: "handover", actor: "n8n", orderId: "O-1",
       customerPhone: "62811", metadata: {}, createdAt: t0 });
   });
+
+  // Populate rollups for the window
+  const windowKey = windowKeyFor(t0);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+
   const s = await asAdmin.query(api.metrics.getDashboardSummary, { startAt: t0 - DAY, endAt: t0 + DAY });
   expect(s.leads).toBe(1);
   expect(s.closings).toBe(1);
@@ -77,6 +83,13 @@ test("getTrend: buckets leads by order-date and closings by closing-date", async
       paymentMethod: "cod", codValue: 1, total: 1, status: "ready", flags: [], sourceMessageText: "",
       version: 1, createdAt: t0, updatedAt: t0 });
   });
+
+  // Populate rollups for windows touched by seeded data
+  const windowKeys = new Set([windowKeyFor(t0), windowKeyFor(t0 + DAY)]);
+  for (const windowKey of windowKeys) {
+    await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  }
+
   const trend = await asAdmin.query(api.metrics.getTrend, { startAt: t0 - DAY, endAt: t0 + 2 * DAY, bucket: "day" });
   const leadDay = trend.find((b) => b.leads === 1);
   const closeDay = trend.find((b) => b.closings === 1);

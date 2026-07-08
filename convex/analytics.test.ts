@@ -1,7 +1,8 @@
 import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { windowKeyFor, windowRangeForKey } from "./lib";
 
 const DAY = 86_400_000;
 const t0 = 1_750_000_000_000;
@@ -17,17 +18,26 @@ const recBase = {
 test("getCsLeaderboard: per-CS metrics + delta vs prior window, ranked", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  // Use window-aligned ranges to ensure proper period separation
+  const curWindow = windowRangeForKey(windowKeyFor(t0));
+  const priorWindow = windowRangeForKey(windowKeyFor(t0 - DAY)); // Exactly 1 window back (DAY = window duration)
   await t.run(async (ctx) => {
-    // current window [t0, t0+DAY]: CS A = 2 leads 1 closing; CS B = 1 lead 0 closing
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-3", customerPhone: "62813", assignedCsName: "CS B", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
-    // prior window [t0-DAY, t0-1]: CS A = 1 lead 0 closing
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-0", customerPhone: "62810", assignedCsName: "CS A", productName: "Q", createdAt: t0 - DAY / 2, updatedAt: t0 });
+    // current window: CS A = 2 leads 1 closing; CS B = 1 lead 0 closing
+    await ctx.db.insert("orders", { ...ordBase, orderId: "O-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "O-2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "O-3", customerPhone: "62813", assignedCsName: "CS B", productName: "Q", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: curWindow.startAt + 100, total: 100000, status: "ready", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
+    // prior window: CS A = 1 lead 0 closing
+    await ctx.db.insert("orders", { ...ordBase, orderId: "O-0", customerPhone: "62810", assignedCsName: "CS A", productName: "Q", createdAt: priorWindow.startAt + 100, updatedAt: priorWindow.startAt + 100 });
   });
 
-  const rows = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
+  // Populate rollups for windows touched by seeded data
+  const windowKeys = new Set([windowKeyFor(curWindow.startAt), windowKeyFor(priorWindow.startAt)]);
+  for (const windowKey of windowKeys) {
+    await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  }
+
+  const rows = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: curWindow.startAt, endAt: curWindow.endAt });
   expect(rows[0].csName).toBe("CS A"); // most closings first
   const a = rows.find((r) => r.csName === "CS A")!;
   expect(a.leads).toBe(2);
@@ -52,6 +62,11 @@ test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
     // "Rare": 2 leads -> filtered out (minLeads default 3)
     for (let i = 0; i < 2; i++) await ctx.db.insert("orders", { ...ordBase, orderId: `R${i}`, customerPhone: `6282${i}`, assignedCsName: "CS A", productName: "Rare", createdAt: t0, updatedAt: t0 });
   });
+
+  // Populate rollups for the window
+  const windowKey = windowKeyFor(t0);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+
   const rows = await asAdmin.query(api.analytics.getProductDifficulty, { startAt: t0 - 1, endAt: t0 + DAY });
   expect(rows.length).toBe(2);               // Hard + Easy (Rare filtered)
   expect(rows[0].productName).toBe("Hard");  // CR asc -> hardest first
@@ -63,15 +78,41 @@ test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
 test("getPeriodReport: week period, current vs prior week + per-CS", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  // Use specific dates: June 21 (Monday) for anchor, so June 14 (previous Monday) is prior week
+  const anchor = Date.parse("2026-06-21T16:01:00+07:00"); // Just after 16:00 WIB on Monday
+  const curWeekStart = windowRangeForKey(windowKeyFor(anchor));
+
+  // Go back exactly 14 days (2 weeks) to ensure completely separate windows
+  // Then go forward 7 days to get the start of the prior week
+  const priorWeekStart = windowRangeForKey(windowKeyFor(anchor - 14 * DAY));
+
+  // Populate ALL windows that might be queried
+  const allWindowsNeeded = new Set<string>();
+  // Current week: populate all 8 potential windows (week might span 8 16:00-WIB windows due to boundary)
+  for (let i = 0; i < 8; i++) {
+    allWindowsNeeded.add(windowKeyFor(curWeekStart.startAt + i * DAY));
+  }
+  // Prior week: populate all 8 potential windows
+  for (let i = 0; i < 8; i++) {
+    allWindowsNeeded.add(windowKeyFor(priorWeekStart.startAt + i * DAY));
+  }
+
   await t.run(async (ctx) => {
-    // current week (anchor day): CS A = 2 leads, 1 closing, revenue 50000
-    await ctx.db.insert("orders", { ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "C2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
-    // prior week (anchor - 7 days): 1 lead
-    await ctx.db.insert("orders", { ...ordBase, orderId: "P1", customerPhone: "62820", assignedCsName: "CS A", productName: "Q", createdAt: t0 - 7 * DAY, updatedAt: t0 });
+    // current week: CS A = 2 leads, 1 closing, revenue 50000
+    // Place data clearly at the start of the current week window
+    await ctx.db.insert("orders", { ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
+    await ctx.db.insert("orders", { ...ordBase, orderId: "C2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
+    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: curWeekStart.startAt + 100, total: 50000, status: "ready", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
+    // prior week: 1 lead (14 days back)
+    await ctx.db.insert("orders", { ...ordBase, orderId: "P1", customerPhone: "62820", assignedCsName: "CS A", productName: "Q", createdAt: priorWeekStart.startAt + 100, updatedAt: priorWeekStart.startAt + 100 });
   });
-  const r = await asAdmin.query(api.analytics.getPeriodReport, { period: "week", anchor: t0 });
+
+  // Populate all necessary rollups
+  for (const windowKey of allWindowsNeeded) {
+    await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  }
+
+  const r = await asAdmin.query(api.analytics.getPeriodReport, { period: "week", anchor });
   expect(r.leads).toBe(2);
   expect(r.closings).toBe(1);
   expect(r.revenue).toBe(50000);
@@ -96,6 +137,10 @@ test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async (
     // a cancelled closing must be excluded
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "A9", customerPhone: "62899", customerName: "A", csName: "CS A", packageContent: "Quran Mapping", closedAt: t0, total: 100000, status: "cancelled", createdAt: t0, updatedAt: t0 });
   });
+
+  // Populate rollups for the window
+  const windowKey = windowKeyFor(t0);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
 
   const r = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
   const a = r.cs.find((c) => c.csName === "CS A")!;
@@ -123,6 +168,11 @@ test("getDailyReport: per-CS totals match getCsLeaderboard (no drift)", async ()
     await ctx.db.insert("orders", { ...ordBase, orderId: "O-3", customerPhone: "62813", assignedCsName: "CS B", productName: "Q", createdAt: t0, updatedAt: t0 });
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
+
+  // Populate rollups for the window
+  const windowKey = windowKeyFor(t0);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+
   const report = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
   const board = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
   for (const row of board) {
@@ -144,6 +194,11 @@ test("getDailyReport: cross-window closing canonicalizes product via order (no S
     // closing INSIDE the window; packageContent uses the SKU name; linked via orderIdBerdu
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "OW1", customerPhone: "62830", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0 + 1000, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
+
+  // Populate rollups for the window containing the closing (t0)
+  const windowKey = windowKeyFor(t0);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+
   const r = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
   const a = r.cs.find((c) => c.csName === "CS A")!;
   expect(a.products).toHaveLength(1);
@@ -162,6 +217,11 @@ test("getCsLeaderboard honors csName via csKey (CS Aisyah == Aisyah)", async () 
     await ctx.db.insert("orders", { ...ordBase, orderId: "O1", customerPhone: "62811", customerName: "A", productName: "Quran Mapping", assignedCsName: "Aisyah", createdAt: t0_new, updatedAt: t0_new });
     await ctx.db.insert("orders", { ...ordBase, orderId: "O2", customerPhone: "62822", customerName: "B", productName: "Quran Mapping", assignedCsName: "Risma", createdAt: t0_new, updatedAt: t0_new });
   });
+
+  // Populate rollups for the window
+  const windowKey = windowKeyFor(t0_new);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+
   const start = Date.parse("2026-06-22T00:00:00+07:00");
   const end = Date.parse("2026-06-23T00:00:00+07:00");
   const all = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: start, endAt: end });
@@ -181,6 +241,11 @@ test("getDailyReport merges raw name variants of one CS into a single card (no f
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "V-1", customerPhone: "62831", customerName: "A", csName: "Aisyah", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "V-9", customerPhone: "62839", customerName: "B", csName: "CS Aisyah", closedAt: t0, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
+
+  // Populate rollups for the window
+  const windowKey = windowKeyFor(t0);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+
   const r = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
   const aisyah = r.cs.filter((c: { csName: string }) => /aisyah/i.test(c.csName));
   expect(aisyah.length).toBe(1); // ONE merged card, not two
@@ -199,6 +264,11 @@ test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () =
     await ctx.db.insert("orders", { ...ordBase, orderId: "C3", customerPhone: "62813", assignedCsName: "Risma", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "Aisyah", closedAt: t0_new, total: 50000, status: "ready", createdAt: t0_new, updatedAt: t0_new });
   });
+
+  // Populate rollups for the window
+  const windowKey = windowKeyFor(t0_new);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+
   const anchor = t0_new;
   // Query all CSs
   const allReport = await asAdmin.query(api.analytics.getPeriodReport, { period: "week", anchor });
@@ -237,6 +307,10 @@ test("CR uses unique CUSTOMERS: an order-double closing twice does not inflate t
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "D-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
     await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "D-2", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0 + 2000, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
+
+  // Populate rollups for the window
+  const windowKey = windowKeyFor(t0);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
 
   // Daily report: closings stay order-level (volume: 2), CR is customer-level (1 of 2 leads = 50%).
   const daily = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });

@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
+import { windowKeyFor } from "./lib";
 
 const HOUR = 3_600_000;
 const now = Date.UTC(2026, 5, 26, 5, 0, 0); // fixed reference
@@ -444,6 +445,10 @@ test("getFollowUpEffectiveness: counts closings with FU touches", async () => {
       createdAt: now, updatedAt: now,
     });
   });
+
+  // Populate rollups for the window containing the closing
+  const windowKey = windowKeyFor(now);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
 
   const res = await asAdmin.query(api.followUp.getFollowUpEffectiveness, { startAt: now - 1 * HOUR, endAt: now, csName: "Nabila" });
   expect(res.totalClosings).toBe(1);

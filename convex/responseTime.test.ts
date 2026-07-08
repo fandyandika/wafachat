@@ -1,7 +1,8 @@
 import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { windowKeyFor } from "./lib";
 
 // 10:00 WIB (inside 05:30-18:00) so the active-hours gap equals the wall-clock gap below.
 const t0 = Date.UTC(2026, 5, 24, 3, 0, 0);
@@ -43,6 +44,11 @@ test("getResponseTimes: first-reply median/p90 + ongoing, template excluded, per
     await ins(convX, "6285715682110", "outbound", t0 + 3500, "text", "cs");
   });
 
+  // Populate rollups and samples for the window
+  const windowKey = windowKeyFor(t0);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey });
+
   const r = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 200000 });
   expect(r.cs.length).toBe(1);
   const a = r.cs[0];
@@ -70,6 +76,12 @@ test("getResponseTimes: csName filter", async () => {
     await ins(cB, "62820", "inbound", t0 + 1000);
     await ins(cB, "62820", "outbound", t0 + 31000);
   });
+
+  // Populate rollups and samples for the window
+  const windowKey = windowKeyFor(t0);
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey });
+
   const r = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 200000, csName: "CS B" });
   expect(r.cs.length).toBe(1);
   expect(r.cs[0].csName).toBe("CS B");
@@ -89,6 +101,12 @@ test("getResponseTimes counts SLA breaches (active-hours)", async () => {
     await ctx.db.insert("messages", { conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "inbound", role: "customer", messageType: "text", content: "hi", createdAt: wib(10, 0), source: "n8n" as const });
     await ctx.db.insert("messages", { conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "outbound", role: "cs", messageType: "text", content: "hai", createdAt: wib(10, 20), source: "n8n" as const });
   });
+
+  // Populate rollups and samples for the window
+  const windowKey = windowKeyFor(wib(10, 0));
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey });
+
   const res = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: wib(0, 0), endAt: wib(23, 59) });
   expect(res.overall.slaBreaches).toBe(1);
   const risma = res.cs.find((c) => c.csName === "Risma");
