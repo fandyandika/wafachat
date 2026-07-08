@@ -87,28 +87,8 @@ export function startOfJakartaDayMs(timestamp = Date.now()): number {
 }
 
 // ── Report-window helpers (16:00→16:00 WIB business day) ─────────────────────
-// Single source of truth; components/panel/report-window.ts re-exports these (Task 10).
-export function fourPmWibMs(y: number, mIdx: number, d: number): number {
-  return Date.UTC(y, mIdx, d, 9, 0, 0); // 16:00 WIB == 09:00 UTC
-}
-
-/** Label date ("YYYY-MM-DD") of the 16:00-WIB window containing `ms` (date the window OPENS). */
-export function windowKeyFor(ms: number): string {
-  const shifted = new Date(ms - 9 * 3_600_000); // 16:00 WIB becomes UTC midnight
-  const y = shifted.getUTCFullYear();
-  const m = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(shifted.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
-export function windowRangeForKey(key: string): { startAt: number; endAt: number } {
-  const [y, m, d] = key.split("-").map(Number);
-  return { startAt: fourPmWibMs(y, m - 1, d), endAt: fourPmWibMs(y, m - 1, d + 1) };
-}
-
-export function windowKeyToday(now = Date.now()): string {
-  return windowKeyFor(now);
-}
+// Single source of truth in lib/report-window-core.ts; re-exported here + components/panel/report-window.ts (Task 10).
+export { fourPmWibMs, windowKeyFor, windowRangeForKey, windowKeyToday } from "@/lib/report-window-core";
 
 // ── Product canonicalization ──────────────────────────────────────────────────
 // Shared helpers to avoid circular imports when rollupReaders needs canonicalizeProduct.
