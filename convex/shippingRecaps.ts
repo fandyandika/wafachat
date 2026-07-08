@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isInternalTestPhone, csKey } from "./lib";
 import { getActiveClosingPhrases } from "./closingRules";
+import { bumpForOrderDoc, bumpForRecapDoc } from "./rollups";
 
 type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
@@ -423,16 +424,21 @@ export const upsertFromN8n = internalMutation({
     let recapId: Id<"shippingRecaps">;
     if (existing) {
       recapId = existing._id;
+      const before = existing;
       await ctx.db.patch(existing._id, {
         ...payload,
         version: existing.version + 1,
       });
+      const after = await ctx.db.get(existing._id);
+      await bumpForRecapDoc(ctx, before, after);
     } else {
       recapId = await ctx.db.insert("shippingRecaps", {
         ...payload,
         version: 1,
         createdAt: now,
       });
+      const after = await ctx.db.get(recapId);
+      await bumpForRecapDoc(ctx, null, after);
     }
 
     await ctx.db.insert("events", {
@@ -504,9 +510,14 @@ export const createFromPanelClosing = mutation({
     let recapId: Id<"shippingRecaps">;
     if (existing) {
       recapId = existing._id;
+      const before = existing;
       await ctx.db.patch(existing._id, { ...payload, version: existing.version + 1 });
+      const after = await ctx.db.get(existing._id);
+      await bumpForRecapDoc(ctx, before, after);
     } else {
       recapId = await ctx.db.insert("shippingRecaps", { ...payload, version: 1, createdAt: now });
+      const after = await ctx.db.get(recapId);
+      await bumpForRecapDoc(ctx, null, after);
     }
 
     await ctx.db.insert("events", {
@@ -580,10 +591,15 @@ export async function upsertRecapFromMessage(
     return { recapId: existing._id, action: "skipped" };
   }
   if (existing) {
+    const before = existing;
     await ctx.db.patch(existing._id, { ...payload, version: existing.version + 1 });
+    const after = await ctx.db.get(existing._id);
+    await bumpForRecapDoc(ctx, before, after);
     return { recapId: existing._id, action: "updated" };
   }
   const recapId = await ctx.db.insert("shippingRecaps", { ...payload, version: 1, createdAt: Date.now() });
+  const after = await ctx.db.get(recapId);
+  await bumpForRecapDoc(ctx, null, after);
   return { recapId, action: "created" };
 }
 
@@ -676,7 +692,10 @@ export const reparseNeedsReview = mutation({
       }
       if (Object.keys(patch).length === 0) continue;
       patch.updatedAt = Date.now();
+      const before = row;
       await ctx.db.patch(row._id, patch);
+      const after = await ctx.db.get(row._id);
+      await bumpForRecapDoc(ctx, before, after);
       updated += 1;
     }
     return { success: true, updated, scanned: rows.length };
@@ -793,12 +812,15 @@ export const updateFields = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.updateFields");
     const { recapId, ...patch } = args;
+    const before = await ctx.db.get(recapId);
     await ctx.db.patch(recapId, {
       ...patch,
       status: "ready",
       flags: [],
       updatedAt: Date.now(),
     });
+    const after = await ctx.db.get(recapId);
+    await bumpForRecapDoc(ctx, before, after);
     return { success: true, recapId };
   },
 });
@@ -807,7 +829,10 @@ export const markReady = mutation({
   args: { recapId: v.id("shippingRecaps") },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markReady");
+    const before = await ctx.db.get(args.recapId);
     await ctx.db.patch(args.recapId, { status: "ready", flags: [], updatedAt: Date.now() });
+    const after = await ctx.db.get(args.recapId);
+    await bumpForRecapDoc(ctx, before, after);
     return { success: true, recapId: args.recapId };
   },
 });
@@ -820,12 +845,15 @@ export const markCancelled = mutation({
     if (!row) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.status === "exported" ? "cancelled_after_export" : "cancelled";
     const now = Date.now();
+    const before = row;
     await ctx.db.patch(args.recapId, {
       status,
       cancelReason: args.reason,
       cancelledAt: now,
       updatedAt: now,
     });
+    const after = await ctx.db.get(args.recapId);
+    await bumpForRecapDoc(ctx, before, after);
     await ctx.db.insert("events", {
       conversationId: row.conversationId,
       orderId: row.orderIdBerdu,
@@ -847,12 +875,15 @@ export const undoCancelled = mutation({
     if (!row) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.flags.length > 0 ? "needs_review" : "ready";
     const now = Date.now();
+    const before = row;
     await ctx.db.patch(args.recapId, {
       status,
       cancelReason: undefined,
       cancelledAt: undefined,
       updatedAt: now,
     });
+    const after = await ctx.db.get(args.recapId);
+    await bumpForRecapDoc(ctx, before, after);
     await ctx.db.insert("events", {
       conversationId: row.conversationId,
       orderId: row.orderIdBerdu,
@@ -874,12 +905,15 @@ export const markExported = mutation({
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
       if (!row) continue;
+      const before = row;
       await ctx.db.patch(recapId, {
         status: "exported",
         exportedAt: now,
         exportBatchId: args.exportBatchId,
         updatedAt: now,
       });
+      const after = await ctx.db.get(recapId);
+      await bumpForRecapDoc(ctx, before, after);
       await ctx.db.insert("events", {
         conversationId: row.conversationId,
         orderId: row.orderIdBerdu,
@@ -902,7 +936,10 @@ export const markDelivered = mutation({
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
       if (!row) continue;
+      const before = row;
       await ctx.db.patch(recapId, { status: "delivered", deliveredAt: now, updatedAt: now });
+      const after = await ctx.db.get(recapId);
+      await bumpForRecapDoc(ctx, before, after);
       await ctx.db.insert("events", {
         conversationId: row.conversationId,
         orderId: row.orderIdBerdu,
@@ -923,7 +960,10 @@ export const undoDelivered = mutation({
     await requireAdmin(ctx, "shippingRecaps.undoDelivered");
     const row = await ctx.db.get(args.recapId);
     if (!row) return { success: false, error: "recap not found" };
+    const before = row;
     await ctx.db.patch(args.recapId, { status: "exported", deliveredAt: undefined, updatedAt: Date.now() });
+    const after = await ctx.db.get(args.recapId);
+    await bumpForRecapDoc(ctx, before, after);
     return { success: true, recapId: args.recapId };
   },
 });
@@ -934,7 +974,11 @@ export const markReadyBulk = mutation({
     await requireAdmin(ctx, "shippingRecaps.markReadyBulk");
     const now = Date.now();
     for (const recapId of args.recapIds) {
+      const before = await ctx.db.get(recapId);
+      if (!before) continue;
       await ctx.db.patch(recapId, { status: "ready", flags: [], updatedAt: now });
+      const after = await ctx.db.get(recapId);
+      await bumpForRecapDoc(ctx, before, after);
     }
     return { success: true, count: args.recapIds.length };
   },
@@ -949,7 +993,10 @@ export const markCancelledBulk = mutation({
       const row = await ctx.db.get(recapId);
       if (!row) continue;
       const status: RecapStatus = row.status === "exported" || row.status === "delivered" ? "cancelled_after_export" : "cancelled";
+      const before = row;
       await ctx.db.patch(recapId, { status, cancelReason: args.reason, cancelledAt: now, updatedAt: now });
+      const after = await ctx.db.get(recapId);
+      await bumpForRecapDoc(ctx, before, after);
       await ctx.db.insert("events", {
         conversationId: row.conversationId,
         orderId: row.orderIdBerdu,
@@ -987,12 +1034,15 @@ export const markLatestCancelledByPhone = internalMutation({
 
     const now = Date.now();
     const status: RecapStatus = row.status === "exported" || row.status === "delivered" ? "cancelled_after_export" : "cancelled";
+    const before = row;
     await ctx.db.patch(row._id, {
       status,
       cancelReason: args.reason || "-Cancel",
       cancelledAt: now,
       updatedAt: now,
     });
+    const after = await ctx.db.get(row._id);
+    await bumpForRecapDoc(ctx, before, after);
     await ctx.db.insert("events", {
       conversationId: row.conversationId,
       orderId: row.orderIdBerdu,
@@ -1066,10 +1116,13 @@ export const importBerduVerifiedRows = internalMutation({
       if (existing) {
         recapId = existing._id;
         action = "updated";
+        const before = existing;
         await ctx.db.patch(existing._id, {
           ...payload,
           version: existing.version + 1,
         });
+        const after = await ctx.db.get(existing._id);
+        await bumpForRecapDoc(ctx, before, after);
       } else {
         action = "inserted";
         recapId = await ctx.db.insert("shippingRecaps", {
@@ -1077,6 +1130,8 @@ export const importBerduVerifiedRows = internalMutation({
           version: 1,
           createdAt: now,
         });
+        const after = await ctx.db.get(recapId);
+        await bumpForRecapDoc(ctx, null, after);
       }
 
       await ctx.db.insert("events", {
@@ -1136,6 +1191,7 @@ export const repairRecipientNamesFromOrders = mutation({
             ? "needs_review"
             : parsed.status;
 
+      const before = row;
       await ctx.db.patch(row._id, {
         customerName: order.customerName,
         recipientName: parsed.recipientName || order.customerName,
@@ -1149,6 +1205,8 @@ export const repairRecipientNamesFromOrders = mutation({
         status: nextStatus,
         updatedAt: Date.now(),
       });
+      const after = await ctx.db.get(row._id);
+      await bumpForRecapDoc(ctx, before, after);
 
       repaired.push({ recapId: row._id, orderId: row.orderIdBerdu, recipientName: parsed.recipientName || order.customerName });
     }
@@ -1335,7 +1393,10 @@ export const backfillCsNameByOrderIds = mutation({
         .withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", orderId))
         .first();
       if (recap) {
+        const recapBefore = recap;
         await ctx.db.patch(recap._id, { csName: args.csName, updatedAt: now });
+        const recapAfter = await ctx.db.get(recap._id);
+        await bumpForRecapDoc(ctx, recapBefore, recapAfter);
         recapAction = "patched";
       }
 
@@ -1344,7 +1405,10 @@ export const backfillCsNameByOrderIds = mutation({
         .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
         .unique();
       if (order) {
+        const orderBefore = order;
         await ctx.db.patch(order._id, { assignedCsName: args.csName, updatedAt: now });
+        const orderAfter = await ctx.db.get(order._id);
+        await bumpForOrderDoc(ctx, orderBefore, orderAfter);
         orderAction = "patched";
       }
 
@@ -1375,14 +1439,20 @@ export const renameCsName = mutation({
     let orders = 0;
     for (const o of await ctx.db.query("orders").collect()) {
       if (o.assignedCsName === args.from) {
+        const orderBefore = o;
         await ctx.db.patch(o._id, { assignedCsName: args.to, updatedAt: now });
+        const orderAfter = await ctx.db.get(o._id);
+        await bumpForOrderDoc(ctx, orderBefore, orderAfter);
         orders++;
       }
     }
     let recaps = 0;
     for (const r of await ctx.db.query("shippingRecaps").collect()) {
       if (r.csName === args.from) {
+        const recapBefore = r;
         await ctx.db.patch(r._id, { csName: args.to, updatedAt: now });
+        const recapAfter = await ctx.db.get(r._id);
+        await bumpForRecapDoc(ctx, recapBefore, recapAfter);
         recaps++;
       }
     }
@@ -1425,7 +1495,10 @@ export const backfillByPhone = mutation({
         .withIndex("by_customerPhone", (q) => q.eq("customerPhone", phone))
         .collect();
       for (const order of orders) {
+        const orderBefore = order;
         await ctx.db.patch(order._id, { customerName: entry.customerName, assignedCsName: entry.csName, updatedAt: now });
+        const orderAfter = await ctx.db.get(order._id);
+        await bumpForOrderDoc(ctx, orderBefore, orderAfter);
       }
 
       const recaps = await ctx.db
@@ -1433,7 +1506,10 @@ export const backfillByPhone = mutation({
         .withIndex("by_customerPhone", (q) => q.eq("customerPhone", phone))
         .collect();
       for (const recap of recaps) {
+        const recapBefore = recap;
         await ctx.db.patch(recap._id, { customerName: entry.customerName, csName: entry.csName, updatedAt: now });
+        const recapAfter = await ctx.db.get(recap._id);
+        await bumpForRecapDoc(ctx, recapBefore, recapAfter);
       }
 
       results.push({ phone, conversations: conversations.length, orders: orders.length, recaps: recaps.length });

@@ -13,6 +13,7 @@ import {
   unique,
 } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
+import { bumpForOrderDoc } from "./rollups";
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.literal("closed"));
 
@@ -146,6 +147,8 @@ export const createTestConversation = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    const insertedOrder = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderId)).unique();
+    await bumpForOrderDoc(ctx, null, insertedOrder);
 
     const conversationId = await ctx.db.insert("conversations", {
       orderId,
@@ -290,12 +293,17 @@ export async function upsertOrderCore(
     .unique();
 
   if (existingOrder) {
+    const before = existingOrder;
     await ctx.db.patch(existingOrder._id, {
       ...orderPayload,
       ...(args.createdAt !== undefined ? { createdAt: args.createdAt } : {}),
     });
+    const after = await ctx.db.get(existingOrder._id);
+    await bumpForOrderDoc(ctx, before, after);
   } else {
     await ctx.db.insert("orders", { ...orderPayload, createdAt: args.createdAt ?? now });
+    const after = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderId)).unique();
+    await bumpForOrderDoc(ctx, null, after);
   }
 
   let conversationId: Id<"conversations"> | null = null;
@@ -792,7 +800,9 @@ export const deleteConversationOrder = mutation({
       .withIndex("by_orderId", (q: any) => q.eq("orderId", conversation.orderId))
       .unique();
     if (order) {
+      const before = order;
       await ctx.db.delete(order._id);
+      await bumpForOrderDoc(ctx, before, null);
     }
 
     await ctx.db.insert("events", {

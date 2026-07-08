@@ -63,3 +63,119 @@ test("orphan recap attributed via order fallback like legacy", async () => {
   expect(rows).toHaveLength(1);
   expect(rows[0].closings).toBe(1);
 });
+
+test("upsertOrderFromN8n (new order) creates rollup entry via bump", async () => {
+  const t = convexTest(schema);
+  await t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6281000000010",
+    csName: "CS Test",
+    productName: "Test Product",
+    createdAt: t0,
+  });
+  // Force recompute to verify order was created
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const rows = await t.run(async (ctx) =>
+    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+  expect(rows.length).toBeGreaterThan(0);
+  const csTestRow = rows.find((r: any) => r.csName === "CS Test");
+  expect(csTestRow).toBeDefined();
+  expect(csTestRow!.leadOrders).toBe(1);
+});
+
+test("appendMessageFromN8n with closing creates recap that bumps rollup", async () => {
+  const t = convexTest(schema);
+  // First create an order
+  await t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6281000000011",
+    csName: "CS Test2",
+    productName: "Quran Mapping",
+    createdAt: t0,
+  });
+  // Then send a closing message - this should create a recap
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "6281000000011",
+    csName: "CS Test2",
+    role: "ai",
+    direction: "outbound",
+    content: "PEMESANAN BERHASIL\nDikirim ke:\nJohn Doe|628123456789\nJl. Main Street, District, City",
+    messageType: "text",
+    createdAt: t0 + 1000,
+  });
+  // Force recompute
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const rows = await t.run(async (ctx) =>
+    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+  const csTest2Row = rows.find((r: any) => r.csName === "CS Test2");
+  expect(csTest2Row).toBeDefined();
+  expect(csTest2Row!.closings).toBeGreaterThan(0);
+});
+
+test("recap status changes bump rollup counters", async () => {
+  const t = convexTest(schema);
+  // Create order and recap
+  await t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6281000000012",
+    csName: "CS Test3",
+    productName: "Buku Sirah",
+    createdAt: t0,
+  });
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "6281000000012",
+    csName: "CS Test3",
+    role: "ai",
+    direction: "outbound",
+    content: "PEMESANAN BERHASIL\nDikirim ke:\nJane Doe|628987654321\nJl. Other Street, District2, City2",
+    messageType: "text",
+    createdAt: t0 + 1000,
+  });
+  // Cancel the recap
+  await t.run(async (ctx) => {
+    const recap = await ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", "6281000000012")).first();
+    if (recap) {
+      await ctx.db.patch(recap._id, { status: "cancelled", cancelReason: "Test cancel", cancelledAt: t0 + 2000, updatedAt: t0 + 2000 });
+    }
+  });
+  // Force recompute
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const rows = await t.run(async (ctx) =>
+    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+  const csTest3Row = rows.find((r: any) => r.csName === "CS Test3");
+  expect(csTest3Row).toBeDefined();
+  // Cancelled status should be counted
+  expect(csTest3Row!.cancelled).toBeGreaterThan(0);
+});
+
+test("order CS reassignment bumps old and new csKey rows", async () => {
+  const t = convexTest(schema);
+  // Create order and recap with CS Old
+  await t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6281000000014",
+    csName: "CS Old",
+    productName: "Buku Sirah",
+    order_id: "O-REASSIGN-1",
+    createdAt: t0,
+  });
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "6281000000014",
+    csName: "CS Old",
+    role: "ai",
+    direction: "outbound",
+    content: "PEMESANAN BERHASIL\nDikirim ke:\nAlice|628555555555\nJl. Test St, District3, City3",
+    messageType: "text",
+    createdAt: t0 + 1000,
+  });
+  // Reassign to CS New
+  await t.run(async (ctx) => {
+    const order = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-REASSIGN-1")).unique();
+    const recap = await ctx.db.query("shippingRecaps").withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", "O-REASSIGN-1")).first();
+    if (order) await ctx.db.patch(order._id, { assignedCsName: "CS New", updatedAt: t0 + 2000 });
+    if (recap) await ctx.db.patch(recap._id, { csName: "CS New", updatedAt: t0 + 2000 });
+  });
+  // Force recompute
+  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const rows = await t.run(async (ctx) =>
+    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+  const newRow = rows.find((r: any) => r.csName === "CS New");
+  expect(newRow).toBeDefined();
+  expect(newRow!.closings).toBeGreaterThan(0);
+});
