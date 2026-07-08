@@ -2,12 +2,13 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { normalizePhone } from "./lib";
+import { normalizePhone, csKey } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 import { messageMatchesPhrase, upsertRecapFromMessage } from "./shippingRecaps";
 import { getActiveClosingPhrases } from "./closingRules";
 import { messageHasDoneMarker } from "./followUpMath";
 import { countFollowUpTouchesBeforeTime } from "./followUp";
+import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
   if (args.orderId) {
@@ -192,10 +193,34 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     createdAt,
   });
 
-  const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string; followUpStageOverride?: undefined } = {
+  const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string; followUpStageOverride?: undefined; rtPendingInboundAt?: number | undefined } = {
     lastMessageAt: createdAt,
     updatedAt: createdAt,
   };
+
+  // Response-time pairing: track pending inbound and pair with outbound (non-template, non-system)
+  if (args.direction === "inbound") {
+    // Inbound: set pending if not already set (first inbound of streak)
+    if (!conversation.rtPendingInboundAt) {
+      convPatch.rtPendingInboundAt = createdAt;
+    }
+  } else if (args.direction === "outbound" && (args.messageType ?? "text") !== "template" && args.role !== "system" && conversation.rtPendingInboundAt) {
+    // Outbound (non-template, non-system) with pending: create sample and clear pending
+    const activeMs = Math.round(businessMinutesBetween(conversation.rtPendingInboundAt, createdAt) * 60_000);
+    const deltaMs = activeMs > 0 ? activeMs : createdAt - conversation.rtPendingInboundAt;
+    const csName = conversation.assignedCsName ?? args.csName ?? "Unknown";
+    const csKeyValue = csKey(csName);
+    await ctx.db.insert("responseSamples", {
+      csKey: csKeyValue,
+      csName,
+      conversationId: conversation._id,
+      deltaMs,
+      inboundAt: conversation.rtPendingInboundAt,
+      slaBreach: isSlaBreach(conversation.rtPendingInboundAt, createdAt),
+      createdAt,
+    });
+    convPatch.rtPendingInboundAt = undefined;
+  }
   // Heal CS attribution: adopt a known CS when the existing conversation is still
   // unattributed ("Unknown"/empty). Never clobber a real CS. The closing detection
   // below re-reads this conversation, so a closing message also lands the right CS.
