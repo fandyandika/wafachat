@@ -35,6 +35,7 @@ import type * as metrics from "../metrics.js";
 import type * as passwordHash from "../passwordHash.js";
 import type * as responseTime from "../responseTime.js";
 import type * as responseTimeMath from "../responseTimeMath.js";
+import type * as rollupReaders from "../rollupReaders.js";
 import type * as rollups from "../rollups.js";
 import type * as settings from "../settings.js";
 import type * as shippingRecaps from "../shippingRecaps.js";
@@ -74,6 +75,7 @@ declare const fullApi: ApiFromModules<{
   passwordHash: typeof passwordHash;
   responseTime: typeof responseTime;
   responseTimeMath: typeof responseTimeMath;
+  rollupReaders: typeof rollupReaders;
   rollups: typeof rollups;
   settings: typeof settings;
   shippingRecaps: typeof shippingRecaps;

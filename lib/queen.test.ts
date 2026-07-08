@@ -46,16 +46,25 @@ test("CR is clamped to the target band: above ceiling caps at 100, below floor a
   expect(QUEEN_TARGETS.crCeil).toBe(80);
 });
 
-test("eligibility: a CS with leads < 10 is excluded even with huge numbers", () => {
-  const q = computeQueenCs([
-    row("Mega", 99, 99, 5, 1_000, 10), // leads < 10 -> excluded
+test("eligibility: leads < 6 excluded (even huge numbers), leads >= 6 included", () => {
+  const s = computeQueenScores([
+    row("Mega", 99, 99, 5, 1_000, 10), // leads 5 < 6 -> excluded despite huge numbers
+    row("Six", 8, 60, 6, 200_000, 10), // leads exactly 6 -> eligible (boundary)
     row("Beta", 12, 60, 20, 200_000, 10),
-    row("Gamma", 8, 45, 15, 300_000, 10),
+  ]);
+  const by = new Map(s.map((r) => [r.csName, r]));
+  expect(by.get("Mega")!.eligible).toBe(false);
+  expect(by.get("Six")!.eligible).toBe(true);
+  // the crown never goes to the excluded micro-sample
+  const q = computeQueenCs([
+    row("Mega", 99, 99, 5, 1_000, 10),
+    row("Six", 8, 60, 6, 200_000, 10),
+    row("Beta", 12, 60, 20, 200_000, 10),
   ]);
   expect(q?.csName).toBe("Beta");
 });
 
-test("returns null when fewer than 2 CS qualify (>=10 leads)", () => {
+test("returns null when fewer than 2 CS qualify (>=6 leads)", () => {
   expect(computeQueenCs([row("Beta", 10, 50, 20, 60_000, 10), row("Gamma", 5, 40, 5, 30_000, 10)])).toBeNull();
 });
 
@@ -80,7 +89,7 @@ test("closing is relative to the day's best: high volume never saturates for eve
 
 test("closing benchmark comes from ELIGIBLE CS only — an ineligible outlier can't deflate the board", () => {
   const s = computeQueenScores([
-    row("Mega", 99, 90, 5, 60_000, 10), // ineligible (leads < 10) despite 99 closings
+    row("Mega", 99, 90, 5, 60_000, 10), // ineligible (leads < 6) despite 99 closings
     row("Alpha", 40, 60, 80, 120_000, 10),
   ]);
   const alpha = s.find((r) => r.csName === "Alpha")!;

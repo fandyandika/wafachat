@@ -10,3 +10,6 @@ next-env.d.ts
 .convex-adapter-secret.local
 .worktrees/
 .convex-jwt-key.tmp
+
+# Temp admin/analysis helpers that mint tokens — never commit
+_*.mjs

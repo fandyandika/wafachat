@@ -26,7 +26,10 @@ export type QueenInput = {
 };
 
 export const QUEEN_WEIGHTS = { closing: 0.35, cr: 0.5, speed: 0.15 };
-export const QUEEN_MIN_LEADS = 10; // eligibility: enough workload to judge "overall best"
+export const QUEEN_MIN_LEADS = 6; // eligibility: enough workload to judge "overall best".
+// Lowered 10->6 (2026-07-08): a genuine low-traffic performer (few new leads but strong CR,
+// e.g. closing follow-ups) was benched at 9 leads. 6 keeps a real micro-sample (2-3 leads)
+// out — those can't win on an inflated CR — while letting a lightly-loaded CS compete on CR.
 export const QUEEN_MIN_RESP = 5; //  enough first-replies for a fair speed score
 // Fixed bands for the absolute components (CR + speed) — tunable. Closing has no
 // fixed target: it is scored relative to the day's best (see computeQueenScores).
