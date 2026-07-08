@@ -1,7 +1,7 @@
 import { query, internalQuery } from "./_generated/server";
 import { requireMember } from "./authz";
 import { v } from "convex/values";
-import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct } from "./lib";
+import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct, startOfJakartaDayMs } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRollups, periodReportFromRollups } from "./rollupReaders";
 
@@ -315,14 +315,12 @@ export const getCsDetail = query({
 // Daily CS report on a 16:00→16:00 WIB window. Mirrors computeCsAgg's dedup/exclusion
 // rules exactly (so totals match the Performance page), adding discount + per-CS×product
 // nesting + a duplicate-phone count (a judging aid for the CS-reported "Mis Rep").
-export const getDailyReportLegacy = internalQuery({
-  args: { startAt: v.number(), endAt: v.number() },
-  handler: async (ctx, args) => {
+export async function computeDailyReportRaw(ctx: any, startAt: number, endAt: number) {
     const orders = (
-      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
+      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
     const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt)).collect()
+      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
     ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone));
 
     // Resolve a closing's product to the matched in-window order's name (anti-fragmentation),
@@ -437,7 +435,7 @@ export const getDailyReportLegacy = internalQuery({
     }
 
     return {
-      windowStart: args.startAt, windowEnd: args.endAt,
+      windowStart: startAt, windowEnd: endAt,
       totals: {
         leads: gLeads.size, closings: gClos.size, cr: cr(gClosedCust.size, gLeads.size),
         revenue: gRevenue, discount: gDiscount, cpDiscount: cpd(gDiscount, gClos.size),
@@ -445,6 +443,23 @@ export const getDailyReportLegacy = internalQuery({
       },
       cs,
     };
+}
+
+export const getDailyReportLegacy = internalQuery({
+  args: { startAt: v.number(), endAt: v.number() },
+  handler: async (ctx, args) => computeDailyReportRaw(ctx, args.startAt, args.endAt),
+});
+
+// Owner "Live Hari Ini" — calendar-day (midnight WIB → now), raw bounded read of today's
+// slice (cheap; NOT the 16:00 CS-report window, NOT the whole-history scan). On-demand page.
+// TODO(SaaS §14): midnight boundary + timezone become per-org settings.
+export const getLiveToday = query({
+  args: { nowMs: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireMember(ctx, "analytics.getLiveToday");
+    const now = args.nowMs ?? Date.now();
+    const startAt = startOfJakartaDayMs(now);
+    return computeDailyReportRaw(ctx, startAt, now);
   },
 });
 
