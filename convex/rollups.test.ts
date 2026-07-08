@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { windowRangeForKey, windowKeyFor } from "./lib";
 
 const W = "2026-07-08";
@@ -136,8 +136,10 @@ test("markCancelled bumps rollup with cancelled: 1, closings: 0", async () => {
   const recap = await t.run(async (ctx) =>
     ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", "6281000000012")).first());
 
+  if (!recap) throw new Error("recap not found");
+
   // Cancel the recap using the real mutation
-  await t.withIdentity(adminIdentity).mutation(internal.shippingRecaps.markCancelled, {
+  await t.withIdentity(adminIdentity).mutation(api.shippingRecaps.markCancelled, {
     recapId: recap._id,
     reason: "Test cancel",
   });
@@ -178,14 +180,16 @@ test("undoCancelled bumps rollup back to closings: 1, cancelled: 0", async () =>
   const recap = await t.run(async (ctx) =>
     ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", "6281000000013")).first());
 
+  if (!recap) throw new Error("recap not found");
+
   // Cancel
-  await t.withIdentity(adminIdentity).mutation(internal.shippingRecaps.markCancelled, {
+  await t.withIdentity(adminIdentity).mutation(api.shippingRecaps.markCancelled, {
     recapId: recap._id,
     reason: "Test cancel",
   });
 
   // Undo cancel using real mutation
-  await t.withIdentity(adminIdentity).mutation(internal.shippingRecaps.undoCancelled, {
+  await t.withIdentity(adminIdentity).mutation(api.shippingRecaps.undoCancelled, {
     recapId: recap._id,
   });
 
@@ -223,7 +227,7 @@ test("backfillCsNameByOrderIds bumps old and new csKey rows", async () => {
   });
 
   // Reassign to CS New using real mutation
-  await t.withIdentity(adminIdentity).mutation(internal.shippingRecaps.backfillCsNameByOrderIds, {
+  await t.withIdentity(adminIdentity).mutation(api.shippingRecaps.backfillCsNameByOrderIds, {
     orderIds: ["O-REASSIGN-1"],
     csName: "CS New",
   });
@@ -374,7 +378,7 @@ test("oldestWindowKey: returns correct window or null when empty", async () => {
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   // Empty case
-  const emptyResult = await t.withIdentity(adminIdentity).query(internal.rollups.oldestWindowKey);
+  const emptyResult = await t.withIdentity(adminIdentity).query(api.rollups.oldestWindowKey);
   expect(emptyResult).toBeNull();
 
   // Seed some orders
@@ -426,7 +430,7 @@ test("oldestWindowKey: returns correct window or null when empty", async () => {
   });
 
   // Query should return window A
-  const result = await t.withIdentity(adminIdentity).query(internal.rollups.oldestWindowKey);
+  const result = await t.withIdentity(adminIdentity).query(api.rollups.oldestWindowKey);
   expect(result).toBe(windowA);
 });
 
@@ -435,7 +439,7 @@ test("oldestWindowKey: rejects non-admin", async () => {
   const csIdentity = { subject: "u1", role: "cs" as const, name: "CS", email: "cs@w", csName: "Azelia" };
 
   await expect(
-    t.withIdentity(csIdentity).query(internal.rollups.oldestWindowKey)
+    t.withIdentity(csIdentity).query(api.rollups.oldestWindowKey)
   ).rejects.toThrow(/unauthorized|admin/);
 });
 
@@ -490,7 +494,7 @@ test("backfillRange: processes 2 seeded windows with nextFromKey null", async ()
   });
 
   // Backfill from A to B
-  const result = await t.withIdentity(adminIdentity).mutation(internal.rollups.backfillRange, {
+  const result = await t.withIdentity(adminIdentity).mutation(api.rollups.backfillRange, {
     fromKey: windowA,
     toKey: windowB,
   });
@@ -554,7 +558,7 @@ test("backfillRange: honors 40-window cap and returns nextFromKey", async () => 
   });
 
   // Backfill all 50 windows - should cap at 40 and return nextFromKey
-  const result = await t.withIdentity(adminIdentity).mutation(internal.rollups.backfillRange, {
+  const result = await t.withIdentity(adminIdentity).mutation(api.rollups.backfillRange, {
     fromKey: firstWindow,
     toKey: lastWindow,
   });
@@ -569,7 +573,7 @@ test("backfillRange: rejects non-admin", async () => {
   const csIdentity = { subject: "u1", role: "cs" as const, name: "CS", email: "cs@w", csName: "Azelia" };
 
   await expect(
-    t.withIdentity(csIdentity).mutation(internal.rollups.backfillRange, {
+    t.withIdentity(csIdentity).mutation(api.rollups.backfillRange, {
       fromKey: "2026-07-05",
       toKey: "2026-07-08",
     })
@@ -610,7 +614,7 @@ test("debugRollupParity: detects when rollup data matches fresh computation", as
   await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
 
   // Check parity - should return valid results without crashing
-  const result = await t.withIdentity(adminIdentity).query(internal.rollups.debugRollupParity, { windowKey: W });
+  const result = await t.withIdentity(adminIdentity).query(api.rollups.debugRollupParity, { windowKey: W });
 
   expect(result.windowKey).toBe(W);
   expect(Array.isArray(result.mismatches)).toBe(true);
@@ -661,7 +665,7 @@ test("debugRollupParity: detects corrupted rollup field", async () => {
   });
 
   // Check parity - should detect the corruption
-  const result = await t.withIdentity(adminIdentity).query(internal.rollups.debugRollupParity, { windowKey: W });
+  const result = await t.withIdentity(adminIdentity).query(api.rollups.debugRollupParity, { windowKey: W });
 
   expect(result.mismatches.length).toBeGreaterThan(0);
   const leadOrdersMismatch = result.mismatches.find((m: any) => m.field === "leadOrders");
@@ -713,7 +717,7 @@ test("debugRollupParity: detects corrupted csName field", async () => {
   });
 
   // Check parity - should detect the csName corruption
-  const result = await t.withIdentity(adminIdentity).query(internal.rollups.debugRollupParity, { windowKey: W });
+  const result = await t.withIdentity(adminIdentity).query(api.rollups.debugRollupParity, { windowKey: W });
 
   expect(result.mismatches.length).toBeGreaterThan(0);
   const csNameMismatch = result.mismatches.find((m: any) => m.field === "csName");
@@ -727,6 +731,6 @@ test("debugRollupParity: rejects non-admin", async () => {
   const csIdentity = { subject: "u1", role: "cs" as const, name: "CS", email: "cs@w", csName: "Azelia" };
 
   await expect(
-    t.withIdentity(csIdentity).query(internal.rollups.debugRollupParity, { windowKey: "2026-07-08" })
+    t.withIdentity(csIdentity).query(api.rollups.debugRollupParity, { windowKey: "2026-07-08" })
   ).rejects.toThrow(/unauthorized|admin/);
 });
