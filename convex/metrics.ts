@@ -4,7 +4,7 @@ import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
 import { dashboardSummaryFromRollups, trendFromRollups } from "./rollupReaders";
 
-export async function computeDashboardSummaryRaw(ctx: QueryCtx, args: { startAt: number; endAt: number; csName?: string }) {
+export async function computeDashboardSummaryRaw(ctx: QueryCtx, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
     const orders = await ctx.db.query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
@@ -33,9 +33,13 @@ export async function computeDashboardSummaryRaw(ctx: QueryCtx, args: { startAt:
     const handovers = new Set(
       events.filter((e) => !isInternalTestPhone(e.customerPhone ?? "")).map((e) => e.orderId ?? e.customerPhone ?? String(e._id)),
     ).size;
-    const activeChats = (await ctx.db.query("conversations")
-      .withIndex("by_status_updatedAt", (q) => q.eq("status", "active")).collect())
-      .filter((c) => !isInternalTestPhone(c.customerPhone) && csOk(c.assignedCsName)).length;
+    // activeChats scans the WHOLE active-conversation pool (unbounded by time). The dashboard
+    // does not render it, so only compute it when a caller explicitly asks (default off →
+    // skip the read entirely). A future CS-AI ops page can pass includeActiveChats: true.
+    const activeChats = args.includeActiveChats
+      ? (await ctx.db.query("conversations").withIndex("by_status_updatedAt", (q) => q.eq("status", "active")).collect())
+          .filter((c) => !isInternalTestPhone(c.customerPhone) && csOk(c.assignedCsName)).length
+      : 0;
 
     const leads = leadPhones.size;
     const closings = closingKeys.size;
@@ -56,7 +60,7 @@ export const getDashboardSummaryLegacy = internalQuery({
 export const getDashboardSummary = query({
   // raw=true → calendar-day / any-range raw computation (cheap for a small "today" slice);
   // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
-  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()) },
+  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()), includeActiveChats: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     await requireMember(ctx, "metrics.getDashboardSummary");
     return args.raw ? computeDashboardSummaryRaw(ctx, args) : dashboardSummaryFromRollups(ctx, args);

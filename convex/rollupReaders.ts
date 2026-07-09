@@ -299,7 +299,7 @@ export async function trendFromRollups(
 
 // ── 4. Dashboard Summary from Rollups ───────────────────────────────────────
 
-export async function dashboardSummaryFromRollups(ctx: any, args: { startAt: number; endAt: number; csName?: string }) {
+export async function dashboardSummaryFromRollups(ctx: any, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
   const key = args.csName ? csKeyOf(args.csName) : null;
   const keys = windowKeysForRange(args.startAt, args.endAt);
 
@@ -332,14 +332,13 @@ export async function dashboardSummaryFromRollups(ctx: any, args: { startAt: num
     .withIndex("by_type_createdAt", (q: any) => q.eq("type", "handover").gte("createdAt", args.startAt).lte("createdAt", args.endAt))
     .collect();
 
-  const conversations = await ctx.db
-    .query("conversations")
-    .withIndex("by_status_updatedAt", (q: any) => q.eq("status", "active"))
-    .collect();
-
   const csOk = (cs: string | undefined) => !key || csKeyOf(cs) === key;
   const handovers = new Set(events.filter((e: any) => csOk(e.customerPhone ?? "")).map((e: any) => e.orderId ?? e.customerPhone ?? String(e._id))).size;
-  const activeChats = conversations.filter((c: any) => csOk(c.assignedCsName)).length;
+  // activeChats scans the WHOLE active pool (unbounded) — only when a caller asks (default off).
+  const activeChats = args.includeActiveChats
+    ? (await ctx.db.query("conversations").withIndex("by_status_updatedAt", (q: any) => q.eq("status", "active")).collect())
+        .filter((c: any) => csOk(c.assignedCsName)).length
+    : 0;
 
   return {
     leads,
