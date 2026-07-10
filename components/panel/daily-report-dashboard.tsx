@@ -110,9 +110,13 @@ export function DailyReportDashboard() {
   for (const r of respData?.cs ?? []) if (!respByCs.has(csKey(r.csName))) respByCs.set(csKey(r.csName), r);
 
   const slaBreaches = respData?.overall?.slaBreaches ?? 0;
+  // Flag by breach RATE (breaches ÷ measured first-replies), not absolute count — otherwise
+  // the busiest CS gets smeared just for handling the most chats. Floor the sample at 5
+  // first-replies (matching QUEEN_MIN_RESP) so a 1/1 micro-sample can't top the list.
   const worstSla = (respData?.cs ?? [])
-    .filter((c) => c.slaBreaches > 0)
-    .sort((a, b) => b.slaBreaches - a.slaBreaches)[0];
+    .filter((c) => c.slaBreaches > 0 && c.firstReplyCount >= 5)
+    .map((c) => ({ csName: c.csName, ratePct: Math.round((c.slaBreaches / c.firstReplyCount) * 100) }))
+    .sort((a, b) => b.ratePct - a.ratePct)[0];
 
   // Open-date label = the day the window OPENS (= rawWindow.startAt's WIB date), not endAt (next day).
   const label = wibDateParts(rawWindow.startAt);
@@ -331,7 +335,7 @@ export function DailyReportDashboard() {
             </div>
           ) : (
             <div className="space-y-4">
-              {!scopedView && <InfoStrip dup={totalDuplicates} sla={slaBreaches} worstSla={worstSla?.csName} loading={respData === undefined} />}
+              {!scopedView && <InfoStrip dup={totalDuplicates} sla={slaBreaches} worstSla={worstSla} loading={respData === undefined} />}
               {/* grid-cols-1 (minmax(0,1fr)) so long product names can't stretch the column past the phone viewport */}
               <div data-capture-grid="cards" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((c) => (
@@ -370,7 +374,7 @@ export function DailyReportDashboard() {
 }
 
 // Lean one-line summary: order-double + SLA status (detail lives in each CS card).
-function InfoStrip({ dup, sla, worstSla, loading }: { dup: number; sla: number; worstSla?: string; loading: boolean }) {
+function InfoStrip({ dup, sla, worstSla, loading }: { dup: number; sla: number; worstSla?: { csName: string; ratePct: number }; loading: boolean }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-border bg-card/40 px-3 py-2 text-xs">
       {dup > 0 ? (
@@ -400,7 +404,7 @@ function InfoStrip({ dup, sla, worstSla, loading }: { dup: number; sla: number; 
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">
               <Clock className="size-3.5 shrink-0 text-destructive" />
               <span className="font-semibold text-destructive">{sla}</span> chat lewat SLA
-              <span className="text-muted-foreground/80">(&gt;15m{worstSla ? ` · terbanyak ${worstSla}` : ''})</span>
+              <span className="text-muted-foreground/80">(&gt;15m{worstSla ? ` · rawan ${worstSla.csName} ${worstSla.ratePct}%` : ''})</span>
             </span>
           ) : (
             <span className="inline-flex items-center gap-1.5 text-muted-foreground">

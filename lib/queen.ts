@@ -7,13 +7,15 @@
 //     differentiating and the race collapsed to CR-only). Proportional-to-best is
 //     self-tuning at any volume, always rewards the top closer fully, and never
 //     zeroes anyone.
-//   - Speed (15): PERFECT-THEN-PENALTY, not a race. Owner's rule: "under 5 menit
-//     perfect, di atas itu baru ada penalti" (SOP breach = 10 min). So any median at/
-//     under 5 min earns FULL points — the whole team normally sits here, so they're
-//     equal — then a linear penalty grows past 5 min, hitting 50 at the 10-min SOP line
-//     and 0 by 15 min. Answering in 1 min vs 4 min no longer decides the crown (both
-//     perfect); speed only bites when someone drifts slow. This lets CR (the allocation-
-//     neutral efficiency metric) be the real differentiator when the team is uniformly fast.
+//   - Speed (15): PERFECT-THEN-PENALTY, not a race. Owner's rule (revised 2026-07-09):
+//     "di bawah 10 menit masih full poin, di atas itu baru mulai punish — biar nggak jadi
+//     lomba respon, bikin burnout." So any median at/under 10 min (the team's SOP) earns
+//     FULL points, then a linear penalty runs from the 10-min line down to 0 at 15 min
+//     (zero-line kept at 15 — same floor as before, just a narrower/steeper penalty band
+//     now that the perfect zone widened from 5 to 10). Answering in 1 min vs 9 min no
+//     longer decides the crown (both perfect); speed only bites once someone is actually
+//     over SOP. This lets CR (the allocation-neutral efficiency metric) be the real
+//     differentiator when the team is uniformly within SOP.
 // No framework imports -> runs plain in vitest.
 
 export type QueenInput = {
@@ -36,8 +38,8 @@ export const QUEEN_MIN_RESP = 5; //  enough first-replies for a fair speed score
 export const QUEEN_TARGETS = {
   crFloor: 40, // CR%: <=40 -> 0 pts
   crCeil: 80, //  CR%: >=80 -> 100 pts
-  speedPerfectMin: 5, // active-hours median: <=5 min -> full 100 pts (team norm = all equal)
-  speedZeroMin: 15, // >=15 min -> 0 pts; linear penalty between (50 pts at the 10-min SOP line)
+  speedPerfectMin: 10, // active-hours median: <=10 min (SOP) -> full 100 pts
+  speedZeroMin: 15, // >=15 min -> 0 pts; linear penalty runs from the 10-min SOP line to 0 here
 };
 
 const clamp100 = (x: number) => Math.max(0, Math.min(100, x));
@@ -71,7 +73,7 @@ export function computeQueenScores(
   const scored = rows.map((r) => {
     const crPts = clamp100(((r.cr - T.crFloor) / (T.crCeil - T.crFloor)) * 100);
     const closePts = closeBench > 0 ? clamp100((r.closings / closeBench) * 100) : 0;
-    // Perfect at/under 5 min, then a linear penalty grows toward 0 at 15 min.
+    // Perfect at/under 10 min (SOP), then a linear penalty grows toward 0 at 15 min.
     // No/low speed sample -> 0 points (can't credit unmeasured responsiveness).
     const hasSpeed = r.respCount >= minRespCount && r.respMedianMs != null;
     const speedMin = hasSpeed ? (r.respMedianMs as number) / 60000 : Infinity;
