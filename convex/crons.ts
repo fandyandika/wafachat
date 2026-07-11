@@ -29,7 +29,7 @@ crons.interval(
 
 crons.interval(
   "berdu order reconciler",
-  { minutes: 5 },
+  { minutes: 15 }, // safety net only (primary = Berdu webhook, real-time); 15m worst-case heal, ~3x less counter-scan I/O
   internal.ingest.reconciler.runReconcile,
   {},
 );
