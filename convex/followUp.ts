@@ -5,6 +5,7 @@ import { csKey, isInternalTestPhone, normalizeCsName } from "./lib";
 import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
 import { internal } from "./_generated/api";
 import { followUpEffectivenessFromRollups } from "./rollupReaders";
+import { getInternalPhoneSet } from "./orgSettings";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
@@ -40,6 +41,7 @@ export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: a
 // nowOverride is test-only (Date.now() is unavailable in some runtimes); prod passes nothing.
 // Shared by the guarded panel query AND the identity-less cron sweep (autoFollowUp).
 async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowOverride?: number }) {
+    const internalPhones = await getInternalPhoneSet(ctx);
     const now = args.nowOverride ?? Date.now();
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
 
@@ -56,7 +58,7 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
       )
     ).flat();
     const open = recent
-      .filter((c) => !isInternalTestPhone(c.customerPhone))
+      .filter((c) => !isInternalTestPhone(c.customerPhone, internalPhones))
       .filter((c) => (csKeyMemo ? csKey(c.assignedCsName) === csKeyMemo : true));
 
     // Latest message per conversation -> keep only GHOSTED ones (last message outbound), which bounds the heavier lookups.
@@ -318,6 +320,7 @@ export const getArchivedFollowUps = query({
   args: { csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await requireMember(ctx, "followUp.getArchivedFollowUps");
+    const internalPhones = await getInternalPhoneSet(ctx);
     const now = Date.now();
     const DAY = 86_400_000;
     const since = now - 14 * DAY;
@@ -333,7 +336,7 @@ export const getArchivedFollowUps = query({
 
     const filtered = archived
       .filter((c) => c.followUpArchivedAt != null)
-      .filter((c) => !isInternalTestPhone(c.customerPhone))
+      .filter((c) => !isInternalTestPhone(c.customerPhone, internalPhones))
       .filter((c) => (csKeyMemo ? csKey(c.assignedCsName) === csKeyMemo : true));
 
     type ArchivedRow = {
@@ -409,6 +412,7 @@ export const getAutoFollowUp = query({
 export const getFollowUpEffectivenessLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const internalPhones = await getInternalPhoneSet(ctx);
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
     const recaps = await ctx.db
       .query("shippingRecaps")
@@ -418,7 +422,7 @@ export const getFollowUpEffectivenessLegacy = internalQuery({
     // Exclude cancelled, internal-test, scope by csName.
     const filtered = recaps
       .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export")
-      .filter((r) => !isInternalTestPhone(r.customerPhone))
+      .filter((r) => !isInternalTestPhone(r.customerPhone, internalPhones))
       .filter((r) => (csKeyMemo ? csKey(r.csName) === csKeyMemo : true));
 
     const totalClosings = filtered.length;
@@ -454,6 +458,7 @@ export const getClosedFollowUps = query({
   args: { csName: v.optional(v.string()), sinceDays: v.optional(v.number()), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
     await requireMember(ctx, "followUp.getClosedFollowUps");
+    const internalPhones = await getInternalPhoneSet(ctx);
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
     const since = now - (args.sinceDays ?? 7) * DAY;
@@ -466,7 +471,7 @@ export const getClosedFollowUps = query({
 
     const filtered = recaps
       .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export")
-      .filter((r) => !isInternalTestPhone(r.customerPhone))
+      .filter((r) => !isInternalTestPhone(r.customerPhone, internalPhones))
       .filter((r) => (csKeyMemo ? csKey(r.csName) === csKeyMemo : true));
 
     type ClosedRow = {

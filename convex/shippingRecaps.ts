@@ -6,6 +6,7 @@ import { isInternalTestPhone, csKey, canonicalizeProduct as canonicalizeProductL
 import { getActiveClosingPhrases } from "./closingRules";
 import { bumpForOrderDoc, bumpForRecapDoc, computeRollupRow } from "./rollups";
 import { performanceFromRollups } from "./rollupReaders";
+import { getInternalPhoneSet } from "./orgSettings";
 
 // Re-export from lib for backward compatibility
 export const canonicalizeProduct = canonicalizeProductLib;
@@ -692,6 +693,7 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     await requireMember(ctx, "shippingRecaps.list");
+    const internalPhones = await getInternalPhoneSet(ctx);
     const rows = args.status
       ? await ctx.db
           .query("shippingRecaps")
@@ -707,7 +709,7 @@ export const list = query({
           .collect();
     const search = String(args.search ?? "").trim().toLowerCase();
     return rows
-      .filter((row) => !isInternalTestPhone(row.customerPhone))
+      .filter((row) => !isInternalTestPhone(row.customerPhone, internalPhones))
       .filter((row) => !args.csName || csKey(row.csName) === csKey(args.csName))
       .filter((row) => !args.paymentMethod || row.paymentMethod === args.paymentMethod)
       .filter((row) => {
@@ -736,6 +738,7 @@ export const getCounts = query({
   },
   handler: async (ctx, args) => {
     await requireMember(ctx, "shippingRecaps.getCounts");
+    const internalPhones = await getInternalPhoneSet(ctx);
     const rows = await ctx.db
       .query("shippingRecaps")
       .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
@@ -743,7 +746,7 @@ export const getCounts = query({
 
     const filtered = rows.filter(
       (row) =>
-        !isInternalTestPhone(row.customerPhone) &&
+        !isInternalTestPhone(row.customerPhone, internalPhones) &&
         (!args.csName || csKey(row.csName) === csKey(args.csName)),
     );
 
@@ -1285,6 +1288,7 @@ export const getPerformanceLegacy = internalQuery({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const internalPhones = await getInternalPhoneSet(ctx);
     const key = args.csName ? csKey(args.csName) : null;
     const orders = await ctx.db
       .query("orders")
@@ -1298,17 +1302,17 @@ export const getPerformanceLegacy = internalQuery({
       .collect();
 
     const realOrders = orders.filter(
-      (order) => !isInternalTestPhone(order.customerPhone) && (!key || csKey(order.assignedCsName) === key),
+      (order) => !isInternalTestPhone(order.customerPhone, internalPhones) && (!key || csKey(order.assignedCsName) === key),
     );
     const validCandidateRows = recaps.filter(
       (row) =>
         row.status !== "cancelled" &&
         row.status !== "cancelled_after_export" &&
         (!key || csKey(row.csName) === key) &&
-        !isInternalTestPhone(row.customerPhone),
+        !isInternalTestPhone(row.customerPhone, internalPhones),
     );
     const totalDelivered = recaps.filter(
-      (row) => row.status === "delivered" && (!key || csKey(row.csName) === key) && !isInternalTestPhone(row.customerPhone),
+      (row) => row.status === "delivered" && (!key || csKey(row.csName) === key) && !isInternalTestPhone(row.customerPhone, internalPhones),
     ).length;
     const validClosingRows = validCandidateRows;
     const latestOrderByPhone = new Map<string, Doc<"orders">>();
@@ -1420,7 +1424,7 @@ export const getPerformanceLegacy = internalQuery({
         (row) =>
           (row.status === "cancelled" || row.status === "cancelled_after_export") &&
           (!args.csName || csKey(row.csName) === csKey(args.csName)) &&
-          !isInternalTestPhone(row.customerPhone),
+          !isInternalTestPhone(row.customerPhone, internalPhones),
       ).length,
       products: Array.from(productMap.values()).map((row) => ({
         ...row,

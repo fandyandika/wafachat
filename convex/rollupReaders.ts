@@ -1,6 +1,7 @@
 import { windowKeyFor, windowRangeForKey, csKey as csKeyOf, getJakartaDate, normalizePhone, isInternalTestPhone, canonicalizeProduct } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile } from "./responseTimeMath";
+import { getInternalPhoneSet } from "./orgSettings";
 
 /**
  * Rollup Reader Module
@@ -438,6 +439,7 @@ export async function productDifficultyFromRollups(
   // because the rollups byProduct counts distinct customers, not raw orders.
   // getProductDifficulty needs raw order counts per product.
 
+  const internalPhones = await getInternalPhoneSet(ctx);
   const key = args.csName ? csKeyOf(args.csName) : null;
   const minLeads = args.minLeads ?? 3;
   const len = args.endAt - args.startAt;
@@ -447,11 +449,11 @@ export async function productDifficultyFromRollups(
   const aggregateFromRawTables = async (startAt: number, endAt: number) => {
     const orders = (
       await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-    ).filter((o: any) => !isInternalTestPhone(o.customerPhone) && (!key || csKeyOf(o.assignedCsName) === key));
+    ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKeyOf(o.assignedCsName) === key));
 
     const recaps = (
       await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-    ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone) && (!key || csKeyOf(r.csName) === key));
+    ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKeyOf(r.csName) === key));
 
     const leads = new Map<string, number>();
     const closings = new Map<string, Set<string>>();
@@ -622,6 +624,7 @@ export async function performanceFromRollups(
   ctx: any,
   args: { startAt: number; endAt: number; includeInferredDiscount?: boolean; csName?: string }
 ) {
+  const internalPhones = await getInternalPhoneSet(ctx);
   const key = args.csName ? csKeyOf(args.csName) : null;
   const keys = windowKeysForRange(args.startAt, args.endAt);
 
@@ -669,8 +672,8 @@ export async function performanceFromRollups(
     .withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
     .collect();
 
-  const realOrders = orders.filter((o: any) => !isInternalTestPhone(o.customerPhone) && (!key || csKeyOf(o.assignedCsName) === key));
-  const validCandidateRows = recaps.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && (!key || csKeyOf(r.csName) === key) && !isInternalTestPhone(r.customerPhone));
+  const realOrders = orders.filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKeyOf(o.assignedCsName) === key));
+  const validCandidateRows = recaps.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && (!key || csKeyOf(r.csName) === key) && !isInternalTestPhone(r.customerPhone, internalPhones));
 
   // Deduplicate recaps by (orderIdBerdu || phone), keeping latest by closedAt
   const latestClosingByKey = new Map<string, any>();

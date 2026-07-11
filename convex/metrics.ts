@@ -3,8 +3,10 @@ import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
 import { dashboardSummaryFromRollups, trendFromRollups } from "./rollupReaders";
+import { getInternalPhoneSet } from "./orgSettings";
 
 export async function computeDashboardSummaryRaw(ctx: QueryCtx, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
+    const internalPhones = await getInternalPhoneSet(ctx);
     const orders = await ctx.db.query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
@@ -18,27 +20,27 @@ export async function computeDashboardSummaryRaw(ctx: QueryCtx, args: { startAt:
     const key = args.csName ? csKey(args.csName) : null;
     const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
     const leadPhones = new Set(
-      orders.filter((o) => !isInternalTestPhone(o.customerPhone) && csOk(o.assignedCsName))
+      orders.filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones) && csOk(o.assignedCsName))
         .map((o) => normalizePhone(o.customerPhone)),
     );
     const validRecaps = recaps.filter(
       (r) => r.status !== "cancelled" && r.status !== "cancelled_after_export" &&
-        !isInternalTestPhone(r.customerPhone) && csOk(r.csName),
+        !isInternalTestPhone(r.customerPhone, internalPhones) && csOk(r.csName),
     );
     const closingKeys = new Set(validRecaps.map((r) => r.orderIdBerdu || normalizePhone(r.customerPhone)));
     const cancelled = recaps.filter(
       (r) => (r.status === "cancelled" || r.status === "cancelled_after_export") &&
-        !isInternalTestPhone(r.customerPhone) && csOk(r.csName),
+        !isInternalTestPhone(r.customerPhone, internalPhones) && csOk(r.csName),
     ).length;
     const handovers = new Set(
-      events.filter((e) => !isInternalTestPhone(e.customerPhone ?? "")).map((e) => e.orderId ?? e.customerPhone ?? String(e._id)),
+      events.filter((e) => !isInternalTestPhone(e.customerPhone ?? "", internalPhones)).map((e) => e.orderId ?? e.customerPhone ?? String(e._id)),
     ).size;
     // activeChats scans the WHOLE active-conversation pool (unbounded by time). The dashboard
     // does not render it, so only compute it when a caller explicitly asks (default off →
     // skip the read entirely). A future CS-AI ops page can pass includeActiveChats: true.
     const activeChats = args.includeActiveChats
       ? (await ctx.db.query("conversations").withIndex("by_status_updatedAt", (q) => q.eq("status", "active")).collect())
-          .filter((c) => !isInternalTestPhone(c.customerPhone) && csOk(c.assignedCsName)).length
+          .filter((c) => !isInternalTestPhone(c.customerPhone, internalPhones) && csOk(c.assignedCsName)).length
       : 0;
 
     const leads = leadPhones.size;
@@ -83,15 +85,16 @@ export const getTrendLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(),
     bucket: v.union(v.literal("day"), v.literal("week"), v.literal("month")), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const internalPhones = await getInternalPhoneSet(ctx);
     const key = args.csName ? csKey(args.csName) : null;
     const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
     const orders = (await ctx.db.query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect())
-      .filter((o) => !isInternalTestPhone(o.customerPhone) && csOk(o.assignedCsName));
+      .filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones) && csOk(o.assignedCsName));
     const recaps = (await ctx.db.query("shippingRecaps")
       .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt)).collect())
       .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export" &&
-        !isInternalTestPhone(r.customerPhone) && csOk(r.csName));
+        !isInternalTestPhone(r.customerPhone, internalPhones) && csOk(r.csName));
     const leadSets = new Map<string, Set<string>>();
     const closeSets = new Map<string, Set<string>>();
     const add = (m: Map<string, Set<string>>, k: string, v2: string) => {
@@ -121,13 +124,14 @@ export const getDuplicateOrders = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await requireMember(ctx, "metrics.getDuplicateOrders");
+    const internalPhones = await getInternalPhoneSet(ctx);
     const key = args.csName ? csKey(args.csName) : null;
     const orders = (
       await ctx.db
         .query("orders")
         .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
         .collect()
-    ).filter((o) => !isInternalTestPhone(o.customerPhone) && (!key || csKey(o.assignedCsName) === key));
+    ).filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
 
     const groups = new Map<string, typeof orders>();
     for (const o of orders) {
@@ -199,12 +203,13 @@ export const debugOrderReconcile = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "metrics.debugOrderReconcile");
+    const internalPhones = await getInternalPhoneSet(ctx);
     const orders = await ctx.db
       .query("orders")
       .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
-    const excluded = orders.filter((o) => isInternalTestPhone(o.customerPhone));
-    const valid = orders.filter((o) => !isInternalTestPhone(o.customerPhone));
+    const excluded = orders.filter((o) => isInternalTestPhone(o.customerPhone, internalPhones));
+    const valid = orders.filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones));
     const distinctValid = new Set(valid.map((o) => normalizePhone(o.customerPhone))).size;
     return {
       rawOrders: orders.length,

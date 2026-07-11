@@ -5,16 +5,18 @@ import { isInternalTestPhone, csKey } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile, pairResponseEvents, isSlaBreach, type RtMessage } from "./responseTimeMath";
 import { responseTimesFromSamples } from "./rollupReaders";
+import { getInternalPhoneSet } from "./orgSettings";
 
 export const getResponseTimesLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const internalPhones = await getInternalPhoneSet(ctx);
     const msgs = (
       await ctx.db
         .query("messages")
         .withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
         .collect()
-    ).filter((m: any) => !isInternalTestPhone(m.customerPhone));
+    ).filter((m: any) => !isInternalTestPhone(m.customerPhone, internalPhones));
 
     // Group by conversation, preserving ascending createdAt order (index already ascending).
     const byConv = new Map<string, RtMessage[]>();

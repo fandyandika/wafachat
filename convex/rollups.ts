@@ -5,6 +5,7 @@ import { requireAdmin } from "./authz";
 import { csKey as csKeyOf, isInternalTestPhone, normalizePhone, windowKeyFor, windowRangeForKey, windowKeyToday } from "./lib";
 import { canonicalizeProduct } from "./shippingRecaps";
 import { pairResponsePairs, isSlaBreach, type RtMessage } from "./responseTimeMath";
+import { getInternalPhoneSet } from "./orgSettings";
 
 const PRODUCT_CAP = 50;
 // Production showed 40 windows exceeded Convex mutation limits.
@@ -33,6 +34,7 @@ export type RollupValues = {
 };
 
 export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey: string): Promise<RollupValues | null> {
+  const internalPhones = await getInternalPhoneSet(ctx);
   const { startAt, endAt } = windowRangeForKey(windowKey);
 
   // Fetch THIS CS's orders in the window via the csKey index — a per-CS slice, not the
@@ -41,14 +43,14 @@ export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey:
     await ctx.db.query("orders")
       .withIndex("by_csKey_createdAt", (q: any) => q.eq("csKey", csKeyArg).gte("createdAt", startAt).lte("createdAt", endAt))
       .collect()
-  ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
+  ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
 
   // Fetch THIS CS's recaps in the window in ONE read; split active vs cancelled in memory.
   const recapsAll = (
     await ctx.db.query("shippingRecaps")
       .withIndex("by_csKey_closedAt", (q: any) => q.eq("csKey", csKeyArg).gte("closedAt", startAt).lte("closedAt", endAt))
       .collect()
-  ).filter((r: any) => !isInternalTestPhone(r.customerPhone));
+  ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
   const recaps = recapsAll.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export");
   const allCancelled = recapsAll.filter((r: any) => r.status === "cancelled" || r.status === "cancelled_after_export");
 
@@ -262,13 +264,14 @@ export async function bumpForRecapDoc(ctx: any, before: any | null, after: any |
 }
 
 export async function recomputeWindowImpl(ctx: any, windowKey: string): Promise<number> {
+  const internalPhones = await getInternalPhoneSet(ctx);
   const { startAt, endAt } = windowRangeForKey(windowKey);
   const keys = new Set<string>();
 
   // Collect csKeys from orders in the window
   const orders = (
     await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-  ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
+  ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
   for (const o of orders) {
     // Self-heal: stamp csKey if a doc predates the field or a write site missed it.
     // No-op in prod (backfill + write-path guarantee csKey); keeps the by_csKey_* reads
@@ -280,7 +283,7 @@ export async function recomputeWindowImpl(ctx: any, windowKey: string): Promise<
   // Collect csKeys from recaps in the window (including orphan attribution)
   const recaps = (
     await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-  ).filter((r: any) => !isInternalTestPhone(r.customerPhone));
+  ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
   for (const r of recaps) {
     if (r.csKey === undefined) await ctx.db.patch(r._id, { csKey: csKeyOf(r.csName) });
     keys.add(csKeyOf(r.csName));
@@ -311,6 +314,7 @@ export const recomputeWindow = internalMutation({
 });
 
 export async function rebuildSamplesForWindowImpl(ctx: any, windowKey: string): Promise<number> {
+  const internalPhones = await getInternalPhoneSet(ctx);
   const { startAt, endAt } = windowRangeForKey(windowKey);
 
   // Delete all responseSamples in this window
@@ -327,7 +331,7 @@ export async function rebuildSamplesForWindowImpl(ctx: any, windowKey: string): 
       .query("messages")
       .withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt))
       .collect()
-  ).filter((m: any) => !isInternalTestPhone(m.customerPhone));
+  ).filter((m: any) => !isInternalTestPhone(m.customerPhone, internalPhones));
 
   // Group by conversation, preserving ascending createdAt order
   const byConv = new Map<string, RtMessage[]>();
@@ -496,6 +500,7 @@ export const debugRollupParity = query({
   args: { windowKey: v.string() },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "rollups.debugRollupParity");
+    const internalPhones = await getInternalPhoneSet(ctx);
 
     const { startAt, endAt } = windowRangeForKey(args.windowKey);
     const mismatches: Array<{ csKey: string; field: string; stored: any; fresh: any }> = [];
@@ -506,7 +511,7 @@ export const debugRollupParity = query({
     // From orders
     const orders = (
       await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-    ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
+    ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
     for (const o of orders) {
       keys.add(csKeyOf(o.assignedCsName));
     }
@@ -514,7 +519,7 @@ export const debugRollupParity = query({
     // From recaps
     const recaps = (
       await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-    ).filter((r: any) => !isInternalTestPhone(r.customerPhone));
+    ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
     for (const r of recaps) {
       keys.add(csKeyOf(r.csName));
     }

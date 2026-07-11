@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct, startOfJakartaDayMs } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRollups, periodReportFromRollups } from "./rollupReaders";
+import { getInternalPhoneSet } from "./orgSettings";
 
 // leads/closedCust are keyed by customer PHONE (unique customers); closings by ORDER
 // (orderIdBerdu) — order-level is right for volume + revenue (a double-ordering customer
@@ -12,13 +13,14 @@ import { dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRo
 type CsAgg = { leads: Set<string>; closings: Set<string>; closedCust: Set<string>; revenue: number; rawCounts: Map<string, number> };
 
 async function computeCsAgg(ctx: any, startAt: number, endAt: number, csName?: string): Promise<Map<string, CsAgg>> {
+  const internalPhones = await getInternalPhoneSet(ctx);
   const key = csName ? csKey(csName) : null;
   const orders = (
     await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-  ).filter((o: any) => !isInternalTestPhone(o.customerPhone) && (!key || csKey(o.assignedCsName) === key));
+  ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
   const recaps = (
     await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone) && (!key || csKey(r.csName) === key));
+  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKey(r.csName) === key));
 
   // Group by csKey so a CS's raw name-forms ("Aisyah"/"CS Aisyah") merge into one row.
   const map = new Map<string, CsAgg>();
@@ -87,13 +89,14 @@ export const getCsLeaderboard = query({
 });
 
 async function computeProductAgg(ctx: any, startAt: number, endAt: number, csName?: string) {
+  const internalPhones = await getInternalPhoneSet(ctx);
   const key = csName ? csKey(csName) : null;
   const orders = (
     await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-  ).filter((o: any) => !isInternalTestPhone(o.customerPhone) && (!key || csKey(o.assignedCsName) === key));
+  ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
   const recaps = (
     await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone) && (!key || csKey(r.csName) === key));
+  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKey(r.csName) === key));
 
   const leads = new Map<string, number>();
   const closings = new Map<string, Set<string>>();
@@ -168,6 +171,7 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
 export const getPeriodReportLegacy = internalQuery({
   args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const internalPhones = await getInternalPhoneSet(ctx);
     const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
     const cur = await computeCsAgg(ctx, start, end, args.csName);
@@ -186,7 +190,7 @@ export const getPeriodReportLegacy = internalQuery({
     const curT = totals(cur), prevT = totals(prev);
     const cancelled = (
       await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", start).lte("closedAt", end)).collect()
-    ).filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && !isInternalTestPhone(r.customerPhone)).length;
+    ).filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && !isInternalTestPhone(r.customerPhone, internalPhones)).length;
     const perCs = Array.from(cur.values())
       .map((a) => ({ csName: aggName(a), leads: a.leads.size, closings: a.closings.size, cr: cr(a.closedCust.size, a.leads.size), revenue: a.revenue }))
       .sort((a, b) => b.closings - a.closings);
@@ -226,17 +230,18 @@ export const getCsDetail = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.string() },
   handler: async (ctx, args) => {
     await requireMember(ctx, "analytics.getCsDetail");
+    const internalPhones = await getInternalPhoneSet(ctx);
     const k = csKey(args.csName);
     const BOUNDARY_MS = 6 * 60 * 60 * 1000; // neighbor-period peek on each side
 
     const orders = (
       await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
-    ).filter((o: any) => !isInternalTestPhone(o.customerPhone) && csKey(o.assignedCsName) === k);
+    ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && csKey(o.assignedCsName) === k);
 
     // One index read covers the window AND both boundary peeks.
     const recapsAll = (
       await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", args.startAt - BOUNDARY_MS).lte("closedAt", args.endAt + BOUNDARY_MS)).collect()
-    ).filter((r: any) => !isInternalTestPhone(r.customerPhone) && csKey(r.csName) === k);
+    ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones) && csKey(r.csName) === k);
 
     const inWin = (r: any) => r.closedAt >= args.startAt && r.closedAt <= args.endAt;
     const isCancelled = (s: string) => s === "cancelled" || s === "cancelled_after_export";
@@ -320,12 +325,13 @@ export const getCsDetail = query({
 // rules exactly (so totals match the Performance page), adding discount + per-CS×product
 // nesting + a duplicate-phone count (a judging aid for the CS-reported "Mis Rep").
 export async function computeDailyReportRaw(ctx: any, startAt: number, endAt: number) {
+    const internalPhones = await getInternalPhoneSet(ctx);
     const orders = (
       await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-    ).filter((o: any) => !isInternalTestPhone(o.customerPhone));
+    ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
     const recaps = (
       await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-    ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone));
+    ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones));
 
     // Resolve a closing's product to the matched in-window order's name (anti-fragmentation),
     // falling back to the recap's own packageContent.
