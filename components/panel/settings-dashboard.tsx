@@ -21,6 +21,7 @@ type CsRow = {
   reportingEnabled: boolean;
   autoFollowUpEnabled?: boolean;
   isActive: boolean;
+  berduStaffIds?: string[];
 };
 
 function OrgSection() {
