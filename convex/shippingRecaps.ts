@@ -521,7 +521,7 @@ export function messageMatchesPhrase(content: string, phrases: string[]): boolea
 export async function upsertRecapFromMessage(
   ctx: any,
   message: { orderId?: string; customerPhone: string; content: string; externalMessageId?: string; _id: any; createdAt: number },
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; orgId?: Id<"organizations"> | null },
 ): Promise<{ recapId: Id<"shippingRecaps">; action: "created" | "updated" | "skipped" }> {
   const order = await findOrder(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
   const conversation = await findConversation(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
@@ -577,7 +577,7 @@ export async function upsertRecapFromMessage(
     await bumpForRecapDoc(ctx, before, after);
     return { recapId: existing._id, action: "updated" };
   }
-  const recapId = await ctx.db.insert("shippingRecaps", { ...payload, version: 1, createdAt: Date.now() });
+  const recapId = await ctx.db.insert("shippingRecaps", { ...payload, version: 1, createdAt: Date.now(), orgId: opts?.orgId ?? undefined });
   const after = await ctx.db.get(recapId);
   await bumpForRecapDoc(ctx, null, after);
   return { recapId, action: "created" };

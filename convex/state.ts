@@ -14,6 +14,7 @@ import {
 } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 import { bumpForOrderDoc } from "./rollups";
+import { getDefaultOrgId } from "./orgs";
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.literal("closed"));
 
@@ -119,6 +120,7 @@ export const createTestConversation = mutation({
     const reportable = csConfig.isActive && csConfig.reportingEnabled;
     const aiEligible = reportable && csConfig.aiAssistantEnabled;
 
+    const orgId = await getDefaultOrgId(ctx);
     const existingCustomer = await ctx.db
       .query("customers")
       .withIndex("by_phone", (q) => q.eq("phone", phone))
@@ -126,7 +128,7 @@ export const createTestConversation = mutation({
     if (existingCustomer) {
       await ctx.db.patch(existingCustomer._id, { lastSeenAt: now });
     } else {
-      await ctx.db.insert("customers", { phone, name: "Test Customer", firstSeenAt: now, lastSeenAt: now });
+      await ctx.db.insert("customers", { phone, name: "Test Customer", firstSeenAt: now, lastSeenAt: now, orgId: orgId ?? undefined });
     }
 
     await ctx.db.insert("orders", {
@@ -147,6 +149,7 @@ export const createTestConversation = mutation({
       aiEligible,
       createdAt: now,
       updatedAt: now,
+      orgId: orgId ?? undefined,
     });
     const insertedOrder = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderId)).unique();
     await bumpForOrderDoc(ctx, null, insertedOrder);
@@ -161,6 +164,7 @@ export const createTestConversation = mutation({
       note: "",
       createdAt: now,
       updatedAt: now,
+      orgId: orgId ?? undefined,
     });
 
     return { success: true, phone, orderId, conversationId, aiEnabled: aiEligible, csName };
@@ -240,6 +244,7 @@ export async function upsertOrderCore(
     shippingCity?: string;
     order_id?: string;
     createdAt?: number;
+    orgId?: Id<"organizations"> | null;
   },
 ) {
   const now = Date.now();
@@ -266,6 +271,7 @@ export async function upsertOrderCore(
       name: customerName,
       firstSeenAt: now,
       lastSeenAt: now,
+      orgId: args.orgId ?? undefined,
     });
   }
 
@@ -303,7 +309,7 @@ export async function upsertOrderCore(
     const after = await ctx.db.get(existingOrder._id);
     await bumpForOrderDoc(ctx, before, after);
   } else {
-    await ctx.db.insert("orders", { ...orderPayload, createdAt: args.createdAt ?? now });
+    await ctx.db.insert("orders", { ...orderPayload, createdAt: args.createdAt ?? now, orgId: args.orgId ?? undefined });
     const after = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderId)).unique();
     await bumpForOrderDoc(ctx, null, after);
   }
@@ -338,6 +344,7 @@ export async function upsertOrderCore(
         note: "",
         createdAt: args.createdAt ?? now,
         updatedAt: now,
+        orgId: args.orgId ?? undefined,
       });
     }
 
@@ -361,6 +368,7 @@ export async function upsertOrderCore(
       csName: args.csName,
     },
     createdAt: now,
+    orgId: args.orgId ?? undefined,
   });
 
   return { success: true, phone, orderId, aiEligible, reportable, conversationId };
@@ -383,7 +391,10 @@ export const upsertOrderFromN8n = internalMutation({
     order_id: v.optional(v.string()),
     createdAt: v.optional(v.number()),
   },
-  handler: async (ctx, args) => upsertOrderCore(ctx, args),
+  handler: async (ctx, args) => {
+    const orgId = await getDefaultOrgId(ctx);
+    return upsertOrderCore(ctx, { ...args, orgId });
+  },
 });
 
 // Reconciler support: list the present per-day order counters for a Berdu date

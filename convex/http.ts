@@ -229,6 +229,7 @@ http.route({
       rawHeaders: JSON.stringify(relevantHeaders),
       rawBody,
       signatureOk: sig.ok,
+      orgId: (source as any).orgId ?? undefined,
     });
     // Always-200 after capture: a processing bug must not make the vendor
     // count failures (that is what auto-disabled the subscription on 7 Jul).
@@ -271,6 +272,7 @@ http.route({
       sourceKey: source.sourceKey, kind: "lead.created",
       rawHeaders: JSON.stringify({ "content-type": request.headers.get("content-type") ?? "" }),
       rawBody: effectiveBody, signatureOk: sig.ok,
+      orgId: (source as any).orgId ?? undefined,
     });
     try {
       await ctx.runMutation(internal.ingest.core.processEvent, { eventId });
@@ -303,6 +305,7 @@ function genericIngestRoute(path: string, kind: "generic.message" | "generic.lea
         sourceKey: source.sourceKey, kind,
         rawHeaders: JSON.stringify({ "x-wafachat-source": sourceKey }),
         rawBody, signatureOk: sig.ok,
+        orgId: (source as any).orgId ?? undefined,
       });
       try {
         await ctx.runMutation(internal.ingest.core.processEvent, { eventId });

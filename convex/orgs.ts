@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation } from "./_generated/server";
+import { mutation, internalQuery } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { requireAdmin } from "./authz";
 import { loadOrgSettings } from "./orgSettings";
@@ -40,4 +40,9 @@ export const seedDefaultOrg = mutation({
     });
     return { seeded: true as const, orgId };
   },
+});
+
+export const defaultOrgIdInternal = internalQuery({
+  args: {},
+  handler: async (ctx) => getDefaultOrgId(ctx),
 });

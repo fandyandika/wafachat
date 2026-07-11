@@ -14,6 +14,7 @@ export const captureEvent = internalMutation({
     rawBody: v.string(),
     signatureOk: v.boolean(),
     replayOf: v.optional(v.id("ingestEvents")),
+    orgId: v.optional(v.id("organizations")), // copied from the source row by http routes / reconciler
   },
   handler: async (ctx, args) => {
     return ctx.db.insert("ingestEvents", { ...args, status: "received", receivedAt: Date.now() });

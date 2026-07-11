@@ -9,6 +9,7 @@ import { getActiveClosingPhrases } from "./closingRules";
 import { messageHasDoneMarker } from "./followUpMath";
 import { countFollowUpTouchesBeforeTime } from "./followUp";
 import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
+import { getDefaultOrgId } from "./orgs";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
   if (args.orderId) {
@@ -124,6 +125,7 @@ export type AppendMessageCoreArgs = {
   externalMessageId?: string;
   createdAt?: number;
   source?: string; // "n8n" (default) | "ingest"
+  orgId?: Id<"organizations"> | null;
 };
 
 export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
@@ -160,6 +162,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
       note: "created from webhook message",
       createdAt: now,
       updatedAt: now,
+      orgId: args.orgId ?? undefined,
     });
 
     conversation = await ctx.db.get(conversationId);
@@ -176,6 +179,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
         aiEnabled: false,
       },
       createdAt: now,
+      orgId: args.orgId ?? undefined,
     });
   }
 
@@ -191,6 +195,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     source: args.source ?? "n8n",
     externalMessageId: args.externalMessageId,
     createdAt,
+    orgId: args.orgId ?? undefined,
   });
 
   const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string; followUpStageOverride?: undefined; rtPendingInboundAt?: number | undefined } = {
@@ -223,6 +228,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
         inboundAt: conversation.rtPendingInboundAt,
         slaBreach: isSlaBreach(conversation.rtPendingInboundAt, createdAt),
         createdAt,
+        orgId: args.orgId ?? undefined,
       });
     } catch (e) {
       console.warn("[rt-sample] extraction failed; true-up will heal", (e as Error).message);
@@ -260,6 +266,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
       source: args.source ?? "n8n",
     },
     createdAt,
+    orgId: args.orgId ?? undefined,
   });
 
   let closingRecapId: Id<"shippingRecaps"> | undefined;
@@ -273,7 +280,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
         externalMessageId: args.externalMessageId,
         _id: messageId,
         createdAt,
-      });
+      }, { orgId: args.orgId });
       if (result.action !== "skipped") {
         closingRecapId = result.recapId;
 
@@ -295,6 +302,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
           actor: "n8n",
           metadata: { recapId: result.recapId, source: "auto_message", externalMessageId: args.externalMessageId },
           createdAt,
+          orgId: args.orgId ?? undefined,
         });
       }
     }
@@ -331,5 +339,8 @@ export const appendMessageFromN8n = internalMutation({
     externalMessageId: v.optional(v.string()),
     createdAt: v.optional(v.number()),
   },
-  handler: async (ctx, args) => appendMessageCore(ctx, args),
+  handler: async (ctx, args) => {
+    const orgId = await getDefaultOrgId(ctx);
+    return appendMessageCore(ctx, { ...args, orgId });
+  },
 });

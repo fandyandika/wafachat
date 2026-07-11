@@ -217,3 +217,43 @@ test("generic.lead validates required fields", async () => {
   const skipped = await asAdminT.query(api.ingest.events.listRecent, { status: "skipped" });
   expect(skipped[0].skipReason).toBe("missing phone/orderId/csName");
 });
+
+test("orgId threads: source.orgId -> captured event -> stored order", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  const eventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}",
+    rawBody: JSON.stringify({ order: { id: "2607119001", assigned_to_staff: "B-1apQSy",
+      products: [{ name: "Quran Mapping", price: 100000, count: 1 }],
+      shipping_address: { phone: "6281234509999", firstName: "Test", address: "X", district: "Y", city: "Z" } } }),
+    signatureOk: true,
+    orgId,
+  });
+  await t.mutation(internal.ingest.core.processEvent, { eventId });
+  await t.run(async (ctx) => {
+    const ev = await ctx.db.get(eventId);
+    expect(ev?.orgId).toEqual(orgId);
+    const orders = await ctx.db.query("orders").collect();
+    const order = orders.find((o) => o.orderId.includes("2607119001"));
+    expect(order?.orgId).toEqual(orgId);
+  });
+});
+
+test("orgId absent (pre-seed source): event still processes, rows unstamped", async () => {
+  const t = convexTest(schema);
+  const eventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}",
+    rawBody: JSON.stringify({ order: { id: "2607119002", assigned_to_staff: "B-1apQSy",
+      products: [{ name: "Quran Mapping", price: 100000, count: 1 }],
+      shipping_address: { phone: "6281234508888", firstName: "Test", address: "X", district: "Y", city: "Z" } } }),
+    signatureOk: true,
+  });
+  const out = await t.mutation(internal.ingest.core.processEvent, { eventId });
+  expect(out.status).toBe("processed");
+  await t.run(async (ctx) => {
+    const orders = await ctx.db.query("orders").collect();
+    const order = orders.find((o) => o.orderId.includes("2607119002"));
+    expect(order?.orgId).toBeUndefined();
+  });
+});

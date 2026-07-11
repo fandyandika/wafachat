@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalQuery, mutation, query } from "../_generated/server";
 import { requireAdmin } from "../authz";
+import { requireDefaultOrgId } from "../orgs";
 
 const kindValidator = v.union(v.literal("kirimdev"), v.literal("berdu"), v.literal("custom"));
 
@@ -47,6 +48,22 @@ export const setEnforceSignature = mutation({
       .unique();
     if (!existing) throw new Error(`unknown source: ${args.sourceKey}`);
     await ctx.db.patch(existing._id, { enforceSignature: args.enforce });
+  },
+});
+
+// Attach the source to the default org (B1 single-tenant; per-org keys arrive in B3).
+export const setSourceOrg = mutation({
+  args: { sourceKey: v.string() },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, "ingest.sources.setSourceOrg");
+    const src = await ctx.db
+      .query("ingestSources")
+      .withIndex("by_sourceKey", (q) => q.eq("sourceKey", args.sourceKey))
+      .unique();
+    if (!src) throw new Error(`source not found: ${args.sourceKey}`);
+    const orgId = await requireDefaultOrgId(ctx);
+    await ctx.db.patch(src._id, { orgId });
+    return { ok: true, sourceKey: args.sourceKey, orgId };
   },
 });
 

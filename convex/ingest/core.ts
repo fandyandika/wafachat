@@ -34,7 +34,7 @@ type ProcessOutcome =
 // processing errors (caller decides how to record the failure).
 export async function processCapturedEvent(
   ctx: any,
-  event: { sourceKey: string; kind: string; rawHeaders: string; rawBody: string; receivedAt: number },
+  event: { sourceKey: string; kind: string; rawHeaders: string; rawBody: string; receivedAt: number; orgId?: any },
 ): Promise<ProcessOutcome> {
   const headers = JSON.parse(event.rawHeaders || "{}");
   const body = JSON.parse(event.rawBody);
@@ -53,6 +53,7 @@ export async function processCapturedEvent(
       createdAt: parsed.event.createdAt,
       csName,
       source: "ingest",
+      orgId: (event as any).orgId ?? null,
     });
     return { status: "processed", resultRef: String(result?.messageId ?? "") };
   }
@@ -68,6 +69,7 @@ export async function processCapturedEvent(
       shippingCost: e.shippingCost, total: e.total,
       shippingAddress: e.shippingAddress, shippingDistrict: e.shippingDistrict,
       shippingCity: e.shippingCity, order_id: e.orderId, createdAt: e.createdAt,
+      orgId: (event as any).orgId ?? null,
     });
     return { status: "processed", resultRef: String(result?.orderId ?? e.orderId) };
   }
@@ -84,6 +86,7 @@ export async function processCapturedEvent(
       createdAt: typeof p.timestamp === "number" ? p.timestamp : event.receivedAt,
       csName: typeof p.csName === "string" ? p.csName : undefined,
       source: "ingest",
+      orgId: (event as any).orgId ?? null,
     });
     return { status: "processed", resultRef: String(result?.messageId ?? "") };
   }
@@ -98,6 +101,7 @@ export async function processCapturedEvent(
       total: p.total ? String(p.total) : undefined,
       order_id: String(p.orderId),
       createdAt: typeof p.timestamp === "number" ? p.timestamp : undefined,
+      orgId: (event as any).orgId ?? null,
     });
     return { status: "processed", resultRef: String(result?.orderId ?? p.orderId) };
   }
@@ -137,6 +141,7 @@ export const replayEvent = mutation({
       rawHeaders: event.rawHeaders, rawBody: event.rawBody,
       signatureOk: event.signatureOk, status: "received",
       receivedAt: Date.now(), replayOf: args.eventId,
+      orgId: (event as any).orgId ?? undefined,
     });
     const outcome = await processCapturedEvent(ctx, { ...event, receivedAt: Date.now() });
     await finishReplay(ctx, replayId, outcome);
@@ -163,6 +168,7 @@ export const replayAllFailed = mutation({
         rawHeaders: event.rawHeaders, rawBody: event.rawBody,
         signatureOk: event.signatureOk, status: "received",
         receivedAt: Date.now(), replayOf: event._id,
+        orgId: (event as any).orgId ?? undefined,
       });
       const outcome = await processCapturedEvent(ctx, { ...event, receivedAt: Date.now() });
       await finishReplay(ctx, replayId, outcome);
