@@ -298,6 +298,16 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
 
+  // Single-doc org config (key "default") — Fase A anchor for multi-tenant.
+  // Values here override the in-code DEFAULT_ORG_SETTINGS fallback (empty table
+  // = fallback = pre-Fase-A behavior). Phones stored normalized (62…).
+  orgSettings: defineTable({
+    key: v.string(), // "default" — becomes a per-org lookup in Fase B
+    orgName: v.string(),
+    internalPhones: v.array(v.string()),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
   closingRules: defineTable({
     phrase: v.string(),
     active: v.boolean(),

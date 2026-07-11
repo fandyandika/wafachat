@@ -32,6 +32,7 @@ import type * as ingest_sources from "../ingest/sources.js";
 import type * as lib from "../lib.js";
 import type * as messages from "../messages.js";
 import type * as metrics from "../metrics.js";
+import type * as orgSettings from "../orgSettings.js";
 import type * as passwordHash from "../passwordHash.js";
 import type * as responseTime from "../responseTime.js";
 import type * as responseTimeMath from "../responseTimeMath.js";
@@ -72,6 +73,7 @@ declare const fullApi: ApiFromModules<{
   lib: typeof lib;
   messages: typeof messages;
   metrics: typeof metrics;
+  orgSettings: typeof orgSettings;
   passwordHash: typeof passwordHash;
   responseTime: typeof responseTime;
   responseTimeMath: typeof responseTimeMath;
