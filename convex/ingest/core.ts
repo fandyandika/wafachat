@@ -3,7 +3,7 @@ import { internalMutation, mutation } from "../_generated/server";
 import { requireAdmin } from "../authz";
 import { appendMessageCore } from "../messages";
 import { parseKirimdevWebhook } from "./kirimdevAdapter";
-import { parseBerduOrderDetail } from "./berduAdapter";
+import { parseBerduOrderDetail, DEFAULT_BERDU_STAFF_MAP } from "./berduAdapter";
 import { upsertOrderCore } from "../state";
 
 // Resolve CS display name from a WABA phone_number_id via csConfigs.
@@ -15,6 +15,15 @@ export async function resolveCsByPhoneNumberId(ctx: any, phoneNumberId: string |
     (c: any) => c.providerNumberId === phoneNumberId || (c.providerNumberIds ?? []).includes(phoneNumberId),
   );
   return hit?.csName as string | undefined;
+}
+
+// Build the Berdu staffId -> CS-name map from the csConfigs registry; fall back to
+// the baked tenant-#1 map while no config row carries berduStaffIds (pre-seed).
+export async function resolveBerduStaffMap(ctx: any): Promise<Record<string, string>> {
+  const configs = await ctx.db.query("csConfigs").collect(); // small table (~5 rows)
+  const map: Record<string, string> = {};
+  for (const c of configs) for (const id of c.berduStaffIds ?? []) map[id] = c.csName;
+  return Object.keys(map).length > 0 ? map : DEFAULT_BERDU_STAFF_MAP;
 }
 
 type ProcessOutcome =
@@ -49,7 +58,8 @@ export async function processCapturedEvent(
   }
 
   if (event.kind === "lead.created") {
-    const parsed = parseBerduOrderDetail((body as any).order ?? body);
+    const staffMap = await resolveBerduStaffMap(ctx);
+    const parsed = parseBerduOrderDetail((body as any).order ?? body, staffMap);
     if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
     const e = parsed.event;
     const result = await upsertOrderCore(ctx, {

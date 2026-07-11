@@ -164,6 +164,32 @@ test("lead.created ingests order via upsertOrderCore with preserved createdAt", 
   });
 });
 
+test("lead.created attribution: csConfigs.berduStaffIds overrides the baked default map", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("csConfigs", {
+      normalizedName: "sari", csName: "Sari",
+      berduStaffIds: ["B-1apQSy"], // id that the DEFAULT map assigns to Aisyah
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: 1, updatedAt: 1,
+    });
+  });
+  const eventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}",
+    rawBody: JSON.stringify({ order: { id: "2607110001", assigned_to_staff: "B-1apQSy",
+      products: [{ name: "Quran Mapping", price: 100000, count: 1 }],
+      shipping_address: { phone: "6281234500999", firstName: "Budi", address: "Jl. X", district: "Y", city: "Z" },
+    } }),
+    signatureOk: true,
+  });
+  await t.mutation(internal.ingest.core.processEvent, { eventId });
+  await t.run(async (ctx) => {
+    const orders = await ctx.db.query("orders").collect();
+    const order = orders.find((o) => o.orderId.includes("2607110001"));
+    expect(order?.assignedCsName).toBe("Sari"); // registry won, not baked "Aisyah"
+  });
+});
+
 test("generic.message ingests via universal contract", async () => {
   const t = convexTest(schema);
   const raw = JSON.stringify({

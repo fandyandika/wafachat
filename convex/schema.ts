@@ -65,6 +65,7 @@ export default defineSchema({
     provider: v.optional(v.string()),
     providerNumberId: v.optional(v.string()),
     providerNumberIds: v.optional(v.array(v.string())), // one CS can own >1 WABA number (e.g. Nabila has 2)
+    berduStaffIds: v.optional(v.array(v.string())), // Berdu staff id(s) owned by this CS (order attribution)
     orderAutomationEnabled: v.boolean(),
     aiAssistantEnabled: v.boolean(),
     reportingEnabled: v.boolean(),

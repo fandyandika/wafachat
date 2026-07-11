@@ -172,6 +172,23 @@ export const setProviderNumberIds = mutation({
   },
 });
 
+// Map a CS to their Berdu staff id(s) so order attribution reads the registry
+// instead of the baked DEFAULT_BERDU_STAFF_MAP. Patches only berduStaffIds.
+export const setBerduStaffIds = mutation({
+  args: { csName: v.string(), berduStaffIds: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, "csConfigs.setBerduStaffIds");
+    const normalizedName = normalizeCsName(args.csName);
+    const existing = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName))
+      .unique();
+    if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
+    await ctx.db.patch(existing._id, { berduStaffIds: args.berduStaffIds, updatedAt: Date.now() });
+    return { success: true, csName: args.csName, berduStaffIds: args.berduStaffIds };
+  },
+});
+
 // Rename a CS's display name in place (patches the stored config's csName + normalizedName).
 // Historical orders/recaps keep their raw name but still group under this CS via csKey on the
 // panel, so no data migration is needed for a cosmetic rename (e.g. "CS Aisyah" -> "Aisyah").

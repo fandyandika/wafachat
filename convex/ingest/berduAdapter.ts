@@ -13,8 +13,10 @@ export type BerduParseResult =
   | { kind: "lead"; event: UniversalLeadEvent }
   | { kind: "skip"; reason: string };
 
-// Per-org glue inherited from n8n; moves to orgSettings in Fase 0 Task E.
-const BERDU_STAFF_MAP: Record<string, string> = {
+// Tenant #1's inherited glue, now the FALLBACK only: the live map is built from
+// csConfigs.berduStaffIds (see resolveBerduStaffMap in core.ts). Used verbatim when
+// no csConfig row carries staff ids yet (fresh env / pre-seed transition).
+export const DEFAULT_BERDU_STAFF_MAP: Record<string, string> = {
   "B-1apQSy": "Aisyah",
   "B-1CxSmL": "Risma",
   "B-Z28TdYc": "Azelia",
@@ -31,7 +33,7 @@ function formatRupiah(num: unknown): string {
   return "Rp" + Number(num || 0).toLocaleString("id-ID");
 }
 
-export function parseBerduOrderDetail(orderInput: unknown): BerduParseResult {
+export function parseBerduOrderDetail(orderInput: unknown, staffMap: Record<string, string>): BerduParseResult {
   const order = (orderInput ?? {}) as Record<string, any>;
   if (!order.id || !order.shipping_address) return { kind: "skip", reason: "no shipping_address" };
   const addr = order.shipping_address ?? {};
@@ -45,7 +47,7 @@ export function parseBerduOrderDetail(orderInput: unknown): BerduParseResult {
     kind: "lead",
     event: {
       phone,
-      csName: BERDU_STAFF_MAP[staff] || `Staff ${staff || "?"}`,
+      csName: staffMap[staff] || `Staff ${staff || "?"}`,
       customerName: addr.firstName || "Pelanggan",
       productName: products[0]?.name || "",
       products: products.map((p) => `${p.name} (${p.count}x)`).join(", "),

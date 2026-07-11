@@ -7,7 +7,7 @@ import { DEFAULT_CONFIGS } from "./csConfigs";
 type CsRow = {
   csName: string; normalizedName: string; key: string; avatarUrl: string | null;
   isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
-  reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string;
+  reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string; berduStaffIds?: string[];
 };
 
 export const listCs = query({
@@ -21,7 +21,7 @@ export const listCs = query({
 
     type Entry = {
       csName: string; isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
-      reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string; avatarStorageId?: typeof stored[number]["avatarStorageId"];
+      reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string; berduStaffIds?: string[]; avatarStorageId?: typeof stored[number]["avatarStorageId"];
     };
     const byKey = new Map<string, Entry>();
     // Built-in defaults first…
@@ -41,7 +41,7 @@ export const listCs = query({
       byKey.set(k, {
         csName: c.csName, isActive: c.isActive, orderAutomationEnabled: c.orderAutomationEnabled,
         aiAssistantEnabled: c.aiAssistantEnabled, reportingEnabled: c.reportingEnabled,
-        autoFollowUpEnabled: c.autoFollowUpEnabled, csPhone: c.csPhone, avatarStorageId: c.avatarStorageId,
+        autoFollowUpEnabled: c.autoFollowUpEnabled, csPhone: c.csPhone, berduStaffIds: c.berduStaffIds, avatarStorageId: c.avatarStorageId,
       });
     }
 
@@ -56,6 +56,7 @@ export const listCs = query({
         reportingEnabled: e.reportingEnabled,
         autoFollowUpEnabled: e.autoFollowUpEnabled,
         csPhone: e.csPhone,
+        berduStaffIds: e.berduStaffIds,
       });
     }
     rows.sort((a, b) => a.csName.localeCompare(b.csName));
