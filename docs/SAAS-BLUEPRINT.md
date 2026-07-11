@@ -292,11 +292,12 @@ Jalur resmi dikerjakan PARALEL mulai fase 2:
 |---|---|---|---|
 | Secret Berdu (`BERDU_APP_ID/SECRET/HMAC/USER_ID`) di **ENV Convex global** | Convex env | tabel `tenantIntegrations` per-org, secret **dienkripsi** app-side | §10.4 |
 | Source key **hardcoded** `berdu-pustakaislam` / `kirimdev-pustakaislam` | http.ts | source key **unik per-org**; route resolve org dari key/token | §11 |
-| `BERDU_STAFF_MAP` (staff Berdu → nama CS) hardcoded | berduAdapter.ts | `agentAliases` per-org (staffId → agentId) | §10.3 |
+| ✅ **LUNAS 2026-07-11** — `BERDU_STAFF_MAP` (staff Berdu → nama CS) | ~~berduAdapter.ts~~ → `csConfigs.berduStaffIds` + `resolveBerduStaffMap` (fallback baked) | `agentAliases` per-org (staffId → agentId) | §10.3 |
 | Attribution phone_number_id → CS via `csConfigs` (1 org) | csConfigs.ts | `agentAliases` per-org (phoneNumberId → agentId) | §10.3 |
 | CS = **string nama** + `csKey` normalisasi | seluruh analytics | `agents` ber-ID stabil + alias resolver | §3.4, §10.3 |
 | Frasa closing "PEMESANAN BERHASIL" | closingRules (sebagian sudah tabel) | closing-rule builder **per-org** | §3.6 |
-| Nomor internal/test `EXCLUDED_PHONES` hardcoded | state.ts | settings per-org | §3.2 |
+| ✅ **LUNAS 2026-07-11** — Nomor internal/test hardcoded | ~~lib.ts `INTERNAL_TEST_PHONES`~~ → `orgSettings.internalPhones` (reader `getInternalPhoneSet`, fallback in-code) | settings per-org | §3.2 |
+| ✅ **LUNAS 2026-07-11** — Identitas org (belum ada) | → `orgSettings` (`key="default"` + `orgName`) — anchor tenant #1 | per-org rows di Fase B | §10.2 |
 | Cutoff harian 16:00 WIB + timezone hardcoded | lib window helpers | timezone + jam cutoff **per-org** | §3.2 |
 | Belum ada `orgId` di tabel data | schema | `orgId` + index di **semua** tabel; isolasi = test #1 | §10.2 |
 | Kredensial diset manual (dashboard/CLI oleh dev) | operasional | **wizard onboarding self-serve** (paste/OAuth → DB) | §11 |
@@ -310,6 +311,22 @@ Yang barusan dikerjakan (2026-07-08) dan **sudah SaaS-shaped**: Ingestion API (e
 lead.created/message.event) + rollup per-(csKey×window) + capture-first always-200 + dedup by
 orderId — semua ini portable ke multi-tenant tinggal tambah `orgId`. Pintasan-nya cuma di baris
 config/secret di atas, bukan di arsitektur.
+
+**Fase A — LUNAS 2026-07-11 (config-from-DB, single-tenant anchor).** 3 hardcode dicabut ke DB
+dengan pola fallback in-code (`getActiveClosingPhrases`-style → deploy = perilaku byte-identik,
+tabel kosong pakai default): (1) nomor internal → `orgSettings.internalPhones`; (2) staff map
+Berdu → `csConfigs.berduStaffIds` (+`resolveBerduStaffMap`, fallback baked); (3) identitas org →
+`orgSettings.key="default"`. UI Settings: section Organisasi + field Berdu Staff ID per CS. Deploy
++ seed prod terverifikasi: `debugRollupParity` 0 mismatch di 3 window (termasuk live) → nol
+pergeseran metrik; order Berdu live ter-attribute CS benar. Spec/plan:
+`docs/superpowers/{specs,plans}/2026-07-11-fase-a-orgsettings*`.
+
+**Sengaja DITUNDA di Fase A (keputusan sadar, spec §6):** (a) **cutoff 16:00 + timezone** — dia
+kunci `windowKey` semua `dailyRollups`; configurable cutoff butuh strategi re-key/migrasi rollup
+sendiri → digarap bareng `orgId` di Fase B. (b) **source key `*-pustakaislam`** — sudah
+registry-driven (`ingestSources`); resolusi org-dari-key butuh org table dulu → Fase B. (c)
+**`PRODUCT_ALIASES` editable** — alias = kunci grouping byProduct rollup; editable runtime =
+jendela drift increment-vs-trueUp; katalog stabil → tunda.
 
 ---
 
