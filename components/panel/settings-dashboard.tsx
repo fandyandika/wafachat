@@ -23,6 +23,78 @@ type CsRow = {
   isActive: boolean;
 };
 
+function OrgSection() {
+  const org = useQuery(api.orgSettings.get, {});
+  const update = useMutation(api.orgSettings.update);
+  const [name, setName] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { if (org) setName(org.orgName); }, [org]);
+
+  async function save(patch: { orgName?: string; internalPhones?: string[] }) {
+    setBusy(true); setErr(null);
+    try { await update(patch); } catch (e) { setErr(e instanceof Error ? e.message : 'Gagal menyimpan'); }
+    setBusy(false);
+  }
+
+  if (!org) return null;
+  return (
+    <Card>
+      <CardHeader><CardTitle className="text-base">Organisasi</CardTitle></CardHeader>
+      <CardContent className="space-y-4">
+        {err && <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{err}</div>}
+        <div className="flex flex-wrap items-center gap-2">
+          <input className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Nama organisasi" value={name} onChange={(e) => setName(e.target.value)} />
+          <Button size="sm" disabled={busy || !name.trim() || name.trim() === org.orgName} onClick={() => save({ orgName: name.trim() })}>Simpan nama</Button>
+        </div>
+        <div className="space-y-2 border-t border-border pt-4">
+          <div className="text-sm font-medium text-foreground">Nomor internal (dikecualikan dari metrik)</div>
+          <p className="text-xs text-muted-foreground">Nomor owner/admin/line CS — order & closing dari nomor ini tidak dihitung leads/omzet.</p>
+          <div className="flex flex-wrap gap-1.5">
+            {org.internalPhones.map((p) => (
+              <span key={p} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 font-mono text-xs">
+                {p}
+                <button className="text-muted-foreground hover:text-destructive" disabled={busy} aria-label={`Hapus ${p}`}
+                  onClick={() => { if (confirm(`Hapus ${p} dari daftar internal? Nomor ini akan mulai DIHITUNG di metrik.`)) save({ internalPhones: org.internalPhones.filter((x) => x !== p) }); }}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm" placeholder="08xxx / 62xxx" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} />
+            <Button size="sm" variant="outline" disabled={busy || !newPhone.trim()} onClick={async () => { await save({ internalPhones: [...org.internalPhones, newPhone.trim()] }); setNewPhone(''); }}>Tambah</Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function BerduStaffIdsField({ csName, initial, disabled }: { csName: string; initial: string[]; disabled: boolean }) {
+  const setIds = useMutation(api.csConfigs.setBerduStaffIds);
+  const [value, setValue] = useState(initial.join(', '));
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setValue(initial.join(', ')); }, [initial]);
+  const parsed = value.split(',').map((s) => s.trim()).filter(Boolean);
+  const dirty = parsed.join(',') !== initial.join(',');
+  return (
+    <div className="rounded-lg bg-muted/40 px-3 py-2">
+      <div className="text-xs font-medium text-muted-foreground">Berdu Staff ID</div>
+      <div className="mt-1 flex gap-2">
+        <input className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 font-mono text-xs" placeholder="B-xxxxx, B-yyyyy" value={value} disabled={disabled || busy} onChange={(e) => setValue(e.target.value)} />
+        {dirty && (
+          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={disabled || busy}
+            onClick={async () => { setBusy(true); try { await setIds({ csName, berduStaffIds: parsed }); } catch (e) { alert(e instanceof Error ? e.message : 'Gagal'); setValue(initial.join(', ')); } setBusy(false); }}>
+            Simpan
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function TeamSection() {
   const [users, setUsers] = useState<Array<{ email: string; name: string; role: 'admin' | 'cs'; csName?: string; isActive: boolean }>>([]);
   const [form, setForm] = useState<{ email: string; name: string; role: 'admin' | 'cs'; password: string; csName: string }>({ email: '', name: '', role: 'cs', password: '', csName: '' });
@@ -220,6 +292,7 @@ export function SettingsDashboard() {
 
       {me?.role !== 'admin' ? null : (
         <>
+          <OrgSection />
           <TeamSection />
 
           {err && (
@@ -305,6 +378,8 @@ export function SettingsDashboard() {
                   <div className="text-sm font-mono text-foreground">{c.csPhone}</div>
                 </div>
               )}
+
+              <BerduStaffIdsField csName={c.csName} initial={c.berduStaffIds ?? []} disabled={busy === c.csName} />
 
               {/* Toggles */}
               <div className="space-y-3 border-t border-border pt-4">
