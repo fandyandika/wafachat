@@ -1541,11 +1541,15 @@ export const renameCsName = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.renameCsName");
     const now = Date.now();
+    // B2a: route the hard rename target through the registry so a bulk merge into a
+    // registered agent lands on that agent's canonical name+key (unregistered target
+    // = same as before: {to, csKey(to)}). Resolve once — `to` is constant.
+    const canonTo = await canonicalizeCs(ctx, args.to);
     let orders = 0;
     for (const o of await ctx.db.query("orders").collect()) {
       if (o.assignedCsName === args.from) {
         const orderBefore = o;
-        await ctx.db.patch(o._id, { assignedCsName: args.to, csKey: csKey(args.to), updatedAt: now });
+        await ctx.db.patch(o._id, { assignedCsName: canonTo.csName, csKey: canonTo.key, updatedAt: now });
         const orderAfter = await ctx.db.get(o._id);
         await bumpForOrderDoc(ctx, orderBefore, orderAfter);
         orders++;
@@ -1555,7 +1559,7 @@ export const renameCsName = mutation({
     for (const r of await ctx.db.query("shippingRecaps").collect()) {
       if (r.csName === args.from) {
         const recapBefore = r;
-        await ctx.db.patch(r._id, { csName: args.to, csKey: csKey(args.to), updatedAt: now });
+        await ctx.db.patch(r._id, { csName: canonTo.csName, csKey: canonTo.key, updatedAt: now });
         const recapAfter = await ctx.db.get(r._id);
         await bumpForRecapDoc(ctx, recapBefore, recapAfter);
         recaps++;
@@ -1566,10 +1570,10 @@ export const renameCsName = mutation({
       .query("conversations")
       .withIndex("by_assignedCsName_status", (q) => q.eq("assignedCsName", args.from))
       .collect()) {
-      await ctx.db.patch(c._id, { assignedCsName: args.to, updatedAt: now });
+      await ctx.db.patch(c._id, { assignedCsName: canonTo.csName, updatedAt: now });
       conversations++;
     }
-    return { from: args.from, to: args.to, orders, recaps, conversations };
+    return { from: args.from, to: canonTo.csName, orders, recaps, conversations };
   },
 });
 
