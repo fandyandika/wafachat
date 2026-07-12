@@ -202,3 +202,30 @@ test("appendMessageFromN8n: outbound closing phrase -> records followUpTouchesAt
     expect(recap?.followUpTouchesAtClose).toBe(2);
   });
 });
+
+test("org isolation: same externalMessageId in two orgs = TWO message rows; org-B append never dedup-patches org-A", async () => {
+  const t = convexTest(schema);
+  const orgA = await seedOrg(t);
+  let orgB: any;
+  await t.run(async (ctx: any) => {
+    orgB = await ctx.db.insert("organizations", { slug: "org-b", name: "B", createdAt: 1, updatedAt: 1 });
+  });
+  await t.run(async (ctx: any) => {
+    const { appendMessageCore } = await import("./messages");
+    const baseArgs = {
+      order_id: "O-COLLIDE", phone: "62811", role: "cs" as const,
+      direction: "inbound" as const, content: "msg", messageType: "text" as const,
+      source: "n8n" as const, externalMessageId: "msg_COLLIDE", createdAt: 5000,
+    };
+    // appendMessageCore creates/finds conversations internally, so just call with different orgs
+    await appendMessageCore(ctx, { ...baseArgs, orgId: orgA });
+    await appendMessageCore(ctx, { ...baseArgs, orgId: orgB });
+    const rows = (await ctx.db.query("messages").collect()).filter((m: any) => m.externalMessageId === "msg_COLLIDE");
+    expect(rows.length).toBe(2); // NOT a dedup across orgs
+    const a = rows.find((r: any) => String(r.orgId) === String(orgA));
+    const b = rows.find((r: any) => String(r.orgId) === String(orgB));
+    expect(a?.orgId).toBeDefined();
+    expect(b?.orgId).toBeDefined();
+    expect(String(a?.orgId)).not.toEqual(String(b?.orgId));
+  });
+});

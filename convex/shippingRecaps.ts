@@ -286,34 +286,34 @@ function applyOrderFallbacks(parsed: ReturnType<typeof parseClosingMessage>, ord
   };
 }
 
-async function findOrder(ctx: { db: any }, args: { orderIdBerdu?: string; customerPhone: string }) {
+async function findOrder(ctx: { db: any }, args: { orderIdBerdu?: string; customerPhone: string }, orgId: Id<"organizations">) {
   if (args.orderIdBerdu) {
     const byOrderId = await ctx.db
       .query("orders")
-      .withIndex("by_orderId", (q: any) => q.eq("orderId", args.orderIdBerdu!))
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", args.orderIdBerdu!))
       .unique();
     if (byOrderId) return byOrderId as Doc<"orders">;
   }
 
   return (await ctx.db
     .query("orders")
-    .withIndex("by_customerPhone", (q: any) => q.eq("customerPhone", args.customerPhone))
+    .withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", args.customerPhone))
     .order("desc")
     .first()) as Doc<"orders"> | null;
 }
 
-async function findConversation(ctx: { db: any }, args: { orderIdBerdu?: string; customerPhone: string }) {
+async function findConversation(ctx: { db: any }, args: { orderIdBerdu?: string; customerPhone: string }, orgId: Id<"organizations">) {
   if (args.orderIdBerdu) {
     const byOrder = await ctx.db
       .query("conversations")
-      .withIndex("by_orderId", (q: any) => q.eq("orderId", args.orderIdBerdu!))
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", args.orderIdBerdu!))
       .unique();
     if (byOrder) return byOrder as Doc<"conversations">;
   }
 
   return (await ctx.db
     .query("conversations")
-    .withIndex("by_customerPhone_updatedAt", (q: any) => q.eq("customerPhone", args.customerPhone))
+    .withIndex("by_org_customerPhone_updatedAt", (q: any) => q.eq("orgId", orgId).eq("customerPhone", args.customerPhone))
     .order("desc")
     .first()) as Doc<"conversations"> | null;
 }
@@ -321,18 +321,19 @@ async function findConversation(ctx: { db: any }, args: { orderIdBerdu?: string;
 async function findExistingRecap(
   ctx: { db: any },
   args: { orderIdBerdu?: string; customerPhone: string; conversationId?: Id<"conversations"> },
+  orgId: Id<"organizations">,
 ) {
   if (args.orderIdBerdu) {
     const byOrder = await ctx.db
       .query("shippingRecaps")
-      .withIndex("by_orderIdBerdu", (q: any) => q.eq("orderIdBerdu", args.orderIdBerdu!))
+      .withIndex("by_org_orderIdBerdu", (q: any) => q.eq("orgId", orgId).eq("orderIdBerdu", args.orderIdBerdu!))
       .first();
     if (byOrder) return byOrder as Doc<"shippingRecaps">;
   }
 
   const recentByPhone = (await ctx.db
     .query("shippingRecaps")
-    .withIndex("by_customerPhone", (q: any) => q.eq("customerPhone", args.customerPhone))
+    .withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", args.customerPhone))
     .order("desc")
     .take(10)) as Doc<"shippingRecaps">[];
 
@@ -354,15 +355,15 @@ export const upsertFromN8n = internalMutation({
     const now = Date.now();
     const orgId = await requireDefaultOrgId(ctx);
     const closedAt = args.closedAt ?? now;
-    const order = await findOrder(ctx, { orderIdBerdu: args.orderIdBerdu, customerPhone: args.customerPhone });
-    const conversation = await findConversation(ctx, { orderIdBerdu: args.orderIdBerdu, customerPhone: args.customerPhone });
+    const order = await findOrder(ctx, { orderIdBerdu: args.orderIdBerdu, customerPhone: args.customerPhone }, orgId);
+    const conversation = await findConversation(ctx, { orderIdBerdu: args.orderIdBerdu, customerPhone: args.customerPhone }, orgId);
     const parsed = applyOrderFallbacks(parseClosingMessage(args.sourceMessageText), order);
     const comparison = compareWithOrder(parsed, order);
     const existing = await findExistingRecap(ctx, {
       orderIdBerdu: args.orderIdBerdu ?? order?.orderId,
       customerPhone: args.customerPhone,
       conversationId: conversation?._id,
-    });
+    }, orgId);
 
     const rawResolvedCsName = args.csName || order?.assignedCsName || conversation?.assignedCsName || "";
     const canonCs = await canonicalizeCs(ctx, rawResolvedCsName);
@@ -453,13 +454,13 @@ export const createFromPanelClosing = mutation({
     await requireAdmin(ctx, "shippingRecaps.createFromPanelClosing");
     const now = Date.now();
     const orgId = await requireDefaultOrgId(ctx);
-    const order = await findOrder(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone });
-    const conversation = await findConversation(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone });
+    const order = await findOrder(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone }, orgId);
+    const conversation = await findConversation(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone }, orgId);
     const existing = await findExistingRecap(ctx, {
       orderIdBerdu: args.orderId ?? order?.orderId,
       customerPhone: args.customerPhone,
       conversationId: conversation?._id,
-    });
+    }, orgId);
 
     // Don't overwrite already-exported or delivered recaps
     if (existing && (existing.status === "exported" || existing.status === "delivered")) {
@@ -534,15 +535,15 @@ export async function upsertRecapFromMessage(
   message: { orderId?: string; customerPhone: string; content: string; externalMessageId?: string; _id: any; createdAt: number },
   opts: { force?: boolean; orgId: Id<"organizations"> },
 ): Promise<{ recapId: Id<"shippingRecaps">; action: "created" | "updated" | "skipped" }> {
-  const order = await findOrder(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
-  const conversation = await findConversation(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone });
+  const order = await findOrder(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone }, opts.orgId);
+  const conversation = await findConversation(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone }, opts.orgId);
   const parsed = applyOrderFallbacks(parseClosingMessage(message.content), order);
   const comparison = compareWithOrder(parsed, order);
   const existing = await findExistingRecap(ctx, {
     orderIdBerdu: message.orderId || order?.orderId,
     customerPhone: message.customerPhone,
     conversationId: conversation?._id,
-  });
+  }, opts.orgId);
   if (existing && (existing.status === "exported" || existing.status === "delivered")) {
     return { recapId: existing._id, action: "skipped" };
   }
@@ -1138,13 +1139,13 @@ export const importBerduVerifiedRows = internalMutation({
       const orderIdBerdu = normalizeOrderId(row.orderIdBerdu);
       const customerPhone = normalizePhone(row.customerPhone);
       const recipientPhone = normalizePhone(row.recipientPhone || row.customerPhone);
-      const order = await findOrder(ctx, { orderIdBerdu, customerPhone });
-      const conversation = await findConversation(ctx, { orderIdBerdu, customerPhone });
+      const order = await findOrder(ctx, { orderIdBerdu, customerPhone }, orgId);
+      const conversation = await findConversation(ctx, { orderIdBerdu, customerPhone }, orgId);
       const existing = await findExistingRecap(ctx, {
         orderIdBerdu,
         customerPhone,
         conversationId: conversation?._id,
-      });
+      }, orgId);
       const status: RecapStatus =
         existing?.status === "exported" || existing?.status === "delivered" || existing?.status === "cancelled" || existing?.status === "cancelled_after_export"
           ? existing.status
@@ -1267,7 +1268,7 @@ export const repairRecipientNamesFromOrders = mutation({
         continue;
       }
 
-      const order = await findOrder(ctx, { orderIdBerdu: row.orderIdBerdu, customerPhone: row.customerPhone });
+      const order = await findOrder(ctx, { orderIdBerdu: row.orderIdBerdu, customerPhone: row.customerPhone }, row.orgId);
       if (!order || isGeneratedCustomerName(order.customerName)) {
         skipped += 1;
         continue;

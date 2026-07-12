@@ -163,3 +163,28 @@ test("canonical stamp: upsertOrderCore via alias resolves to canonical csName + 
   expect(order?.assignedCsName).toBe("Aisyah");
   expect(order?.csKey).toBe("aisyah");
 });
+
+test("org isolation: same orderId in two orgs = TWO rows; org-B upsert never patches org-A", async () => {
+  const t = convexTest(schema);
+  const orgA = await seedOrg(t);
+  let orgB: any;
+  await t.run(async (ctx: any) => {
+    orgB = await ctx.db.insert("organizations", { slug: "org-b", name: "B", createdAt: 1, updatedAt: 1 });
+  });
+  await t.run(async (ctx: any) => {
+    const { upsertOrderCore } = await import("./state");
+    const base = {
+      phone: "6281234500001", csName: "Aisyah", customerName: "A-Cust", productName: "P",
+      products: "P (1x)", productsSubtotal: "Rp1", shippingCost: "Rp1", total: "Rp2",
+      shippingAddress: "X", shippingDistrict: "Y", shippingCity: "Z", order_id: "O-COLLIDE",
+    };
+    await upsertOrderCore(ctx, { ...base, orgId: orgA });
+    await upsertOrderCore(ctx, { ...base, customerName: "B-Cust", orgId: orgB });
+    const rows = (await ctx.db.query("orders").collect()).filter((o: any) => o.orderId === "O-COLLIDE");
+    expect(rows.length).toBe(2); // NOT an overwrite
+    const a = rows.find((r: any) => String(r.orgId) === String(orgA));
+    const b = rows.find((r: any) => String(r.orgId) === String(orgB));
+    expect(a?.customerName).toBe("A-Cust"); // org-B upsert did not clobber org-A
+    expect(b?.customerName).toBe("B-Cust");
+  });
+});

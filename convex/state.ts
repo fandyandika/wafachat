@@ -95,11 +95,11 @@ async function patchClosingStatsWithKey(
   void args;
 }
 
-async function getLatestConversationByPhone(ctx: { db: any }, phone: string) {
+async function getLatestConversationByPhone(ctx: { db: any }, phone: string, orgId: Id<"organizations">) {
   const normalizedPhone = normalizePhone(phone);
   return await ctx.db
     .query("conversations")
-    .withIndex("by_customerPhone_updatedAt", (q: any) => q.eq("customerPhone", normalizedPhone))
+    .withIndex("by_org_customerPhone_updatedAt", (q: any) => q.eq("orgId", orgId).eq("customerPhone", normalizedPhone))
     .order("desc")
     .first();
 }
@@ -124,7 +124,7 @@ export const createTestConversation = mutation({
     const orgId = await requireDefaultOrgId(ctx);
     const existingCustomer = await ctx.db
       .query("customers")
-      .withIndex("by_phone", (q) => q.eq("phone", phone))
+      .withIndex("by_org_phone", (q) => q.eq("orgId", orgId).eq("phone", phone))
       .unique();
     if (existingCustomer) {
       await ctx.db.patch(existingCustomer._id, { lastSeenAt: now });
@@ -152,7 +152,7 @@ export const createTestConversation = mutation({
       updatedAt: now,
       orgId,
     });
-    const insertedOrder = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderId)).unique();
+    const insertedOrder = await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", orderId)).unique();
     await bumpForOrderDoc(ctx, null, insertedOrder);
 
     const conversationId = await ctx.db.insert("conversations", {
@@ -215,16 +215,16 @@ export const repairDailyStats = mutation({
   },
 });
 
-async function getConversationForArgs(ctx: { db: any }, args: { orderId?: string; phone?: string }) {
+async function getConversationForArgs(ctx: { db: any }, args: { orderId?: string; phone?: string }, orgId: Id<"organizations">) {
   if (args.orderId) {
     const byOrder = await ctx.db
       .query("conversations")
-      .withIndex("by_orderId", (q: any) => q.eq("orderId", args.orderId!))
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", args.orderId!))
       .unique();
     if (byOrder) return byOrder;
   }
 
-  if (args.phone) return await getLatestConversationByPhone(ctx, args.phone);
+  if (args.phone) return await getLatestConversationByPhone(ctx, args.phone, orgId);
   return null;
 }
 
@@ -259,7 +259,7 @@ export async function upsertOrderCore(
 
   const existingCustomer = await ctx.db
     .query("customers")
-    .withIndex("by_phone", (q: any) => q.eq("phone", phone))
+    .withIndex("by_org_phone", (q: any) => q.eq("orgId", args.orgId).eq("phone", phone))
     .unique();
 
   if (existingCustomer) {
@@ -299,7 +299,7 @@ export async function upsertOrderCore(
 
   const existingOrder = await ctx.db
     .query("orders")
-    .withIndex("by_orderId", (q: any) => q.eq("orderId", orderId))
+    .withIndex("by_org_orderId", (q: any) => q.eq("orgId", args.orgId).eq("orderId", orderId))
     .unique();
 
   if (existingOrder) {
@@ -312,7 +312,7 @@ export async function upsertOrderCore(
     await bumpForOrderDoc(ctx, before, after);
   } else {
     await ctx.db.insert("orders", { ...orderPayload, createdAt: args.createdAt ?? now, orgId: args.orgId });
-    const after = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderId)).unique();
+    const after = await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", args.orgId).eq("orderId", orderId)).unique();
     await bumpForOrderDoc(ctx, null, after);
   }
 
@@ -320,7 +320,7 @@ export async function upsertOrderCore(
   if (reportable) {
     const existingConversation = await ctx.db
       .query("conversations")
-      .withIndex("by_orderId", (q: any) => q.eq("orderId", orderId))
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", args.orgId).eq("orderId", orderId))
       .unique();
 
     if (existingConversation) {
@@ -438,7 +438,7 @@ export const setConversationStatusFromN8n = internalMutation({
   handler: async (ctx, args) => {
     const now = Date.now();
     const orgId = await requireDefaultOrgId(ctx);
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
       return { success: false, error: "conversation not found", phone: args.phone, _action: "set" };
@@ -527,7 +527,7 @@ export const markConversationNotClosing = mutation({
     await requireAdmin(ctx, "state.markConversationNotClosing");
     const now = Date.now();
     const orgId = await requireDefaultOrgId(ctx);
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
       return { success: false, error: "conversation not found", phone: args.phone, _action: "not_closing" };
@@ -598,7 +598,7 @@ export const markConversationCancelled = mutation({
     await requireAdmin(ctx, "state.markConversationCancelled");
     const now = Date.now();
     const orgId = await requireDefaultOrgId(ctx);
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
       return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_cancelled" };
@@ -658,7 +658,7 @@ export const undoConversationCancelled = mutation({
     await requireAdmin(ctx, "state.undoConversationCancelled");
     const now = Date.now();
     const orgId = await requireDefaultOrgId(ctx);
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
       return { success: false, error: "conversation not found", phone: args.phone, _action: "undo_cancelled" };
@@ -715,7 +715,7 @@ export const markConversationClosing = mutation({
     await requireAdmin(ctx, "state.markConversationClosing");
     const now = Date.now();
     const orgId = await requireDefaultOrgId(ctx);
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
       return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_closing" };
@@ -768,7 +768,7 @@ export const deleteConversationOrder = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.deleteConversationOrder");
     const orgId = await requireDefaultOrgId(ctx);
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
       return { success: false, error: "conversation not found", phone: args.phone, _action: "delete_order" };
@@ -823,7 +823,7 @@ export const deleteConversationOrder = mutation({
 
     const order = await ctx.db
       .query("orders")
-      .withIndex("by_orderId", (q: any) => q.eq("orderId", conversation.orderId))
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", conversation.orgId).eq("orderId", conversation.orderId))
       .unique();
     if (order) {
       const before = order;
@@ -867,7 +867,7 @@ export const recordStatEventFromN8n = internalMutation({
     if (args.phone && EXCLUDED_PHONES.has(normalizePhone(args.phone))) {
       return { success: true, skipped: true, reason: "excluded_phone", _action: "increment_stat" };
     }
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
     const key = makeTransitionKey({
       orderId: args.order_id,
       phone: args.phone || conversation?.customerPhone || "",
@@ -1070,7 +1070,8 @@ export const getConversationContextForN8n = internalQuery({
   args: { phone: v.string(), messageLimit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const phone = normalizePhone(args.phone);
-    const conversation = await getLatestConversationByPhone(ctx, phone);
+    const orgId = await requireDefaultOrgId(ctx);
+    const conversation = await getLatestConversationByPhone(ctx, phone, orgId);
     const globalEnabled = await getGlobalEnabled(ctx);
 
     if (!conversation) {

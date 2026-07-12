@@ -12,11 +12,11 @@ import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
 
-async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
+async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }, orgId: Id<"organizations">) {
   if (args.orderId) {
     const byOrder = await ctx.db
       .query("conversations")
-      .withIndex("by_orderId", (q: any) => q.eq("orderId", args.orderId!))
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", args.orderId!))
       .unique();
     if (byOrder) return byOrder;
   }
@@ -24,7 +24,7 @@ async function getConversationForMessage(ctx: { db: any }, args: { orderId?: str
   const phone = normalizePhone(args.customerPhone);
   return await ctx.db
     .query("conversations")
-    .withIndex("by_customerPhone_updatedAt", (q: any) => q.eq("customerPhone", phone))
+    .withIndex("by_org_customerPhone_updatedAt", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone))
     .order("desc")
     .first();
 }
@@ -137,7 +137,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   if (args.externalMessageId) {
     const dup = await ctx.db
       .query("messages")
-      .withIndex("by_externalMessageId", (q: any) => q.eq("externalMessageId", args.externalMessageId))
+      .withIndex("by_org_externalMessageId", (q: any) => q.eq("orgId", args.orgId).eq("externalMessageId", args.externalMessageId))
       .first();
     if (dup) {
       return {
@@ -149,7 +149,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   let conversation = await getConversationForMessage(ctx, {
     customerPhone: phone,
     orderId: args.order_id,
-  });
+  }, args.orgId);
 
   if (!conversation) {
     const now = Date.now();
