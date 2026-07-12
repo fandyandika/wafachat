@@ -47,6 +47,12 @@ export const defaultOrgIdInternal = internalQuery({
   handler: async (ctx) => getDefaultOrgId(ctx),
 });
 
+// Cron helpers iterate every org (single org today = identical behavior).
+export const listOrgsInternal = internalQuery({
+  args: {},
+  handler: async (ctx) => ctx.db.query("organizations").collect(),
+});
+
 const B1_TABLES = [
   "orders", "shippingRecaps", "messages", "conversations", "customers", "events",
   "csConfigs", "ingestEvents", "ingestSources", "dailyRollups", "responseSamples",

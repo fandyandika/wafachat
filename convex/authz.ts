@@ -1,4 +1,6 @@
 import { query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { getDefaultOrgId } from "./orgs";
 
 // Authorization helpers for Convex functions (Fase 0 hardening).
 //
@@ -71,3 +73,46 @@ export async function requireAdmin(ctx: Parameters<typeof getViewer>[0], fn: str
   }
   return v;
 }
+
+// ─── Fase B2b: org resolution from the VIEWER (server-side; JWT untouched). ───
+// users.orgId is REQUIRED (B1), so a users-row hit always yields an org.
+// Admin WITHOUT a users row (_admin.mjs platform-operator token) falls back to the
+// default org — single-tenant semantics, revisit with multi-org login (B3).
+// CS without a users row is a misconfiguration: THROW (never silently default).
+
+export type ViewerOrg = { viewer: Viewer; orgId: Id<"organizations"> };
+
+async function resolveViewerOrg(ctx: any, viewer: Viewer, fn: string): Promise<Id<"organizations">> {
+  const userRow = await ctx.db
+    .query("users")
+    .withIndex("by_email", (q: any) => q.eq("email", viewer.email))
+    .unique();
+  if (userRow) return userRow.orgId;
+  if (viewer.role === "admin") {
+    const fallback = await getDefaultOrgId(ctx);
+    if (fallback) return fallback;
+    throw new Error(`unauthorized: ${fn} — org not seeded`);
+  }
+  throw new Error(`unauthorized: ${fn} — no user record for ${viewer.email}`);
+}
+
+export async function requireMemberOrg(ctx: any, fn: string): Promise<ViewerOrg> {
+  const viewer = await requireMember(ctx, fn);
+  if (!viewer) throw new Error(`unauthorized: ${fn} requires a logged-in user`);
+  return { viewer, orgId: await resolveViewerOrg(ctx, viewer, fn) };
+}
+
+export async function requireAdminOrg(ctx: any, fn: string): Promise<ViewerOrg> {
+  const viewer = await requireAdmin(ctx, fn);
+  if (!viewer || viewer.role !== "admin") throw new Error(`unauthorized: ${fn} requires admin`);
+  return { viewer, orgId: await resolveViewerOrg(ctx, viewer, fn) };
+}
+
+/** Test/diagnostic probe for viewer-org resolution (B2b). */
+export const probeOrg = query({
+  args: {},
+  handler: async (ctx) => {
+    const { viewer, orgId } = await requireMemberOrg(ctx, "authz.probeOrg");
+    return { email: viewer.email, role: viewer.role, orgId };
+  },
+});
