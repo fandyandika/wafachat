@@ -154,7 +154,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   if (!conversation) {
     const now = Date.now();
     const csName = args.csName || "Unknown";
-    const csConfig = await getCsFeatureConfig(ctx, csName);
+    const csConfig = await getCsFeatureConfig(ctx, args.orgId, csName);
     const orderId = args.order_id || `manual:${phone}`;
     const conversationId = await ctx.db.insert("conversations", {
       orderId,

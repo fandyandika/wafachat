@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { requireAdmin, requireMember } from "./authz";
+import { requireAdmin, requireMember, requireAdminOrg } from "./authz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isInternalTestPhone, csKey, canonicalizeProduct as canonicalizeProductLib, normalizeProductName as normalizeProductNameLib, windowKeyFor } from "./lib";
@@ -1082,17 +1082,18 @@ export const markLatestCancelledByPhone = internalMutation({
     customerPhone: v.string(),
     orderIdBerdu: v.optional(v.string()),
     reason: v.optional(v.string()),
+    orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
     const phone = normalizePhone(args.customerPhone);
     const rows = args.orderIdBerdu
       ? await ctx.db
           .query("shippingRecaps")
-          .withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", normalizeOrderId(args.orderIdBerdu)))
+          .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", args.orgId).eq("orderIdBerdu", normalizeOrderId(args.orderIdBerdu)))
           .take(1)
       : await ctx.db
           .query("shippingRecaps")
-          .withIndex("by_customerPhone", (q) => q.eq("customerPhone", phone))
+          .withIndex("by_org_customerPhone", (q) => q.eq("orgId", args.orgId).eq("customerPhone", phone))
           .order("desc")
           .take(1);
     const row = rows[0];
@@ -1483,7 +1484,7 @@ export const getPerformance = query({
 export const backfillCsNameByOrderIds = mutation({
   args: { orderIds: v.array(v.string()), csName: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.backfillCsNameByOrderIds");
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.backfillCsNameByOrderIds");
     const now = Date.now();
     const results: Array<{ orderId: string; recap: string; order: string; conversation: string }> = [];
     const canonBf = await canonicalizeCs(ctx, args.csName);
@@ -1496,7 +1497,7 @@ export const backfillCsNameByOrderIds = mutation({
 
       const recap = await ctx.db
         .query("shippingRecaps")
-        .withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", orderId))
+        .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", orgId).eq("orderIdBerdu", orderId))
         .first();
       if (recap) {
         const recapBefore = recap;
@@ -1508,7 +1509,7 @@ export const backfillCsNameByOrderIds = mutation({
 
       const order = await ctx.db
         .query("orders")
-        .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
+        .withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", orderId))
         .unique();
       if (order) {
         const orderBefore = order;
@@ -1520,7 +1521,7 @@ export const backfillCsNameByOrderIds = mutation({
 
       const conversation = await ctx.db
         .query("conversations")
-        .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
+        .withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", orderId))
         .unique();
       if (conversation) {
         await ctx.db.patch(conversation._id, { assignedCsName: canonBf.csName, updatedAt: now });
@@ -1585,7 +1586,7 @@ export const backfillByPhone = mutation({
     entries: v.array(v.object({ phone: v.string(), customerName: v.string(), csName: v.string() })),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.backfillByPhone");
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.backfillByPhone");
     const now = Date.now();
     const results: Array<{ phone: string; conversations: number; orders: number; recaps: number }> = [];
 
@@ -1594,7 +1595,7 @@ export const backfillByPhone = mutation({
 
       const conversations = await ctx.db
         .query("conversations")
-        .withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", phone))
+        .withIndex("by_org_customerPhone_updatedAt", (q) => q.eq("orgId", orgId).eq("customerPhone", phone))
         .collect();
       for (const conv of conversations) {
         await ctx.db.patch(conv._id, { customerName: entry.customerName, assignedCsName: entry.csName, updatedAt: now });
@@ -1602,7 +1603,7 @@ export const backfillByPhone = mutation({
 
       const orders = await ctx.db
         .query("orders")
-        .withIndex("by_customerPhone", (q) => q.eq("customerPhone", phone))
+        .withIndex("by_org_customerPhone", (q) => q.eq("orgId", orgId).eq("customerPhone", phone))
         .collect();
       for (const order of orders) {
         const orderBefore = order;
@@ -1613,7 +1614,7 @@ export const backfillByPhone = mutation({
 
       const recaps = await ctx.db
         .query("shippingRecaps")
-        .withIndex("by_customerPhone", (q) => q.eq("customerPhone", phone))
+        .withIndex("by_org_customerPhone", (q) => q.eq("orgId", orgId).eq("customerPhone", phone))
         .collect();
       for (const recap of recaps) {
         const recapBefore = recap;

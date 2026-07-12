@@ -1,5 +1,6 @@
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { normalizeCsName } from "./lib";
 
@@ -25,10 +26,10 @@ export const enabledCs = internalQuery({
 });
 
 export const bumpSent = internalMutation({
-  args: { csName: v.string(), now: v.number() },
-  handler: async (ctx, { csName, now }) => {
+  args: { csName: v.string(), now: v.number(), orgId: v.id("organizations") },
+  handler: async (ctx, { csName, now, orgId }) => {
     const normalizedName = normalizeCsName(csName);
-    const cfg = await ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName)).unique();
+    const cfg = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName)).unique();
     if (!cfg) return;
     const day = wibDay(now);
     const count = cfg.autoSentDay === day ? (cfg.autoSentCount ?? 0) + 1 : 1;
@@ -44,6 +45,8 @@ export const autoFollowUpSweep = internalAction({
     const now = args.nowOverride ?? Date.now();
     const h = wibHour(now);
     if (h < START_HOUR || h >= END_HOUR) return { sent: 0, skipped: "outside-hours" };
+    const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
+    if (!orgId) throw new Error("autoFollowUpSweep: default org not found");
     const enabled = await ctx.runQuery(internal.autoFollowUp.enabledCs, { now });
     let sent = 0;
     for (const cs of enabled) {
@@ -57,7 +60,7 @@ export const autoFollowUpSweep = internalAction({
       ].slice(0, remaining);
       for (const item of queue) {
         const r = await ctx.runAction(internal.followUp.performFollowUpSend, { conversationId: item.id, stage: item.stage, nowOverride: now });
-        if (r.ok) { sent++; await ctx.runMutation(internal.autoFollowUp.bumpSent, { csName: cs.csName, now }); }
+        if (r.ok) { sent++; await ctx.runMutation(internal.autoFollowUp.bumpSent, { csName: cs.csName, now, orgId }); }
       }
     }
     return { sent };

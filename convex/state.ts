@@ -114,14 +114,13 @@ export const createTestConversation = mutation({
     await requireAdmin(ctx, "state.createTestConversation");
     const now = Date.now();
     const phone = normalizePhone(args.phone);
+    const orgId = await requireDefaultOrgId(ctx);
     const canonTest = await canonicalizeCs(ctx, args.csName ?? "CS Aisyah");
     const productName = args.productName ?? "Test Product";
     const orderId = `TEST-${phone}-${Date.now()}`;
-    const csConfig = await getCsFeatureConfig(ctx, canonTest.csName);
+    const csConfig = await getCsFeatureConfig(ctx, orgId, canonTest.csName);
     const reportable = csConfig.isActive && csConfig.reportingEnabled;
     const aiEligible = reportable && csConfig.aiAssistantEnabled;
-
-    const orgId = await requireDefaultOrgId(ctx);
     const existingCustomer = await ctx.db
       .query("customers")
       .withIndex("by_org_phone", (q) => q.eq("orgId", orgId).eq("phone", phone))
@@ -253,7 +252,7 @@ export async function upsertOrderCore(
   const phone = normalizePhone(args.phone);
   const orderId = args.order_id || makeOrderKey({ phone, productName: args.productName });
   const customerName = args.customerName || "";
-  const csConfig = await getCsFeatureConfig(ctx, args.csName);
+  const csConfig = await getCsFeatureConfig(ctx, args.orgId, args.csName);
   const reportable = csConfig.isActive && csConfig.reportingEnabled;
   const aiEligible = reportable && csConfig.aiAssistantEnabled;
 
@@ -1092,9 +1091,9 @@ export const getConversationContextForN8n = internalQuery({
 
     const order = await ctx.db
       .query("orders")
-      .withIndex("by_orderId", (q) => q.eq("orderId", conversation.orderId))
+      .withIndex("by_org_orderId", (q) => q.eq("orgId", conversation.orgId).eq("orderId", conversation.orderId))
       .unique();
-    const csConfig = await getCsFeatureConfig(ctx, conversation.assignedCsName);
+    const csConfig = await getCsFeatureConfig(ctx, conversation.orgId, conversation.assignedCsName);
 
     const limit = Math.min(args.messageLimit ?? 50, 50);
     const messages = await ctx.db

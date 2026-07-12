@@ -155,10 +155,13 @@ http.route({
     }
 
     if (action === "cancel_shipping_recap") {
+      const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
+      if (!orgId) return jsonResponse({ success: false, error: "org not found" }, 500);
       const result = await ctx.runMutation(internal.shippingRecaps.markLatestCancelledByPhone, {
         customerPhone: String(body.customerPhone || body.phone || ""),
         orderIdBerdu: body.orderIdBerdu || body.order_id ? String(body.orderIdBerdu || body.order_id) : undefined,
         reason: body.reason ? String(body.reason) : undefined,
+        orgId,
       });
       return jsonResponse({ ...result, _action: "cancel_shipping_recap" });
     }

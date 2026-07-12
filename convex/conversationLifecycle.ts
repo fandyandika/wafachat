@@ -48,12 +48,12 @@ export const resolveBatch = internalMutation({
       // only, so a repeat customer's NEW order is never falsely closed by an OLD recap.
       let recap = await ctx.db
         .query("shippingRecaps")
-        .withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", c.orderId))
+        .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", c.orgId).eq("orderIdBerdu", c.orderId))
         .first();
       if (!recap && String(c.orderId).startsWith("manual:")) {
         recap = await ctx.db
           .query("shippingRecaps")
-          .withIndex("by_customerPhone", (q) => q.eq("customerPhone", c.customerPhone))
+          .withIndex("by_org_customerPhone", (q) => q.eq("orgId", c.orgId).eq("customerPhone", c.customerPhone))
           .first();
       }
       let reason: "won" | "marker" | "stale" | null = null;

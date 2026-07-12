@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { requireAdmin, requireMember, requireAdminOrg } from "./authz";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { normalizeCsName, csKey } from "./lib";
 import { requireDefaultOrgId } from "./orgs";
 
@@ -57,11 +58,11 @@ function defaultForName(csName: string): CsFeatureConfig {
   };
 }
 
-export async function getCsFeatureConfig(ctx: { db: any }, csName: string): Promise<CsFeatureConfig> {
+export async function getCsFeatureConfig(ctx: { db: any }, orgId: Id<"organizations">, csName: string): Promise<CsFeatureConfig> {
   const normalizedName = normalizeCsName(csName);
   const stored = await ctx.db
     .query("csConfigs")
-    .withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", normalizedName))
+    .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
     .unique();
 
   if (stored) {
