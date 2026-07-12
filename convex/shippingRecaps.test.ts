@@ -6,6 +6,10 @@ import { parseClosingMessage, canonicalizeProduct } from "./shippingRecaps";
 
 const t0 = 1_750_000_000_000;
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 test("canonicalizeProduct: SKU-style closing names collapse into the order's canonical product", () => {
   // Each SKU fragment (orphan closing) maps to the same canonical name the leads use.
   expect(canonicalizeProduct("QURAN MAPPING 1 PCS")).toBe("Quran Mapping");
@@ -24,13 +28,14 @@ test("canonicalizeProduct: SKU-style closing names collapse into the order's can
 test("backfillFromMessages still upserts one recap for an outbound PEMESANAN BERHASIL", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     const convId = await ctx.db.insert("conversations", {
-      orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "CS Aisyah",
+      orgId, orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "CS Aisyah",
       status: "active", aiEnabled: true, note: "", createdAt: t0, updatedAt: t0,
     });
     await ctx.db.insert("messages", {
-      conversationId: convId, orderId: "O-1", customerPhone: "62811", role: "cs",
+      orgId, conversationId: convId, orderId: "O-1", customerPhone: "62811", role: "cs",
       direction: "outbound", content: "PEMESANAN BERHASIL\nProduk: Quran\nTotal: Rp100.000",
       messageType: "text", source: "n8n", externalMessageId: "msg_1", createdAt: t0,
     });
@@ -110,15 +115,16 @@ test("parseClosingMessage: CS template COD uses Harga as total", () => {
 test("getPerformance: closing groups under the order product name, not the message SKU", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     await ctx.db.insert("orders", {
-      orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Risma",
+      orgId, orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Risma",
       productName: "Quran Mapping", products: "Quran Mapping", productsSubtotal: "", shippingCost: "",
       total: "", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu",
       aiEligible: true, createdAt: t0, updatedAt: t0,
     });
     await ctx.db.insert("shippingRecaps", {
-      orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "Risma",
+      orgId, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "Risma",
       closedAt: t0, recipientName: "A", recipientPhone: "62811", recipientAddress: "", recipientDistrict: "",
       recipientCity: "", packageContent: "QURAN MAPPING 1 PCS", paymentMethod: "transfer",
       nonCodItemPrice: 200000, total: 200000, status: "ready", flags: [], sourceMessageText: "",
@@ -138,11 +144,12 @@ test("renameCsName: renames CS across orders/recaps/conversations, others untouc
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const ord = { products: "", productName: "Q", productsSubtotal: "", shippingCost: "", total: "", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu" as const, aiEligible: true, createdAt: t0, updatedAt: t0 };
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    await ctx.db.insert("orders", { ...ord, orderId: "O-1", customerName: "A", customerPhone: "62811", assignedCsName: "Afisah" });
-    await ctx.db.insert("orders", { ...ord, orderId: "O-2", customerName: "B", customerPhone: "62812", assignedCsName: "Lila" });
-    await ctx.db.insert("shippingRecaps", { orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "Afisah", recipientName: "A", recipientPhone: "x", recipientAddress: "", recipientDistrict: "", recipientCity: "", packageContent: "Q", paymentMethod: "cod" as const, flags: [], sourceMessageText: "", version: 1, closedAt: t0, status: "ready" as const, createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("conversations", { orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Afisah", status: "active" as const, aiEnabled: false, note: "", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ord, orderId: "O-1", customerName: "A", customerPhone: "62811", assignedCsName: "Afisah" });
+    await ctx.db.insert("orders", { orgId, ...ord, orderId: "O-2", customerName: "B", customerPhone: "62812", assignedCsName: "Lila" });
+    await ctx.db.insert("shippingRecaps", { orgId, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "Afisah", recipientName: "A", recipientPhone: "x", recipientAddress: "", recipientDistrict: "", recipientCity: "", packageContent: "Q", paymentMethod: "cod" as const, flags: [], sourceMessageText: "", version: 1, closedAt: t0, status: "ready" as const, createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("conversations", { orgId, orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Afisah", status: "active" as const, aiEnabled: false, note: "", createdAt: t0, updatedAt: t0 });
   });
   const res = await asAdmin.mutation(api.shippingRecaps.renameCsName, { from: "Afisah", to: "Nabila" });
   expect(res).toEqual({ from: "Afisah", to: "Nabila", orders: 1, recaps: 1, conversations: 1 });

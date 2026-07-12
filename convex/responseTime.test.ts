@@ -14,21 +14,26 @@ const msgBase = {
   orderId: "O-1", content: "x", source: "n8n" as const, createdAt: t0,
 };
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 test("getResponseTimes: first-reply median/p90 + ongoing, template excluded, per-CS", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   let conv1: any, conv2: any, convX: any;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    conv1 = await ctx.db.insert("conversations", { ...convBase, customerPhone: "62811", assignedCsName: "CS A" });
-    conv2 = await ctx.db.insert("conversations", { ...convBase, customerPhone: "62812", assignedCsName: "CS A" });
-    convX = await ctx.db.insert("conversations", { ...convBase, customerPhone: "6285715682110", assignedCsName: "CS A" }); // internal phone
+    conv1 = await ctx.db.insert("conversations", { orgId, ...convBase, customerPhone: "62811", assignedCsName: "CS A" });
+    conv2 = await ctx.db.insert("conversations", { orgId, ...convBase, customerPhone: "62812", assignedCsName: "CS A" });
+    convX = await ctx.db.insert("conversations", { orgId, ...convBase, customerPhone: "6285715682110", assignedCsName: "CS A" }); // internal phone
 
     const ins = (
       conversationId: any, customerPhone: string, direction: "inbound" | "outbound", createdAt: number,
       messageType: "text" | "image" | "template" | "button" = "text",
       role: "customer" | "ai" | "cs" | "system" = "cs",
     ) =>
-      ctx.db.insert("messages", { ...msgBase, conversationId, customerPhone, direction, messageType, role, createdAt });
+      ctx.db.insert("messages", { orgId, ...msgBase, conversationId, customerPhone, direction, messageType, role, createdAt });
 
     // conv1: template (skip) -> greeting -> reply 60s -> COD -> reply 30s
     await ins(conv1, "62811", "outbound", t0 + 100, "template", "cs");
@@ -66,11 +71,12 @@ test("getResponseTimes: first-reply median/p90 + ongoing, template excluded, per
 test("getResponseTimes: csName filter", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    const cA = await ctx.db.insert("conversations", { ...convBase, customerPhone: "62811", assignedCsName: "CS A" });
-    const cB = await ctx.db.insert("conversations", { ...convBase, customerPhone: "62820", assignedCsName: "CS B" });
+    const cA = await ctx.db.insert("conversations", { orgId, ...convBase, customerPhone: "62811", assignedCsName: "CS A" });
+    const cB = await ctx.db.insert("conversations", { orgId, ...convBase, customerPhone: "62820", assignedCsName: "CS B" });
     const ins = (conversationId: any, customerPhone: string, direction: "inbound" | "outbound", createdAt: number) =>
-      ctx.db.insert("messages", { ...msgBase, conversationId, customerPhone, direction, messageType: "text", role: "cs", createdAt });
+      ctx.db.insert("messages", { orgId, ...msgBase, conversationId, customerPhone, direction, messageType: "text", role: "cs", createdAt });
     await ins(cA, "62811", "inbound", t0 + 1000);
     await ins(cA, "62811", "outbound", t0 + 61000);
     await ins(cB, "62820", "inbound", t0 + 1000);
@@ -92,14 +98,15 @@ test("getResponseTimes counts SLA breaches (active-hours)", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const wib = (h: number, mi: number) => Date.UTC(2026, 5, 24, h, mi) - 7 * 60 * 60 * 1000;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     const conv = await ctx.db.insert("conversations", {
-      orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Risma",
+      orgId, orderId: "O-1", customerPhone: "62811", customerName: "A", assignedCsName: "Risma",
       status: "active", aiEnabled: false, note: "", createdAt: wib(10, 0), updatedAt: wib(10, 0),
     });
     // breach: inbound 10:00, reply 10:20 (20 active min)
-    await ctx.db.insert("messages", { conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "inbound", role: "customer", messageType: "text", content: "hi", createdAt: wib(10, 0), source: "n8n" as const });
-    await ctx.db.insert("messages", { conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "outbound", role: "cs", messageType: "text", content: "hai", createdAt: wib(10, 20), source: "n8n" as const });
+    await ctx.db.insert("messages", { orgId, conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "inbound", role: "customer", messageType: "text", content: "hi", createdAt: wib(10, 0), source: "n8n" as const });
+    await ctx.db.insert("messages", { orgId, conversationId: conv, orderId: "O-1", customerPhone: "62811", direction: "outbound", role: "cs", messageType: "text", content: "hai", createdAt: wib(10, 20), source: "n8n" as const });
   });
 
   // Populate rollups and samples for the window

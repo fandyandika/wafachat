@@ -4,6 +4,10 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { windowKeyFor, windowRangeForKey } from "./lib";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 const DAY = 86_400_000;
 const t0 = 1_750_000_000_000;
 const ordBase = {
@@ -21,14 +25,15 @@ test("getCsLeaderboard: per-CS metrics + delta vs prior window, ranked", async (
   // Use window-aligned ranges to ensure proper period separation
   const curWindow = windowRangeForKey(windowKeyFor(t0));
   const priorWindow = windowRangeForKey(windowKeyFor(t0 - DAY)); // Exactly 1 window back (DAY = window duration)
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // current window: CS A = 2 leads 1 closing; CS B = 1 lead 0 closing
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-3", customerPhone: "62813", assignedCsName: "CS B", productName: "Q", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: curWindow.startAt + 100, total: 100000, status: "ready", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "O-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "O-2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "O-3", customerPhone: "62813", assignedCsName: "CS B", productName: "Q", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: curWindow.startAt + 100, total: 100000, status: "ready", createdAt: curWindow.startAt + 100, updatedAt: curWindow.startAt + 100 });
     // prior window: CS A = 1 lead 0 closing
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-0", customerPhone: "62810", assignedCsName: "CS A", productName: "Q", createdAt: priorWindow.startAt + 100, updatedAt: priorWindow.startAt + 100 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "O-0", customerPhone: "62810", assignedCsName: "CS A", productName: "Q", createdAt: priorWindow.startAt + 100, updatedAt: priorWindow.startAt + 100 });
   });
 
   // Populate rollups for windows touched by seeded data
@@ -51,16 +56,17 @@ test("getCsLeaderboard: per-CS metrics + delta vs prior window, ranked", async (
 test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // "Hard": 4 leads, 0 closing -> CR 0 (hardest)
-    for (let i = 0; i < 4; i++) await ctx.db.insert("orders", { ...ordBase, orderId: `H${i}`, customerPhone: `6280${i}`, assignedCsName: "CS A", productName: "Hard", createdAt: t0, updatedAt: t0 });
+    for (let i = 0; i < 4; i++) await ctx.db.insert("orders", { orgId, ...ordBase, orderId: `H${i}`, customerPhone: `6280${i}`, assignedCsName: "CS A", productName: "Hard", createdAt: t0, updatedAt: t0 });
     // "Easy": 4 leads, 4 closings -> CR 100
     for (let i = 0; i < 4; i++) {
-      await ctx.db.insert("orders", { ...ordBase, orderId: `E${i}`, customerPhone: `6281${i}`, assignedCsName: "CS A", productName: "Easy", createdAt: t0, updatedAt: t0 });
-      await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: `E${i}`, customerPhone: `6281${i}`, customerName: "A", csName: "CS A", closedAt: t0, packageContent: "Easy", total: 1, status: "ready", createdAt: t0, updatedAt: t0 });
+      await ctx.db.insert("orders", { orgId, ...ordBase, orderId: `E${i}`, customerPhone: `6281${i}`, assignedCsName: "CS A", productName: "Easy", createdAt: t0, updatedAt: t0 });
+      await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: `E${i}`, customerPhone: `6281${i}`, customerName: "A", csName: "CS A", closedAt: t0, packageContent: "Easy", total: 1, status: "ready", createdAt: t0, updatedAt: t0 });
     }
     // "Rare": 2 leads -> filtered out (minLeads default 3)
-    for (let i = 0; i < 2; i++) await ctx.db.insert("orders", { ...ordBase, orderId: `R${i}`, customerPhone: `6282${i}`, assignedCsName: "CS A", productName: "Rare", createdAt: t0, updatedAt: t0 });
+    for (let i = 0; i < 2; i++) await ctx.db.insert("orders", { orgId, ...ordBase, orderId: `R${i}`, customerPhone: `6282${i}`, assignedCsName: "CS A", productName: "Rare", createdAt: t0, updatedAt: t0 });
   });
 
   // Populate rollups for the window
@@ -97,14 +103,15 @@ test("getPeriodReport: week period, current vs prior week + per-CS", async () =>
     allWindowsNeeded.add(windowKeyFor(priorWeekStart.startAt + i * DAY));
   }
 
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // current week: CS A = 2 leads, 1 closing, revenue 50000
     // Place data clearly at the start of the current week window
-    await ctx.db.insert("orders", { ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "C2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: curWeekStart.startAt + 100, total: 50000, status: "ready", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "C2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: curWeekStart.startAt + 100, total: 50000, status: "ready", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
     // prior week: 1 lead (14 days back)
-    await ctx.db.insert("orders", { ...ordBase, orderId: "P1", customerPhone: "62820", assignedCsName: "CS A", productName: "Q", createdAt: priorWeekStart.startAt + 100, updatedAt: priorWeekStart.startAt + 100 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "P1", customerPhone: "62820", assignedCsName: "CS A", productName: "Q", createdAt: priorWeekStart.startAt + 100, updatedAt: priorWeekStart.startAt + 100 });
   });
 
   // Populate all necessary rollups
@@ -125,17 +132,18 @@ test("getPeriodReport: week period, current vs prior week + per-CS", async () =>
 test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // CS A: 3 leads on product Q (one is a duplicate phone), 2 closings, discount 40000 total
-    await ctx.db.insert("orders", { ...ordBase, orderId: "A1", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "A2", customerPhone: "62812", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "A3", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0 + 1, updatedAt: t0 }); // dup phone of A1
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "A1", customerPhone: "62811", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0, total: 100000, discount: 25000, status: "ready", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "A2", customerPhone: "62812", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0, total: 100000, discount: 15000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "A1", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "A2", customerPhone: "62812", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "A3", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0 + 1, updatedAt: t0 }); // dup phone of A1
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "A1", customerPhone: "62811", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0, total: 100000, discount: 25000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "A2", customerPhone: "62812", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0, total: 100000, discount: 15000, status: "ready", createdAt: t0, updatedAt: t0 });
     // an internal/test phone lead must be excluded
-    await ctx.db.insert("orders", { ...ordBase, orderId: "X1", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "X1", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0, updatedAt: t0 });
     // a cancelled closing must be excluded
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "A9", customerPhone: "62899", customerName: "A", csName: "CS A", packageContent: "Quran Mapping", closedAt: t0, total: 100000, status: "cancelled", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "A9", customerPhone: "62899", customerName: "A", csName: "CS A", packageContent: "Quran Mapping", closedAt: t0, total: 100000, status: "cancelled", createdAt: t0, updatedAt: t0 });
   });
 
   // Populate rollups for the window
@@ -162,11 +170,12 @@ test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async (
 test("getDailyReport: per-CS totals match getCsLeaderboard (no drift)", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O-3", customerPhone: "62813", assignedCsName: "CS B", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "O-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "O-2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "O-3", customerPhone: "62813", assignedCsName: "CS B", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
 
   // Populate rollups for the window
@@ -188,11 +197,12 @@ test("getDailyReport: per-CS totals match getCsLeaderboard (no drift)", async ()
 test("getDailyReport: cross-window closing canonicalizes product via order (no SKU fragment)", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // lead created BEFORE the window; canonical product "Quran Mapping"
-    await ctx.db.insert("orders", { ...ordBase, orderId: "OW1", customerPhone: "62830", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0 - DAY, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "OW1", customerPhone: "62830", assignedCsName: "CS A", productName: "Quran Mapping", createdAt: t0 - DAY, updatedAt: t0 });
     // closing INSIDE the window; packageContent uses the SKU name; linked via orderIdBerdu
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "OW1", customerPhone: "62830", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0 + 1000, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "OW1", customerPhone: "62830", customerName: "A", csName: "CS A", packageContent: "QURAN MAPPING 1 PCS", closedAt: t0 + 1000, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
 
   // Populate rollups for the window containing the closing (t0)
@@ -213,9 +223,10 @@ test("getCsLeaderboard honors csName via csKey (CS Aisyah == Aisyah)", async () 
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const t0_new = Date.parse("2026-06-22T10:00:00+07:00");
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O1", customerPhone: "62811", customerName: "A", productName: "Quran Mapping", assignedCsName: "Aisyah", createdAt: t0_new, updatedAt: t0_new });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "O2", customerPhone: "62822", customerName: "B", productName: "Quran Mapping", assignedCsName: "Risma", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "O1", customerPhone: "62811", customerName: "A", productName: "Quran Mapping", assignedCsName: "Aisyah", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "O2", customerPhone: "62822", customerName: "B", productName: "Quran Mapping", assignedCsName: "Risma", createdAt: t0_new, updatedAt: t0_new });
   });
 
   // Populate rollups for the window
@@ -234,12 +245,13 @@ test("getCsLeaderboard honors csName via csKey (CS Aisyah == Aisyah)", async () 
 test("getDailyReport merges raw name variants of one CS into a single card (no fragmentation)", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // Same CS, two raw name-forms: orders + main recap use "Aisyah"; one stray recap "CS Aisyah".
-    await ctx.db.insert("orders", { ...ordBase, orderId: "V-1", customerPhone: "62831", assignedCsName: "Aisyah", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "V-2", customerPhone: "62832", assignedCsName: "Aisyah", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "V-1", customerPhone: "62831", customerName: "A", csName: "Aisyah", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "V-9", customerPhone: "62839", customerName: "B", csName: "CS Aisyah", closedAt: t0, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "V-1", customerPhone: "62831", assignedCsName: "Aisyah", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "V-2", customerPhone: "62832", assignedCsName: "Aisyah", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "V-1", customerPhone: "62831", customerName: "A", csName: "Aisyah", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "V-9", customerPhone: "62839", customerName: "B", csName: "CS Aisyah", closedAt: t0, total: 50000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
 
   // Populate rollups for the window
@@ -257,12 +269,13 @@ test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () =
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const t0_new = Date.parse("2026-06-22T10:00:00+07:00");
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // current week: CS Aisyah = 2 leads, 1 closing, revenue 50000; CS Risma = 1 lead, 0 closing
-    await ctx.db.insert("orders", { ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "Aisyah", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "C2", customerPhone: "62812", assignedCsName: "Aisyah", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "C3", customerPhone: "62813", assignedCsName: "Risma", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "Aisyah", closedAt: t0_new, total: 50000, status: "ready", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "Aisyah", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "C2", customerPhone: "62812", assignedCsName: "Aisyah", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "C3", customerPhone: "62813", assignedCsName: "Risma", productName: "Q", createdAt: t0_new, updatedAt: t0_new });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "Aisyah", closedAt: t0_new, total: 50000, status: "ready", createdAt: t0_new, updatedAt: t0_new });
   });
 
   // Populate rollups for the window
@@ -299,13 +312,14 @@ test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () =
 test("CR uses unique CUSTOMERS: an order-double closing twice does not inflate the rate", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // CS A: 2 unique customers; customer 62811 double-orders and BOTH orders close.
-    await ctx.db.insert("orders", { ...ordBase, orderId: "D-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "D-2", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0 + 1000, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "D-3", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "D-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "D-2", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0 + 2000, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "D-1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "D-2", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: t0 + 1000, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "D-3", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "D-1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "D-2", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: t0 + 2000, total: 100000, status: "ready", createdAt: t0, updatedAt: t0 });
   });
 
   // Populate rollups for the window
@@ -329,18 +343,19 @@ test("getCsDetail: counted closings match card semantics; cancelled + boundary s
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const H = 3_600_000;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // Leads: 3 orders, 2 unique customers (62841 doubles)
-    await ctx.db.insert("orders", { ...ordBase, orderId: "W-1", customerPhone: "62841", assignedCsName: "CS A", productName: "Q", createdAt: t0 + H, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "W-2", customerPhone: "62841", assignedCsName: "CS A", productName: "Q", createdAt: t0 + 2 * H, updatedAt: t0 });
-    await ctx.db.insert("orders", { ...ordBase, orderId: "W-3", customerPhone: "62842", assignedCsName: "CS A", productName: "Q", createdAt: t0 + 3 * H, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "W-1", customerPhone: "62841", assignedCsName: "CS A", productName: "Q", createdAt: t0 + H, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "W-2", customerPhone: "62841", assignedCsName: "CS A", productName: "Q", createdAt: t0 + 2 * H, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "W-3", customerPhone: "62842", assignedCsName: "CS A", productName: "Q", createdAt: t0 + 3 * H, updatedAt: t0 });
     // Closings: 2 counted, 1 cancelled (excluded), 1 outside window (boundary after)
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "W-1", customerPhone: "62841", customerName: "A", csName: "CS A", closedAt: t0 + 4 * H, total: 100, status: "ready", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "W-3", customerPhone: "62842", customerName: "B", csName: "CS A", closedAt: t0 + 5 * H, total: 200, status: "ready", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "W-9", customerPhone: "62849", customerName: "C", csName: "CS A", closedAt: t0 + 6 * H, total: 300, status: "cancelled", createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { ...recBase, orderIdBerdu: "W-8", customerPhone: "62848", customerName: "D", csName: "CS A", closedAt: t0 + DAY + H, total: 400, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "W-1", customerPhone: "62841", customerName: "A", csName: "CS A", closedAt: t0 + 4 * H, total: 100, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "W-3", customerPhone: "62842", customerName: "B", csName: "CS A", closedAt: t0 + 5 * H, total: 200, status: "ready", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "W-9", customerPhone: "62849", customerName: "C", csName: "CS A", closedAt: t0 + 6 * H, total: 300, status: "cancelled", createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "W-8", customerPhone: "62848", customerName: "D", csName: "CS A", closedAt: t0 + DAY + H, total: 400, status: "ready", createdAt: t0, updatedAt: t0 });
     // Other CS in window must not leak in
-    await ctx.db.insert("orders", { ...ordBase, orderId: "X-1", customerPhone: "62851", assignedCsName: "CS B", productName: "Q", createdAt: t0 + H, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "X-1", customerPhone: "62851", assignedCsName: "CS B", productName: "Q", createdAt: t0 + H, updatedAt: t0 });
   });
   const d = await asAdmin.query(api.analytics.getCsDetail, { startAt: t0, endAt: t0 + DAY, csName: "CS A" });
   expect(d.counts).toEqual({ closings: 2, leadsUnique: 2, leadOrders: 3 });

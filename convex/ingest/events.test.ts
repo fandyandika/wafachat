@@ -3,14 +3,19 @@ import { expect, test } from "vitest";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 const asAdmin = (t: ReturnType<typeof convexTest>) =>
   t.withIdentity({ subject: "a1", role: "admin", name: "Admin", email: "a@w" });
 
 test("capture -> mark lifecycle", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   const eventId = await t.mutation(internal.ingest.events.captureEvent, {
     sourceKey: "kirimdev-pustakaislam", kind: "message.event",
-    rawHeaders: "{}", rawBody: "{}", signatureOk: true,
+    rawHeaders: "{}", rawBody: "{}", signatureOk: true, orgId,
   });
   await t.mutation(internal.ingest.events.markProcessed, { eventId, resultRef: "msg123" });
   const rows = await asAdmin(t).query(api.ingest.events.listRecent, {});
@@ -21,11 +26,12 @@ test("capture -> mark lifecycle", async () => {
 
 test("markFailed and markSkipped record reasons", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   const a = await t.mutation(internal.ingest.events.captureEvent, {
-    sourceKey: "s", kind: "unknown", rawHeaders: "{}", rawBody: "x", signatureOk: false,
+    sourceKey: "s", kind: "unknown", rawHeaders: "{}", rawBody: "x", signatureOk: false, orgId,
   });
   const b = await t.mutation(internal.ingest.events.captureEvent, {
-    sourceKey: "s", kind: "unknown", rawHeaders: "{}", rawBody: "y", signatureOk: true,
+    sourceKey: "s", kind: "unknown", rawHeaders: "{}", rawBody: "y", signatureOk: true, orgId,
   });
   await t.mutation(internal.ingest.events.markFailed, { eventId: a, error: "boom" });
   await t.mutation(internal.ingest.events.markSkipped, { eventId: b, skipReason: "event x" });
@@ -38,11 +44,12 @@ test("markFailed and markSkipped record reasons", async () => {
 
 test("cleanupOld deletes only rows older than cutoff", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   await t.mutation(internal.ingest.events.captureEvent, {
-    sourceKey: "s", kind: "k", rawHeaders: "{}", rawBody: "old", signatureOk: true,
+    sourceKey: "s", kind: "k", rawHeaders: "{}", rawBody: "old", signatureOk: true, orgId,
   });
   await t.mutation(internal.ingest.events.captureEvent, {
-    sourceKey: "s", kind: "k", rawHeaders: "{}", rawBody: "new", signatureOk: true,
+    sourceKey: "s", kind: "k", rawHeaders: "{}", rawBody: "new", signatureOk: true, orgId,
   });
   const res = await t.mutation(internal.ingest.events.cleanupOld, { olderThanMs: 0 });
   expect(res.deleted).toBe(0); // nothing older than epoch 0
@@ -57,6 +64,7 @@ test("listRecent requires admin", async () => {
 
 test("sources: upsert, lookup, redact, enforce flip", async () => {
   const t = convexTest(schema);
+  await seedOrg(t);
   await asAdmin(t).mutation(api.ingest.sources.upsertSource, {
     sourceKey: "kirimdev-pustakaislam", name: "KirimDev Pustaka Islam",
     kind: "kirimdev", secret: "whsec_supersecret1234", enabled: true, enforceSignature: false,
@@ -92,12 +100,13 @@ test("sources mutations require admin", async () => {
 
 test("dailyStats aggregates by status and kind", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   const e1 = await t.mutation(internal.ingest.events.captureEvent, {
-    sourceKey: "s", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true,
+    sourceKey: "s", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true, orgId,
   });
   await t.mutation(internal.ingest.events.markProcessed, { eventId: e1 });
   await t.mutation(internal.ingest.events.captureEvent, {
-    sourceKey: "s", kind: "lead.created", rawHeaders: "{}", rawBody: "{}", signatureOk: true,
+    sourceKey: "s", kind: "lead.created", rawHeaders: "{}", rawBody: "{}", signatureOk: true, orgId,
   });
   const stats = await asAdmin(t).query(api.ingest.events.dailyStats, {
     dayStartMs: Date.now() - 3_600_000, dayEndMs: Date.now() + 3_600_000,

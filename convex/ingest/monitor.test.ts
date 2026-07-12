@@ -34,12 +34,13 @@ describe("shouldAlert (pure)", () => {
 describe("health snapshot + cooldown", () => {
   test("snapshot reads last processed message.event and failed count", async () => {
     const t = convexTest(schema);
+    const orgId = await t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 })) as any;
     const e = await t.mutation(internal.ingest.events.captureEvent, {
-      sourceKey: "s", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true,
+      sourceKey: "s", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true, orgId,
     });
     await t.mutation(internal.ingest.events.markProcessed, { eventId: e });
     const f = await t.mutation(internal.ingest.events.captureEvent, {
-      sourceKey: "s", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true,
+      sourceKey: "s", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true, orgId,
     });
     await t.mutation(internal.ingest.events.markFailed, { eventId: f, error: "x" });
     const snap = await t.query(internal.ingest.monitor.getHealthSnapshot, { nowMs: Date.now() });
@@ -49,6 +50,7 @@ describe("health snapshot + cooldown", () => {
 
   test("cooldown: second stamp within 60min is blocked", async () => {
     const t = convexTest(schema);
+    await t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
     const now = Date.now();
     const first = await t.mutation(internal.ingest.monitor.stampAlertIfCool, { alertKey: "silence", nowMs: now });
     expect(first.sent).toBe(true);

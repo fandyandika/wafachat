@@ -4,6 +4,10 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const now = Date.UTC(2026, 5, 26, 5, 0, 0); // 2026-06-26 05:00 UTC (12:00 WIB)
@@ -23,6 +27,7 @@ const conv = (orderId: string, phone: string, over: Record<string, unknown> = {}
 
 test("(a) inbound→outbound overnight timestamps → 1 sample with wall-clock delta", async () => {
   const t = convexTest(schema);
+  await seedOrg(t);
   // inboundAt = 2026-06-25 21:00 UTC = 04:00 WIB (outside BH 05:30-18:00)
   const inboundAt = Date.UTC(2026, 5, 25, 21, 0, 0);
   // outboundAt = 2026-06-26 02:00 UTC = 09:00 WIB (inside BH)
@@ -88,6 +93,7 @@ test("(a) inbound→outbound overnight timestamps → 1 sample with wall-clock d
 
 test("(b) inbound,inbound,outbound → 1 sample paired to FIRST inbound", async () => {
   const t = convexTest(schema);
+  await seedOrg(t);
   const inbound1At = now;
   const inbound2At = now + 1 * HOUR;
 
@@ -145,6 +151,7 @@ test("(b) inbound,inbound,outbound → 1 sample paired to FIRST inbound", async 
 
 test("(c) outbound template → no sample, pending preserved", async () => {
   const t = convexTest(schema);
+  await seedOrg(t);
   const inboundAt = now;
 
   // Inbound (sets pending)
@@ -187,9 +194,10 @@ test("(c) outbound template → no sample, pending preserved", async () => {
 test("(d) outbound with no pending → no sample", async () => {
   const t = convexTest(schema);
   let convId: Id<"conversations">;
+  const orgId = await seedOrg(t);
 
   await t.run(async (ctx) => {
-    convId = await ctx.db.insert("conversations", conv("O-D", "62804"));
+    convId = await ctx.db.insert("conversations", { orgId, ...conv("O-D", "62804") });
   });
 
   // Append outbound (no prior inbound, so no pending)
@@ -216,6 +224,7 @@ test("(d) outbound with no pending → no sample", async () => {
 
 test("(e) replay same externalMessageId → no duplicate sample", async () => {
   const t = convexTest(schema);
+  await seedOrg(t);
   const inboundAt = now;
   const extId = "ext-123";
 
@@ -272,6 +281,7 @@ test("(e) replay same externalMessageId → no duplicate sample", async () => {
 
 test("(f) 20-min gap inside business hours → slaBreach: true", async () => {
   const t = convexTest(schema);
+  await seedOrg(t);
 
   // Date.UTC(2026,6,8,3,0) = 2026-07-08 03:00 UTC = 10:00 WIB (inside business hours 05:30-18:00 WIB)
   const inboundAt = Date.UTC(2026, 6, 8, 3, 0, 0);

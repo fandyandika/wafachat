@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { windowRangeForKey, windowKeyFor } from "./lib";
+import { requireDefaultOrgId } from "./orgs";
 
 /**
  * Rollup Reader Parity Tests
@@ -29,6 +30,7 @@ const t1 = w1Start + 3_600_000;
 // Synthetic dataset seed: rich data across both windows, two CS
 async function seedRichDataset(t: ReturnType<typeof convexTest>) {
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     // ── WINDOW 1 (W1) ──────────────────────────────────────────────────────
 
     // Azelia: 4 orders (one is test phone, excluded; one is duplicate)
@@ -45,6 +47,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
       shippingAddress: "",
       shippingDistrict: "",
       shippingCity: "",
+      orgId,
       source: "berdu",
       aiEligible: false,
       createdAt: t1,
@@ -65,6 +68,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
       shippingAddress: "",
       shippingDistrict: "",
       shippingCity: "",
+      orgId,
       source: "berdu",
       aiEligible: false,
       createdAt: t1 + 1000,
@@ -85,6 +89,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
       shippingAddress: "",
       shippingDistrict: "",
       shippingCity: "",
+      orgId,
       source: "berdu",
       aiEligible: false,
       createdAt: t1 + 2000,
@@ -105,6 +110,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
       shippingAddress: "",
       shippingDistrict: "",
       shippingCity: "",
+      orgId,
       source: "berdu",
       aiEligible: false,
       createdAt: t1 + 3000,
@@ -125,6 +131,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
       shippingAddress: "",
       shippingDistrict: "",
       shippingCity: "",
+      orgId,
       source: "berdu",
       aiEligible: false,
       createdAt: t1 + 4000,
@@ -144,6 +151,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
       shippingAddress: "",
       shippingDistrict: "",
       shippingCity: "",
+      orgId,
       source: "berdu",
       aiEligible: false,
       createdAt: t1 + 5000,
@@ -154,6 +162,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Azelia: 2 closings (O-101 status="exported", O-103 status="delivered")
     await ctx.db.insert("shippingRecaps", {
+      orgId,
       customerPhone: "6281111111101",
       customerName: "Customer A",
       csName: "Azelia",
@@ -179,6 +188,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
     } as any);
 
     await ctx.db.insert("shippingRecaps", {
+      orgId,
       customerPhone: "6281111111102",
       customerName: "Customer B",
       csName: "Azelia",
@@ -205,6 +215,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Azelia: 1 cancelled
     await ctx.db.insert("shippingRecaps", {
+      orgId,
       customerPhone: "6281111111105",
       customerName: "Customer E",
       csName: "Azelia",
@@ -228,6 +239,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Lila: 1 closing
     await ctx.db.insert("shippingRecaps", {
+      orgId,
       customerPhone: "6281111111201",
       customerName: "Customer C",
       csName: "Lila",
@@ -256,6 +268,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Conversation 1: Customer 6281111111101 <- Azelia
     const conv1 = await ctx.db.insert("conversations", {
+      orgId,
       orderId: "O-101",
       customerPhone: "6281111111101",
       customerName: "Customer A",
@@ -269,6 +282,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Pair 1: inbound → outbound (not template, not system)
     await ctx.db.insert("messages", {
+      orgId,
       conversationId: conv1,
       orderId: "O-101",
       customerPhone: "6281111111101",
@@ -281,6 +295,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
     } as any);
 
     await ctx.db.insert("messages", {
+      orgId,
       conversationId: conv1,
       orderId: "O-101",
       customerPhone: "6281111111101",
@@ -294,6 +309,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Pair 2 (ongoing): inbound → outbound
     await ctx.db.insert("messages", {
+      orgId,
       conversationId: conv1,
       orderId: "O-101",
       customerPhone: "6281111111101",
@@ -306,6 +322,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
     } as any);
 
     await ctx.db.insert("messages", {
+      orgId,
       conversationId: conv1,
       orderId: "O-101",
       customerPhone: "6281111111101",
@@ -319,6 +336,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Template message (should NOT pair)
     await ctx.db.insert("messages", {
+      orgId,
       conversationId: conv1,
       orderId: "O-101",
       customerPhone: "6281111111101",
@@ -332,6 +350,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Conversation 2: Customer 6281111111102 <- Azelia (different customer)
     const conv2 = await ctx.db.insert("conversations", {
+      orgId,
       orderId: "O-103",
       customerPhone: "6281111111102",
       customerName: "Customer B",
@@ -345,6 +364,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Pair 1
     await ctx.db.insert("messages", {
+      orgId,
       conversationId: conv2,
       orderId: "O-103",
       customerPhone: "6281111111102",
@@ -357,6 +377,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
     } as any);
 
     await ctx.db.insert("messages", {
+      orgId,
       conversationId: conv2,
       orderId: "O-103",
       customerPhone: "6281111111102",
@@ -370,6 +391,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Conversation 3: Customer 6281111111201 <- Lila
     const conv3 = await ctx.db.insert("conversations", {
+      orgId,
       orderId: "O-201",
       customerPhone: "6281111111201",
       customerName: "Customer C",
@@ -383,6 +405,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Pair 1
     await ctx.db.insert("messages", {
+      orgId,
       conversationId: conv3,
       orderId: "O-201",
       customerPhone: "6281111111201",
@@ -395,6 +418,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
     } as any);
 
     await ctx.db.insert("messages", {
+      orgId,
       conversationId: conv3,
       orderId: "O-201",
       customerPhone: "6281111111201",
@@ -424,6 +448,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
       shippingAddress: "",
       shippingDistrict: "",
       shippingCity: "",
+      orgId,
       source: "berdu",
       aiEligible: false,
       createdAt: t2,
@@ -444,6 +469,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
       shippingAddress: "",
       shippingDistrict: "",
       shippingCity: "",
+      orgId,
       source: "berdu",
       aiEligible: false,
       createdAt: t2 + 1000,
@@ -452,6 +478,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Azelia: 1 closing in W2
     await ctx.db.insert("shippingRecaps", {
+      orgId,
       customerPhone: "6281111111301",
       customerName: "Customer F",
       csName: "Azelia",
@@ -478,6 +505,7 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 
     // Lila: 1 closing in W2
     await ctx.db.insert("shippingRecaps", {
+      orgId,
       customerPhone: "6281111111401",
       customerName: "Customer G",
       csName: "Lila",
@@ -507,6 +535,8 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
 async function runTest(name: string, fn: (t: ReturnType<typeof convexTest>) => Promise<void>) {
   test(name, async () => {
     const t = convexTest(schema);
+    const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+    await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
     await seedRichDataset(t);
     // Backfill rollups for both windows
     await t.mutation(internal.rollups.recomputeWindow, { windowKey: W1 });

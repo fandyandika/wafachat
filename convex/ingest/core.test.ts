@@ -3,6 +3,10 @@ import { expect, test } from "vitest";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 const asAdmin = (t: ReturnType<typeof convexTest>) =>
   t.withIdentity({ subject: "a1", role: "admin", name: "Admin", email: "a@w" });
 
@@ -15,24 +19,26 @@ const RECEIVED_RAW = JSON.stringify({
 });
 const RECEIVED_HEADERS = JSON.stringify({ "x-kirim-event": "message.received" });
 
-async function captureKirimdev(t: ReturnType<typeof convexTest>, rawBody: string, rawHeaders = RECEIVED_HEADERS) {
+async function captureKirimdev(t: ReturnType<typeof convexTest>, orgId: any, rawBody: string, rawHeaders = RECEIVED_HEADERS) {
   return t.mutation(internal.ingest.events.captureEvent, {
     sourceKey: "kirimdev-pustakaislam", kind: "message.event",
-    rawHeaders, rawBody, signatureOk: true,
+    rawHeaders, rawBody, signatureOk: true, orgId,
   });
 }
 
 test("processEvent ingests message with original timestamp + CS from providerNumberIds", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     await ctx.db.insert("csConfigs", {
+      orgId,
       normalizedName: "cs azelia", csName: "CS Azelia",
       providerNumberIds: ["485071188032281"],
       orderAutomationEnabled: false, aiAssistantEnabled: false, reportingEnabled: true,
       isActive: true, createdAt: Date.now(), updatedAt: Date.now(),
     });
   });
-  const eventId = await captureKirimdev(t, RECEIVED_RAW);
+  const eventId = await captureKirimdev(t, orgId, RECEIVED_RAW);
   await t.mutation(internal.ingest.core.processEvent, { eventId });
 
   const events = await asAdmin(t).query(api.ingest.events.listRecent, {});
@@ -50,15 +56,17 @@ test("processEvent ingests message with original timestamp + CS from providerNum
 
 test("legacy single providerNumberId still matches", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     await ctx.db.insert("csConfigs", {
+      orgId,
       normalizedName: "cs azelia", csName: "CS Azelia",
       providerNumberId: "485071188032281",
       orderAutomationEnabled: false, aiAssistantEnabled: false, reportingEnabled: true,
       isActive: true, createdAt: Date.now(), updatedAt: Date.now(),
     });
   });
-  const eventId = await captureKirimdev(t, RECEIVED_RAW);
+  const eventId = await captureKirimdev(t, orgId, RECEIVED_RAW);
   await t.mutation(internal.ingest.core.processEvent, { eventId });
   await t.run(async (ctx) => {
     const convs = await ctx.db.query("conversations").collect();
@@ -68,8 +76,9 @@ test("legacy single providerNumberId still matches", async () => {
 
 test("idempotent: same externalMessageId twice -> one message, both events processed", async () => {
   const t = convexTest(schema);
-  const e1 = await captureKirimdev(t, RECEIVED_RAW);
-  const e2 = await captureKirimdev(t, RECEIVED_RAW);
+  const orgId = await seedOrg(t);
+  const e1 = await captureKirimdev(t, orgId, RECEIVED_RAW);
+  const e2 = await captureKirimdev(t, orgId, RECEIVED_RAW);
   await t.mutation(internal.ingest.core.processEvent, { eventId: e1 });
   await t.mutation(internal.ingest.core.processEvent, { eventId: e2 });
   await t.run(async (ctx) => {
@@ -81,8 +90,9 @@ test("idempotent: same externalMessageId twice -> one message, both events proce
 
 test("skip payload marks skipped with reason", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   const raw = JSON.stringify({ entry: [{ changes: [{ value: { messages: [] } }] }] });
-  const eventId = await captureKirimdev(t, raw);
+  const eventId = await captureKirimdev(t, orgId, raw);
   await t.mutation(internal.ingest.core.processEvent, { eventId });
   const skipped = await asAdmin(t).query(api.ingest.events.listRecent, { status: "skipped" });
   expect(skipped[0].skipReason).toBe("inbound no message");
@@ -90,6 +100,7 @@ test("skip payload marks skipped with reason", async () => {
 
 test("closing detection fires through the ingest path", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   const sentRaw = JSON.stringify({
     type: "message.sent",
     data: {
@@ -102,7 +113,7 @@ test("closing detection fires through the ingest path", async () => {
   });
   const eventId = await t.mutation(internal.ingest.events.captureEvent, {
     sourceKey: "kirimdev-pustakaislam", kind: "message.event",
-    rawHeaders: JSON.stringify({ "x-kirim-event": "message.sent" }), rawBody: sentRaw, signatureOk: true,
+    rawHeaders: JSON.stringify({ "x-kirim-event": "message.sent" }), rawBody: sentRaw, signatureOk: true, orgId,
   });
   await t.mutation(internal.ingest.core.processEvent, { eventId });
   await t.run(async (ctx) => {
@@ -113,7 +124,8 @@ test("closing detection fires through the ingest path", async () => {
 
 test("replayEvent re-processes an event (admin only), bookkeeping via replayOf", async () => {
   const t = convexTest(schema);
-  const eventId = await captureKirimdev(t, RECEIVED_RAW);
+  const orgId = await seedOrg(t);
+  const eventId = await captureKirimdev(t, orgId, RECEIVED_RAW);
   await t.mutation(internal.ingest.events.markFailed, { eventId, error: "simulated" });
   await expect(t.mutation(api.ingest.core.replayEvent, { eventId })).rejects.toThrow(/unauthorized/);
   const res = await asAdmin(t).mutation(api.ingest.core.replayEvent, { eventId });
@@ -127,7 +139,8 @@ test("replayEvent re-processes an event (admin only), bookkeeping via replayOf",
 
 test("replayAllFailed replays every failed event", async () => {
   const t = convexTest(schema);
-  const e1 = await captureKirimdev(t, RECEIVED_RAW);
+  const orgId = await seedOrg(t);
+  const e1 = await captureKirimdev(t, orgId, RECEIVED_RAW);
   await t.mutation(internal.ingest.events.markFailed, { eventId: e1, error: "x" });
   const res = await asAdmin(t).mutation(api.ingest.core.replayAllFailed, {});
   expect(res.replayed).toBe(1);
@@ -137,8 +150,10 @@ test("replayAllFailed replays every failed event", async () => {
 
 test("lead.created ingests order via upsertOrderCore with preserved createdAt", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     await ctx.db.insert("csConfigs", {
+      orgId,
       normalizedName: "cs azelia", csName: "CS Azelia",
       orderAutomationEnabled: false, aiAssistantEnabled: false, reportingEnabled: true,
       isActive: true, createdAt: Date.now(), updatedAt: Date.now(),
@@ -151,7 +166,7 @@ test("lead.created ingests order via upsertOrderCore with preserved createdAt", 
     products: [{ name: "Buku Sirah", price: 85000, count: 1 }],
   }});
   const eventId = await t.mutation(internal.ingest.events.captureEvent, {
-    sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}", rawBody: raw, signatureOk: true,
+    sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}", rawBody: raw, signatureOk: true, orgId,
   });
   await t.mutation(internal.ingest.core.processEvent, { eventId });
   await t.run(async (ctx) => {
@@ -166,8 +181,10 @@ test("lead.created ingests order via upsertOrderCore with preserved createdAt", 
 
 test("lead.created attribution: csConfigs.berduStaffIds overrides the baked default map", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     await ctx.db.insert("csConfigs", {
+      orgId,
       normalizedName: "sari", csName: "Sari",
       berduStaffIds: ["B-1apQSy"], // id that the DEFAULT map assigns to Aisyah
       orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
@@ -180,7 +197,7 @@ test("lead.created attribution: csConfigs.berduStaffIds overrides the baked defa
       products: [{ name: "Quran Mapping", price: 100000, count: 1 }],
       shipping_address: { phone: "6281234500999", firstName: "Budi", address: "Jl. X", district: "Y", city: "Z" },
     } }),
-    signatureOk: true,
+    signatureOk: true, orgId,
   });
   await t.mutation(internal.ingest.core.processEvent, { eventId });
   await t.run(async (ctx) => {
@@ -192,12 +209,13 @@ test("lead.created attribution: csConfigs.berduStaffIds overrides the baked defa
 
 test("generic.message ingests via universal contract", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   const raw = JSON.stringify({
     phone: "6281234567890", direction: "inbound", role: "customer",
     content: "tanya stok", externalMessageId: "ext-1", timestamp: 1783427359000,
   });
   const eventId = await t.mutation(internal.ingest.events.captureEvent, {
-    sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}", rawBody: raw, signatureOk: true,
+    sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}", rawBody: raw, signatureOk: true, orgId,
   });
   await t.mutation(internal.ingest.core.processEvent, { eventId });
   await t.run(async (ctx) => {
@@ -208,9 +226,10 @@ test("generic.message ingests via universal contract", async () => {
 
 test("generic.lead validates required fields", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   const eventId = await t.mutation(internal.ingest.events.captureEvent, {
     sourceKey: "custom-x", kind: "generic.lead", rawHeaders: "{}",
-    rawBody: JSON.stringify({ phone: "628123" }), signatureOk: true,
+    rawBody: JSON.stringify({ phone: "628123" }), signatureOk: true, orgId,
   });
   await t.mutation(internal.ingest.core.processEvent, { eventId });
   const asAdminT = t.withIdentity({ subject: "a1", role: "admin", name: "A", email: "a@w" });
@@ -242,18 +261,19 @@ test("orgId threads: source.orgId -> captured event -> stored order", async () =
 
 test("orgId absent (pre-seed source): event still processes, rows unstamped", async () => {
   const t = convexTest(schema);
+  const orgId = await seedOrg(t);
   const eventId = await t.mutation(internal.ingest.events.captureEvent, {
     sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}",
     rawBody: JSON.stringify({ order: { id: "2607119002", assigned_to_staff: "B-1apQSy",
       products: [{ name: "Quran Mapping", price: 100000, count: 1 }],
       shipping_address: { phone: "6281234508888", firstName: "Test", address: "X", district: "Y", city: "Z" } } }),
-    signatureOk: true,
+    signatureOk: true, orgId,
   });
   const out = await t.mutation(internal.ingest.core.processEvent, { eventId });
   expect(out.status).toBe("processed");
   await t.run(async (ctx) => {
     const orders = await ctx.db.query("orders").collect();
     const order = orders.find((o) => o.orderId.includes("2607119002"));
-    expect(order?.orgId).toBeUndefined();
+    expect(order?.orgId).toEqual(orgId);
   });
 });

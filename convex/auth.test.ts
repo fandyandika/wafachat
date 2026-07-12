@@ -11,6 +11,7 @@ beforeEach(() => {
 test("seedFirstAdmin creates an admin only when the table is empty", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   expect((await asAdmin.mutation(api.auth.seedFirstAdmin, { authSecret: SECRET, email: "Owner@x.com", name: "Owner", password: "pw1" })).ok).toBe(true);
   const again = await asAdmin.mutation(api.auth.seedFirstAdmin, { authSecret: SECRET, email: "Two@x.com", name: "Two", password: "pw2" });
   expect(again.ok).toBe(false);
@@ -24,6 +25,7 @@ test("seedFirstAdmin creates an admin only when the table is empty", async () =>
 test("verifyCredentials: correct password ok; wrong/inactive/unknown not ok", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   await asAdmin.mutation(api.auth.seedFirstAdmin, { authSecret: SECRET, email: "owner@x.com", name: "Owner", password: "ownerpw" });
   await asAdmin.mutation(api.auth.createUser, { authSecret: SECRET, email: "Risma@x.com", name: "Risma", role: "cs", password: "rismapw" });
 
@@ -42,6 +44,7 @@ test("verifyCredentials: correct password ok; wrong/inactive/unknown not ok", as
 test("createUser rejects duplicate email; resetPassword changes the password", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   await asAdmin.mutation(api.auth.createUser, { authSecret: SECRET, email: "a@x.com", name: "A", role: "cs", password: "old" });
   expect((await asAdmin.mutation(api.auth.createUser, { authSecret: SECRET, email: "A@x.com", name: "A2", role: "cs", password: "y" })).ok).toBe(false);
   await asAdmin.mutation(api.auth.resetPassword, { authSecret: SECRET, email: "a@x.com", newPassword: "new" });

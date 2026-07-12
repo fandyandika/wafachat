@@ -3,13 +3,19 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 const ADMIN = { subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" };
 
 test("setBerduStaffIds: patches a stored config; errors when no stored row", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity(ADMIN);
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     await ctx.db.insert("csConfigs", {
+      orgId,
       normalizedName: "aisyah", csName: "Aisyah",
       orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
       isActive: true, createdAt: 1, updatedAt: 1,

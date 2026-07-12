@@ -4,16 +4,22 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 const t0 = Date.now() - 86_400_000;
 
 test("listCs derives from csConfigs + DEFAULT_CONFIGS, NOT from orders (no 90-day scan)", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // An order whose CS has no config: must NOT appear (order-scan discovery is removed).
-    await ctx.db.insert("orders", { orderId: "O1", customerPhone: "62811", customerName: "A", productName: "X", products: "X", assignedCsName: "Ghost", productsSubtotal: "100", shippingCost: "10", total: "110", shippingAddress: "Addr", shippingDistrict: "Dist", shippingCity: "City", source: "berdu", aiEligible: true, createdAt: t0, updatedAt: t0 });
+    await ctx.db.insert("orders", { orgId, orderId: "O1", customerPhone: "62811", customerName: "A", productName: "X", products: "X", assignedCsName: "Ghost", productsSubtotal: "100", shippingCost: "10", total: "110", shippingAddress: "Addr", shippingDistrict: "Dist", shippingCity: "City", source: "berdu", aiEligible: true, createdAt: t0, updatedAt: t0 });
     // A stored config that isn't a built-in default.
     await ctx.db.insert("csConfigs", {
+      orgId,
       normalizedName: "nabila", csName: "Nabila",
       orderAutomationEnabled: false, aiAssistantEnabled: false, reportingEnabled: true, isActive: true,
       createdAt: t0, updatedAt: t0,
@@ -36,6 +42,7 @@ test("listCs derives from csConfigs + DEFAULT_CONFIGS, NOT from orders (no 90-da
 test("setCsAvatar stores avatarStorageId and replacing removes the old file", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   const id1 = await t.run(async (ctx) => await ctx.storage.store(new Blob(["a"], { type: "image/png" })));
   await asAdmin.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id1 as Id<"_storage"> });
   let cfg = await t.run(async (ctx) =>
@@ -53,6 +60,7 @@ test("setCsAvatar stores avatarStorageId and replacing removes the old file", as
 test("clearCsAvatar removes the photo and deletes the storage object", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   const id1 = await t.run(async (ctx) => await ctx.storage.store(new Blob(["a"], { type: "image/png" })));
   await asAdmin.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id1 as Id<"_storage"> });
   await asAdmin.mutation(api.cs.clearCsAvatar, { csName: "Aisyah" });

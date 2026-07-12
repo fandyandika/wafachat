@@ -4,17 +4,22 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { windowKeyFor } from "./lib";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 const DAY = 86_400_000;
 const t0 = 1_750_000_000_000; // fixed ms within a single day
 
 test("getPerformance: leads=distinct customer, closing=distinct order, CR, cancelled excluded", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // Same customer, 2 orders -> 1 lead (distinct phone)
     for (const orderId of ["O-1", "O-2"]) {
       await ctx.db.insert("orders", {
-        orderId, customerPhone: "62811", customerName: "A", assignedCsName: "CS Aisyah",
+        orgId, orderId, customerPhone: "62811", customerName: "A", assignedCsName: "CS Aisyah",
         productName: "Quran", products: "Quran", productsSubtotal: "", shippingCost: "", total: "",
         shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: true,
         createdAt: t0, updatedAt: t0,
@@ -22,13 +27,13 @@ test("getPerformance: leads=distinct customer, closing=distinct order, CR, cance
     }
     // One closing (valid) + one cancelled (excluded)
     await ctx.db.insert("shippingRecaps", {
-      orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS Aisyah",
+      orgId, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A", csName: "CS Aisyah",
       closedAt: t0, recipientName: "A", recipientPhone: "62811", recipientAddress: "", recipientDistrict: "",
       recipientCity: "", packageContent: "Quran", paymentMethod: "cod", codValue: 100000, total: 100000,
       status: "ready", flags: [], sourceMessageText: "", version: 1, createdAt: t0, updatedAt: t0,
     });
     await ctx.db.insert("shippingRecaps", {
-      orderIdBerdu: "O-2", customerPhone: "62811", customerName: "A", csName: "CS Aisyah",
+      orgId, orderIdBerdu: "O-2", customerPhone: "62811", customerName: "A", csName: "CS Aisyah",
       closedAt: t0, recipientName: "A", recipientPhone: "62811", recipientAddress: "", recipientDistrict: "",
       recipientCity: "", packageContent: "Quran", paymentMethod: "cod", codValue: 50000, total: 50000,
       status: "cancelled", flags: [], sourceMessageText: "", version: 1, createdAt: t0, updatedAt: t0,
@@ -44,17 +49,18 @@ test("getPerformance: leads=distinct customer, closing=distinct order, CR, cance
 test("getDashboardSummary: leads/closings/cr from records, handovers from events", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    await ctx.db.insert("orders", { orderId: "O-1", customerPhone: "62811", customerName: "A",
+    await ctx.db.insert("orders", { orgId, orderId: "O-1", customerPhone: "62811", customerName: "A",
       assignedCsName: "CS Aisyah", productName: "Quran", products: "Quran", productsSubtotal: "",
       shippingCost: "", total: "", shippingAddress: "", shippingDistrict: "", shippingCity: "",
       source: "berdu", aiEligible: true, createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A",
+    await ctx.db.insert("shippingRecaps", { orgId, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A",
       csName: "CS Aisyah", closedAt: t0, recipientName: "A", recipientPhone: "62811", recipientAddress: "",
       recipientDistrict: "", recipientCity: "", packageContent: "Quran", paymentMethod: "cod",
       codValue: 100000, total: 100000, status: "ready", flags: [], sourceMessageText: "", version: 1,
       createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("events", { type: "handover", actor: "n8n", orderId: "O-1",
+    await ctx.db.insert("events", { orgId, type: "handover", actor: "n8n", orderId: "O-1",
       customerPhone: "62811", metadata: {}, createdAt: t0 });
   });
 
@@ -72,12 +78,13 @@ test("getDashboardSummary: leads/closings/cr from records, handovers from events
 test("getTrend: buckets leads by order-date and closings by closing-date", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    await ctx.db.insert("orders", { orderId: "O-1", customerPhone: "62811", customerName: "A",
+    await ctx.db.insert("orders", { orgId, orderId: "O-1", customerPhone: "62811", customerName: "A",
       assignedCsName: "CS Aisyah", productName: "Q", products: "Q", productsSubtotal: "", shippingCost: "",
       total: "", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu",
       aiEligible: true, createdAt: t0, updatedAt: t0 });
-    await ctx.db.insert("shippingRecaps", { orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A",
+    await ctx.db.insert("shippingRecaps", { orgId, orderIdBerdu: "O-1", customerPhone: "62811", customerName: "A",
       csName: "CS Aisyah", closedAt: t0 + DAY, recipientName: "A", recipientPhone: "62811",
       recipientAddress: "", recipientDistrict: "", recipientCity: "", packageContent: "Q",
       paymentMethod: "cod", codValue: 1, total: 1, status: "ready", flags: [], sourceMessageText: "",
@@ -106,18 +113,19 @@ test("getDuplicateOrders: groups repeat phones, flags accidental, excludes test+
     shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu" as const,
     aiEligible: true, updatedAt: t0,
   };
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     // same phone + same product + consecutive ids -> accidental
-    await ctx.db.insert("orders", { ...base, orderId: "O-260619000146", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
-    await ctx.db.insert("orders", { ...base, orderId: "O-260619000147", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran", createdAt: t0 + 1 });
+    await ctx.db.insert("orders", { orgId, ...base, orderId: "O-260619000146", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...base, orderId: "O-260619000147", customerPhone: "62811", assignedCsName: "CS A", productName: "Quran", createdAt: t0 + 1 });
     // same phone, different product, far-apart ids -> NOT accidental
-    await ctx.db.insert("orders", { ...base, orderId: "O-260619000200", customerPhone: "62822", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
-    await ctx.db.insert("orders", { ...base, orderId: "O-260619000900", customerPhone: "62822", assignedCsName: "CS A", productName: "Medis", createdAt: t0 + 1 });
+    await ctx.db.insert("orders", { orgId, ...base, orderId: "O-260619000200", customerPhone: "62822", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...base, orderId: "O-260619000900", customerPhone: "62822", assignedCsName: "CS A", productName: "Medis", createdAt: t0 + 1 });
     // single order -> not returned
-    await ctx.db.insert("orders", { ...base, orderId: "O-260619000999", customerPhone: "62833", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...base, orderId: "O-260619000999", customerPhone: "62833", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
     // test phone -> excluded
-    await ctx.db.insert("orders", { ...base, orderId: "O-T1", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
-    await ctx.db.insert("orders", { ...base, orderId: "O-T2", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran", createdAt: t0 + 1 });
+    await ctx.db.insert("orders", { orgId, ...base, orderId: "O-T1", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran", createdAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...base, orderId: "O-T2", customerPhone: "6285715682110", assignedCsName: "CS A", productName: "Quran", createdAt: t0 + 1 });
   });
 
   const dups = await asAdmin.query(api.metrics.getDuplicateOrders, { startAt: t0 - 1, endAt: t0 + DAY });

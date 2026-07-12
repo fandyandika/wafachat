@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { windowRangeForKey, windowKeyFor, csKey } from "./lib";
+import { requireDefaultOrgId } from "./orgs";
 
 const W = "2026-07-08";
 const t0 = windowRangeForKey(W).startAt + 3_600_000;
@@ -10,6 +11,11 @@ const t0 = windowRangeForKey(W).startAt + 3_600_000;
 // Test seeds insert orders/recaps raw (bypassing the write-path that stamps csKey), so
 // mirror the prod invariant: every doc carries csKey = csKey(rawName). computeRollupValues
 // reads by the by_csKey_* index, so a seed without csKey would be invisible. Idempotent.
+async function seedDefaultOrg(t: ReturnType<typeof convexTest>) {
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  return await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+}
+
 async function stampCsKeys(ctx: any) {
   for (const o of await ctx.db.query("orders").collect())
     if (o.csKey === undefined) await ctx.db.patch(o._id, { csKey: csKey(o.assignedCsName) });
@@ -19,19 +25,21 @@ async function stampCsKeys(ctx: any) {
 
 async function seed(t: ReturnType<typeof convexTest>) {
   await t.run(async (ctx) => {
-    await ctx.db.insert("orders", { orderId: "O-1", customerPhone: "6281000000001", customerName: "A", assignedCsName: "Azelia", productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "100000", shippingCost: "0", total: "100000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0, updatedAt: t0 } as any);
-    await ctx.db.insert("orders", { orderId: "O-2", customerPhone: "6281000000001", customerName: "A", assignedCsName: "Azelia", productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "100000", shippingCost: "0", total: "100000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0 + 1, updatedAt: t0 } as any);
-    await ctx.db.insert("orders", { orderId: "O-3", customerPhone: "6281000000002", customerName: "B", assignedCsName: "Azelia", productName: "Quran Medis", products: "Quran Medis", productsSubtotal: "200000", shippingCost: "0", total: "200000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0 + 2, updatedAt: t0 } as any);
-    await ctx.db.insert("orders", { orderId: "O-4", customerPhone: "6281385708799", customerName: "T", assignedCsName: "Azelia", productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "100000", shippingCost: "0", total: "100000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0 + 3, updatedAt: t0 } as any); // internal test phone -> excluded
-    await ctx.db.insert("shippingRecaps", { customerPhone: "6281000000001", customerName: "A", csName: "Azelia", orderIdBerdu: "O-1", status: "exported", total: 100000, discount: 5000, followUpTouchesAtClose: 2, sourceMessageId: "m1", packageContent: "Buku Sirah", closedAt: t0 + 10, recipientName: "A", recipientPhone: "6281000000001", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
-    await ctx.db.insert("shippingRecaps", { customerPhone: "6281000000002", customerName: "B", csName: "Azelia", orderIdBerdu: "O-3", status: "delivered", total: 200000, packageContent: "Quran Medis", closedAt: t0 + 11, recipientName: "B", recipientPhone: "6281000000002", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
-    await ctx.db.insert("shippingRecaps", { customerPhone: "6281000000005", customerName: "C", csName: "Azelia", orderIdBerdu: "O-9", status: "cancelled", total: 50000, packageContent: "Buku Sirah", closedAt: t0 + 12, recipientName: "C", recipientPhone: "6281000000005", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
+    const orgId = await requireDefaultOrgId(ctx);
+    await ctx.db.insert("orders", { orderId: "O-1", orgId, customerPhone: "6281000000001", customerName: "A", assignedCsName: "Azelia", productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "100000", shippingCost: "0", total: "100000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0, updatedAt: t0 } as any);
+    await ctx.db.insert("orders", { orderId: "O-2", orgId, customerPhone: "6281000000001", customerName: "A", assignedCsName: "Azelia", productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "100000", shippingCost: "0", total: "100000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0 + 1, updatedAt: t0 } as any);
+    await ctx.db.insert("orders", { orderId: "O-3", orgId, customerPhone: "6281000000002", customerName: "B", assignedCsName: "Azelia", productName: "Quran Medis", products: "Quran Medis", productsSubtotal: "200000", shippingCost: "0", total: "200000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0 + 2, updatedAt: t0 } as any);
+    await ctx.db.insert("orders", { orderId: "O-4", orgId, customerPhone: "6281385708799", customerName: "T", assignedCsName: "Azelia", productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "100000", shippingCost: "0", total: "100000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0 + 3, updatedAt: t0 } as any); // internal test phone -> excluded
+    await ctx.db.insert("shippingRecaps", { orgId, customerPhone: "6281000000001", customerName: "A", csName: "Azelia", orderIdBerdu: "O-1", status: "exported", total: 100000, discount: 5000, followUpTouchesAtClose: 2, sourceMessageId: "m1", packageContent: "Buku Sirah", closedAt: t0 + 10, recipientName: "A", recipientPhone: "6281000000001", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
+    await ctx.db.insert("shippingRecaps", { orgId, customerPhone: "6281000000002", customerName: "B", csName: "Azelia", orderIdBerdu: "O-3", status: "delivered", total: 200000, packageContent: "Quran Medis", closedAt: t0 + 11, recipientName: "B", recipientPhone: "6281000000002", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
+    await ctx.db.insert("shippingRecaps", { orgId, customerPhone: "6281000000005", customerName: "C", csName: "Azelia", orderIdBerdu: "O-9", status: "cancelled", total: 50000, packageContent: "Buku Sirah", closedAt: t0 + 12, recipientName: "C", recipientPhone: "6281000000005", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
     await stampCsKeys(ctx);
   });
 }
 
 test("computeRollupRow reproduces getDailyReport aggregation rules", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   await seed(t);
   await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
   const rows = await t.run(async (ctx) =>
@@ -64,9 +72,11 @@ test("empty window produces no row", async () => {
 
 test("orphan recap attributed via order fallback like legacy", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   await t.run(async (ctx) => {
-    await ctx.db.insert("orders", { orderId: "O-7", customerPhone: "6281000000007", customerName: "C", assignedCsName: "Lila", productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "90000", shippingCost: "0", total: "90000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0, updatedAt: t0 } as any);
-    await ctx.db.insert("shippingRecaps", { customerPhone: "6281000000007", customerName: "C", csName: "Lila", orderIdBerdu: "O-7", status: "ready", total: 90000, packageContent: "Buku Sirah", closedAt: t0 + 5, recipientName: "C", recipientPhone: "6281000000007", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
+    const orgId = await requireDefaultOrgId(ctx);
+    await ctx.db.insert("orders", { orderId: "O-7", orgId, customerPhone: "6281000000007", customerName: "C", assignedCsName: "Lila", productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "90000", shippingCost: "0", total: "90000", shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0, updatedAt: t0 } as any);
+    await ctx.db.insert("shippingRecaps", { orgId, customerPhone: "6281000000007", customerName: "C", csName: "Lila", orderIdBerdu: "O-7", status: "ready", total: 90000, packageContent: "Buku Sirah", closedAt: t0 + 5, recipientName: "C", recipientPhone: "6281000000007", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
     await stampCsKeys(ctx);
   });
   await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
@@ -78,6 +88,7 @@ test("orphan recap attributed via order fallback like legacy", async () => {
 
 test("upsertOrderFromN8n (new order) creates rollup entry via bump", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   await t.mutation(internal.state.upsertOrderFromN8n, {
     phone: "6281000000010",
     csName: "CS Test",
@@ -96,6 +107,7 @@ test("upsertOrderFromN8n (new order) creates rollup entry via bump", async () =>
 
 test("appendMessageFromN8n with closing creates recap that bumps rollup", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   // First create an order
   await t.mutation(internal.state.upsertOrderFromN8n, {
     phone: "6281000000011",
@@ -124,6 +136,7 @@ test("appendMessageFromN8n with closing creates recap that bumps rollup", async 
 
 test("markCancelled bumps rollup with cancelled: 1, closings: 0", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   // Set up admin identity
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
@@ -169,6 +182,7 @@ test("markCancelled bumps rollup with cancelled: 1, closings: 0", async () => {
 
 test("undoCancelled bumps rollup back to closings: 1, cancelled: 0", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   // Create order and recap
@@ -218,6 +232,7 @@ test("undoCancelled bumps rollup back to closings: 1, cancelled: 0", async () =>
 
 test("backfillCsNameByOrderIds bumps old and new csKey rows", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   // Create order and recap with CS Old
@@ -263,14 +278,16 @@ test("backfillCsNameByOrderIds bumps old and new csKey rows", async () => {
 
 test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sample → gone", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const today = "2026-07-08";
   const range = windowRangeForKey(today);
   const msgTime = range.startAt + 3_600_000;
 
   // First create an order so the rollup will have data
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     await ctx.db.insert("orders", {
-      orderId: "O-TRUE-UP",
+      orderId: "O-TRUE-UP", orgId,
       customerPhone: "6281000000099",
       customerName: "TrueUp Test",
       assignedCsName: "CS TrueUp",
@@ -294,7 +311,9 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
   // Create a conversation for the messages
   let convId: string;
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     convId = await ctx.db.insert("conversations", {
+      orgId,
       orderId: "O-TRUE-UP",
       customerPhone: "6281000000099",
       customerName: "TrueUp Test",
@@ -345,7 +364,9 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
 
   // Insert a bogus sample outside the message-derived pairs
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     await ctx.db.insert("responseSamples", {
+      orgId,
       csKey: "trueup",
       csName: "CS TrueUp",
       conversationId: convId as any,
@@ -389,6 +410,7 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
 
 test("oldestWindowKey: returns correct window or null when empty", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   // Empty case
@@ -402,9 +424,10 @@ test("oldestWindowKey: returns correct window or null when empty", async () => {
   const rangeB = windowRangeForKey(windowB);
 
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     // Insert order in window B first
     await ctx.db.insert("orders", {
-      orderId: "O-B1",
+      orderId: "O-B1", orgId,
       customerPhone: "6281000000100",
       customerName: "B",
       assignedCsName: "Azelia",
@@ -424,7 +447,7 @@ test("oldestWindowKey: returns correct window or null when empty", async () => {
 
     // Insert order in window A (earlier)
     await ctx.db.insert("orders", {
-      orderId: "O-A1",
+      orderId: "O-A1", orgId,
       customerPhone: "6281000000101",
       customerName: "A",
       assignedCsName: "Azelia",
@@ -459,6 +482,7 @@ test("oldestWindowKey: rejects non-admin", async () => {
 
 test("backfillRange: processes 2 seeded windows with nextFromKey null", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   const windowA = "2026-07-05";
@@ -468,8 +492,9 @@ test("backfillRange: processes 2 seeded windows with nextFromKey null", async ()
 
   // Seed data in both windows
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     await ctx.db.insert("orders", {
-      orderId: "O-A",
+      orderId: "O-A", orgId,
       customerPhone: "6281000000102",
       customerName: "A",
       assignedCsName: "Azelia",
@@ -488,7 +513,7 @@ test("backfillRange: processes 2 seeded windows with nextFromKey null", async ()
     } as any);
 
     await ctx.db.insert("orders", {
-      orderId: "O-B",
+      orderId: "O-B", orgId,
       customerPhone: "6281000000103",
       customerName: "B",
       assignedCsName: "Azelia",
@@ -528,6 +553,7 @@ test("backfillRange: processes 2 seeded windows with nextFromKey null", async ()
 
 test("backfillRange: honors 10-window cap and returns nextFromKey", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   // Seed data across 50 windows (starting from 2026-01-01)
@@ -549,10 +575,11 @@ test("backfillRange: honors 10-window cap and returns nextFromKey", async () => 
 
   // Seed one order per window to ensure they have data
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     for (let i = 0; i < windowsToUse.length; i++) {
       const range = windowRangeForKey(windowsToUse[i]);
       await ctx.db.insert("orders", {
-        orderId: `O-${i}`,
+        orderId: `O-${i}`, orgId,
         customerPhone: `628100000010${String(i).padStart(2, "0")}`,
         customerName: `Cust${i}`,
         assignedCsName: "Azelia",
@@ -597,6 +624,7 @@ test("backfillRange: rejects non-admin", async () => {
 
 test("importBerduVerifiedRows: batch import of 3 recaps same CS+window yields single correct rollup row", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   const W = "2026-07-08";
@@ -683,6 +711,7 @@ test("importBerduVerifiedRows: batch import of 3 recaps same CS+window yields si
 
 test("debugRollupParity: detects when rollup data matches fresh computation", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   const W = "2026-07-08";
@@ -691,8 +720,9 @@ test("debugRollupParity: detects when rollup data matches fresh computation", as
 
   // Create minimal data with one order
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     await ctx.db.insert("orders", {
-      orderId: "O-PARITY",
+      orderId: "O-PARITY", orgId,
       customerPhone: "6281000000200",
       customerName: "Parity Test",
       assignedCsName: "Tester",
@@ -726,6 +756,7 @@ test("debugRollupParity: detects when rollup data matches fresh computation", as
 
 test("debugRollupParity: detects corrupted rollup field", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   const W = "2026-07-08";
@@ -734,8 +765,9 @@ test("debugRollupParity: detects corrupted rollup field", async () => {
 
   // Create minimal data
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     await ctx.db.insert("orders", {
-      orderId: "O-CORRUPT",
+      orderId: "O-CORRUPT", orgId,
       customerPhone: "6281000000201",
       customerName: "Corrupt Test",
       assignedCsName: "Tester2",
@@ -779,6 +811,7 @@ test("debugRollupParity: detects corrupted rollup field", async () => {
 
 test("debugRollupParity: detects corrupted csName field", async () => {
   const t = convexTest(schema);
+  await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   const W = "2026-07-08";
@@ -787,8 +820,9 @@ test("debugRollupParity: detects corrupted csName field", async () => {
 
   // Create minimal data with a specific CS name
   await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
     await ctx.db.insert("orders", {
-      orderId: "O-CSNAME",
+      orderId: "O-CSNAME", orgId,
       customerPhone: "6281000000202",
       customerName: "CSName Test",
       assignedCsName: "OriginalCS",

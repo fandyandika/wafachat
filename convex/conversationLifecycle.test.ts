@@ -4,6 +4,10 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const now = Date.UTC(2026, 5, 26, 5, 0, 0);
@@ -35,19 +39,20 @@ const recap = (orderIdBerdu: string, phone: string) => ({
 test("resolveBatch closes WON (recap) + STALE (>5d), keeps FRESH; counts correct", async () => {
   const t = convexTest(schema);
   let won: Id<"conversations">, stale: Id<"conversations">, fresh: Id<"conversations">;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    won = await ctx.db.insert("conversations", conv("O-WON", "62801"));
-    await ctx.db.insert("orders", order("O-WON", "62801"));
-    await ctx.db.insert("shippingRecaps", recap("O-WON", "62801"));
-    await ctx.db.insert("messages", inbound(won, "O-WON", "62801", now - 6 * DAY));
+    won = await ctx.db.insert("conversations", { orgId, ...conv("O-WON", "62801") });
+    await ctx.db.insert("orders", { orgId, ...order("O-WON", "62801") });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recap("O-WON", "62801") });
+    await ctx.db.insert("messages", { orgId, ...inbound(won, "O-WON", "62801", now - 6 * DAY) });
 
-    stale = await ctx.db.insert("conversations", conv("O-STALE", "62802"));
-    await ctx.db.insert("orders", order("O-STALE", "62802"));
-    await ctx.db.insert("messages", inbound(stale, "O-STALE", "62802", now - 6 * DAY)); // last inbound 6d ago
+    stale = await ctx.db.insert("conversations", { orgId, ...conv("O-STALE", "62802") });
+    await ctx.db.insert("orders", { orgId, ...order("O-STALE", "62802") });
+    await ctx.db.insert("messages", { orgId, ...inbound(stale, "O-STALE", "62802", now - 6 * DAY) }); // last inbound 6d ago
 
-    fresh = await ctx.db.insert("conversations", conv("O-FRESH", "62803", { updatedAt: now - HOUR }));
-    await ctx.db.insert("orders", order("O-FRESH", "62803"));
-    await ctx.db.insert("messages", inbound(fresh, "O-FRESH", "62803", now - 2 * HOUR)); // recent -> in funnel
+    fresh = await ctx.db.insert("conversations", { orgId, ...conv("O-FRESH", "62803", { updatedAt: now - HOUR }) });
+    await ctx.db.insert("orders", { orgId, ...order("O-FRESH", "62803") });
+    await ctx.db.insert("messages", { orgId, ...inbound(fresh, "O-FRESH", "62803", now - 2 * HOUR) }); // recent -> in funnel
   });
   const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
   expect(r.closedWon).toBe(1);
@@ -62,10 +67,11 @@ test("resolveBatch closes WON (recap) + STALE (>5d), keeps FRESH; counts correct
 test("resolveBatch dryRun reports counts but mutates nothing", async () => {
   const t = convexTest(schema);
   let stale: Id<"conversations">;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    stale = await ctx.db.insert("conversations", conv("O-S", "62804"));
-    await ctx.db.insert("orders", order("O-S", "62804"));
-    await ctx.db.insert("messages", inbound(stale, "O-S", "62804", now - 6 * DAY));
+    stale = await ctx.db.insert("conversations", { orgId, ...conv("O-S", "62804") });
+    await ctx.db.insert("orders", { orgId, ...order("O-S", "62804") });
+    await ctx.db.insert("messages", { orgId, ...inbound(stale, "O-S", "62804", now - 6 * DAY) });
   });
   const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: true, now });
   expect(r.closedStale).toBe(1);
@@ -77,9 +83,10 @@ test("resolveBatch dryRun reports counts but mutates nothing", async () => {
 test("resolveBatch keeps a brand-new conversation with no inbound yet (not stale)", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    cId = await ctx.db.insert("conversations", conv("O-NEW", "62805", { createdAt: now - 2 * HOUR, updatedAt: now - 2 * HOUR }));
-    await ctx.db.insert("orders", order("O-NEW", "62805"));
+    cId = await ctx.db.insert("conversations", { orgId, ...conv("O-NEW", "62805", { createdAt: now - 2 * HOUR, updatedAt: now - 2 * HOUR }) });
+    await ctx.db.insert("orders", { orgId, ...order("O-NEW", "62805") });
   });
   const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
   expect(r.closedWon + r.closedStale).toBe(0);
@@ -91,11 +98,12 @@ test("resolveBatch keeps a brand-new conversation with no inbound yet (not stale
 test("resolveBatch: a 'done' marker (shopee) in the chat -> closedMarker + closed", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    cId = await ctx.db.insert("conversations", conv("O-MK", "62820"));
-    await ctx.db.insert("orders", order("O-MK", "62820"));
-    await ctx.db.insert("messages", inbound(cId, "O-MK", "62820", now - 2 * HOUR)); // fresh -> not stale
-    await ctx.db.insert("messages", outbound(cId, "O-MK", "62820", now - HOUR, "Silakan checkout di shopee ya kak"));
+    cId = await ctx.db.insert("conversations", { orgId, ...conv("O-MK", "62820") });
+    await ctx.db.insert("orders", { orgId, ...order("O-MK", "62820") });
+    await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-MK", "62820", now - 2 * HOUR) }); // fresh -> not stale
+    await ctx.db.insert("messages", { orgId, ...outbound(cId, "O-MK", "62820", now - HOUR, "Silakan checkout di shopee ya kak") });
   });
   const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
   expect(r.closedMarker).toBe(1);
@@ -107,10 +115,11 @@ test("resolveBatch: a 'done' marker (shopee) in the chat -> closedMarker + close
 test("resolveBatch: order-less 'manual:' thread closed by a recap on the customer's PHONE", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    cId = await ctx.db.insert("conversations", conv("manual:62821", "62821"));
-    await ctx.db.insert("messages", inbound(cId, "manual:62821", "62821", now - 2 * HOUR)); // fresh
-    await ctx.db.insert("shippingRecaps", recap("O-REALC", "62821")); // recap under a real order, same phone
+    cId = await ctx.db.insert("conversations", { orgId, ...conv("manual:62821", "62821") });
+    await ctx.db.insert("messages", { orgId, ...inbound(cId, "manual:62821", "62821", now - 2 * HOUR) }); // fresh
+    await ctx.db.insert("shippingRecaps", { orgId, ...recap("O-REALC", "62821") }); // recap under a real order, same phone
   });
   const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
   expect(r.closedWon).toBe(1);
@@ -122,11 +131,12 @@ test("resolveBatch: order-less 'manual:' thread closed by a recap on the custome
 test("resolveBatch: real-order lead NOT closed by an OLD recap on the same phone (repeat-safe)", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    cId = await ctx.db.insert("conversations", conv("O-NEWD", "62822"));
-    await ctx.db.insert("orders", order("O-NEWD", "62822"));
-    await ctx.db.insert("messages", inbound(cId, "O-NEWD", "62822", now - 2 * HOUR)); // fresh -> not stale
-    await ctx.db.insert("shippingRecaps", recap("O-OLDD", "62822")); // OLD recap, different order, same phone
+    cId = await ctx.db.insert("conversations", { orgId, ...conv("O-NEWD", "62822") });
+    await ctx.db.insert("orders", { orgId, ...order("O-NEWD", "62822") });
+    await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-NEWD", "62822", now - 2 * HOUR) }); // fresh -> not stale
+    await ctx.db.insert("shippingRecaps", { orgId, ...recap("O-OLDD", "62822") }); // OLD recap, different order, same phone
   });
   const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
   expect(r.closedWon + r.closedMarker + r.closedStale).toBe(0);
@@ -138,11 +148,12 @@ test("resolveBatch: real-order lead NOT closed by an OLD recap on the same phone
 test("resolveBatch: outbound 'PESANAN COD DIPROSES' -> closedMarker (COD won leaves funnel, not a closing)", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    cId = await ctx.db.insert("conversations", conv("O-COD", "62823"));
-    await ctx.db.insert("orders", order("O-COD", "62823"));
-    await ctx.db.insert("messages", inbound(cId, "O-COD", "62823", now - 2 * HOUR)); // fresh -> not stale
-    await ctx.db.insert("messages", outbound(cId, "O-COD", "62823", now - HOUR, "*PESANAN COD DIPROSES* ya kak 🙏"));
+    cId = await ctx.db.insert("conversations", { orgId, ...conv("O-COD", "62823") });
+    await ctx.db.insert("orders", { orgId, ...order("O-COD", "62823") });
+    await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-COD", "62823", now - 2 * HOUR) }); // fresh -> not stale
+    await ctx.db.insert("messages", { orgId, ...outbound(cId, "O-COD", "62823", now - HOUR, "*PESANAN COD DIPROSES* ya kak 🙏") });
   });
   const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
   expect(r.closedMarker).toBe(1);

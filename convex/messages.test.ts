@@ -3,9 +3,14 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 test("appendMessageFromN8n: same externalMessageId twice -> one row", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   const args = {
     phone: "62811", order_id: "O-1", customerName: "A", csName: "CS Aisyah",
     role: "cs" as const, direction: "outbound" as const, content: "halo",
@@ -23,6 +28,7 @@ test("appendMessageFromN8n: same externalMessageId twice -> one row", async () =
 test("appendMessageFromN8n: outbound closing phrase -> exactly one recap + closing_detected event", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   const base = {
     phone: "62811", order_id: "O-9", customerName: "A", csName: "CS Aisyah",
     role: "cs" as const, direction: "outbound" as const,
@@ -43,6 +49,7 @@ test("appendMessageFromN8n: outbound closing phrase -> exactly one recap + closi
 test("appendMessageFromN8n: inbound with phrase -> NO recap", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "62822", order_id: "O-10", role: "customer", direction: "inbound",
     content: "PEMESANAN BERHASIL?", messageType: "text", externalMessageId: "in1", createdAt: 2000,
@@ -54,6 +61,7 @@ test("appendMessageFromN8n: inbound with phrase -> NO recap", async () => {
 test("appendMessageFromN8n: outbound 'cod diproses' marker -> conversation closed LIVE", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "62844", order_id: "O-44", customerName: "A", csName: "CS Aisyah",
     role: "cs", direction: "outbound", content: "*PESANAN COD DIPROSES* ya kak",
@@ -67,6 +75,7 @@ test("appendMessageFromN8n: outbound 'cod diproses' marker -> conversation close
 test("appendMessageFromN8n: ordinary inbound -> conversation NOT closed", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "62845", order_id: "O-45", role: "customer", direction: "inbound",
     content: "halo kak mau tanya", messageType: "text", externalMessageId: "ord1", createdAt: 5000,
@@ -79,6 +88,7 @@ test("appendMessageFromN8n: ordinary inbound -> conversation NOT closed", async 
 test("appendMessageFromN8n: heals 'Unknown' conversation csName when a known CS arrives", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
   // 1. Inbound with no csName -> fallback conversation assignedCsName "Unknown"
   await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "62833", role: "customer", direction: "inbound",
@@ -112,8 +122,10 @@ test("appendMessageFromN8n: inbound message clears followUpStageOverride", async
   const now = Date.now();
 
   // Create conversation with override set
+  const orgId = await seedOrg(t);
   const convId = await t.run(async (ctx) => {
     const id = await ctx.db.insert("conversations", {
+      orgId,
       orderId: "O-ovr1", customerPhone: "62851", customerName: "Test", assignedCsName: "CS Test",
       status: "active", aiEnabled: false, note: "",
       followUpStageOverride: 2, createdAt: now, updatedAt: now,
@@ -142,32 +154,34 @@ test("appendMessageFromN8n: outbound closing phrase -> records followUpTouchesAt
   const HOUR = 3_600_000;
 
   // Create conversation with messages
+  const orgId = await seedOrg(t);
   const convId = await t.run(async (ctx) => {
     const id = await ctx.db.insert("conversations", {
+      orgId,
       orderId: "O-kpi1", customerPhone: "62852", customerName: "Test", assignedCsName: "CS Test",
       status: "active", aiEnabled: false, note: "", createdAt: now - 50 * HOUR, updatedAt: now - 50 * HOUR,
     });
     // Inbound 50h ago
     await ctx.db.insert("messages", {
-      conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
+      orgId, conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
       role: "customer", direction: "inbound", content: "Berapa harga?", messageType: "text",
       source: "n8n", createdAt: now - 50 * HOUR,
     });
     // In-window outbound (not a touch)
     await ctx.db.insert("messages", {
-      conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
+      orgId, conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
       role: "cs", direction: "outbound", content: "Harga Rp50rb", messageType: "text",
       source: "n8n", createdAt: now - 49 * HOUR,
     });
     // Post-window touch 1 (25h ago)
     await ctx.db.insert("messages", {
-      conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
+      orgId, conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
       role: "cs", direction: "outbound", content: "Kirim template H+1", messageType: "template",
       source: "panel", createdAt: now - 25 * HOUR,
     });
     // Post-window touch 2 (20h ago)
     await ctx.db.insert("messages", {
-      conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
+      orgId, conversationId: id, orderId: "O-kpi1", customerPhone: "62852",
       role: "cs", direction: "outbound", content: "Follow-up H+2", messageType: "template",
       source: "panel", createdAt: now - 20 * HOUR,
     });

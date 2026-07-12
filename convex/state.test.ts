@@ -4,6 +4,10 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { startOfJakartaDayMs, csKey } from "./lib";
 
+async function seedOrg(t: any) {
+  return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
+}
+
 const DAY = 86_400_000;
 
 test("startOfJakartaDayMs: Jakarta midnight <= now and within today", () => {
@@ -19,8 +23,9 @@ test("listConversations: closed bounded to today (Jakarta); active+handover alwa
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const now = Date.now();
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    const base = { customerName: "X", assignedCsName: "CS A", aiEnabled: true, note: "", createdAt: now };
+    const base = { orgId, customerName: "X", assignedCsName: "CS A", aiEnabled: true, note: "", createdAt: now };
     await ctx.db.insert("conversations", { ...base, orderId: "A", customerPhone: "62811", status: "active", updatedAt: now });
     await ctx.db.insert("conversations", { ...base, orderId: "H", customerPhone: "62812", status: "handover", updatedAt: now });
     await ctx.db.insert("conversations", { ...base, orderId: "CT", customerPhone: "62813", status: "closed", updatedAt: now });
@@ -39,8 +44,9 @@ test("listConversations: includeClosed=false omits closed entirely", async () =>
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const now = Date.now();
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    const base = { customerName: "X", assignedCsName: "CS A", aiEnabled: true, note: "", createdAt: now };
+    const base = { orgId, customerName: "X", assignedCsName: "CS A", aiEnabled: true, note: "", createdAt: now };
     await ctx.db.insert("conversations", { ...base, orderId: "A", customerPhone: "62811", status: "active", updatedAt: now });
     await ctx.db.insert("conversations", { ...base, orderId: "CT", customerPhone: "62813", status: "closed", updatedAt: now });
   });
@@ -54,8 +60,9 @@ test("listOrderCountersByPrefix returns sorted present counters for the date pre
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   const now = Date.now();
+  const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    const base = { customerPhone: "62811", customerName: "X", productName: "P", products: "P", productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "", assignedCsName: "Risma", source: "berdu" as const, aiEligible: false, updatedAt: now, createdAt: now };
+    const base = { orgId, customerPhone: "62811", customerName: "X", productName: "P", products: "P", productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "", assignedCsName: "Risma", source: "berdu" as const, aiEligible: false, updatedAt: now, createdAt: now };
     await ctx.db.insert("orders", { ...base, orderId: "O-260624000009" });
     await ctx.db.insert("orders", { ...base, orderId: "O-260624000010" });
     await ctx.db.insert("orders", { ...base, orderId: "O-260624000012" }); // gap at 11
@@ -71,6 +78,7 @@ test("listOrderCountersByPrefix returns sorted present counters for the date pre
 test("upsertOrderFromN8n honors explicit createdAt on insert (reconciler backfill keeps real order time)", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   const backdated = Date.UTC(2026, 5, 23, 18, 10, 43); // real Berdu order time, not now
   await t.mutation(internal.state.upsertOrderFromN8n, { phone: "6285735647633", csName: "Risma", order_id: "O-260624000009", createdAt: backdated });
   const order = await t.run(async (ctx) =>
@@ -80,6 +88,8 @@ test("upsertOrderFromN8n honors explicit createdAt on insert (reconciler backfil
 
 test("upsertOrderCore stores csKey = csKey(assignedCsName) for a raw name variant", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   await t.mutation(internal.state.upsertOrderFromN8n, { phone: "6285735647634", csName: "CS Aisyah", order_id: "O-CSKEY-1", createdAt: Date.UTC(2026, 6, 7, 10, 0, 0) });
   const order = await t.run(async (ctx) =>
     ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-CSKEY-1")).unique());
@@ -92,6 +102,8 @@ test("upsertOrderCore stores csKey = csKey(assignedCsName) for a raw name varian
 
 test("upsertOrderFromN8n updates explicit createdAt on existing order", async () => {
   const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   const replayedAt = Date.parse("2026-07-07T14:15:45.000Z");
   const orderedAt = Date.parse("2026-07-07T12:45:04.316Z");
   await t.mutation(internal.state.upsertOrderFromN8n, {
