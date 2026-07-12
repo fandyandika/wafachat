@@ -6,16 +6,12 @@ import { appendMessageCore } from "../messages";
 import { parseKirimdevWebhook } from "./kirimdevAdapter";
 import { parseBerduOrderDetail, DEFAULT_BERDU_STAFF_MAP } from "./berduAdapter";
 import { upsertOrderCore } from "../state";
+import { resolveAgent } from "../agents";
 
-// Resolve CS display name from a WABA phone_number_id via csConfigs.
-// Matches BOTH the legacy single field and the new array field.
+/** @deprecated B2a — use resolveAgent({ phoneNumberId }) from ../agents. */
 export async function resolveCsByPhoneNumberId(ctx: any, phoneNumberId: string | undefined) {
   if (!phoneNumberId) return undefined;
-  const configs = await ctx.db.query("csConfigs").collect(); // small table (~5 rows)
-  const hit = configs.find(
-    (c: any) => c.providerNumberId === phoneNumberId || (c.providerNumberIds ?? []).includes(phoneNumberId),
-  );
-  return hit?.csName as string | undefined;
+  return (await resolveAgent(ctx, { phoneNumberId }))?.csName;
 }
 
 // Build the Berdu staffId -> CS-name map from the csConfigs registry; fall back to
@@ -43,7 +39,8 @@ export async function processCapturedEvent(
   if (event.kind === "message.event") {
     const parsed = parseKirimdevWebhook(headers, body, event.receivedAt);
     if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
-    const csName = await resolveCsByPhoneNumberId(ctx, parsed.event.phoneNumberId);
+    const agent = await resolveAgent(ctx, { phoneNumberId: parsed.event.phoneNumberId });
+    const csName = agent?.csName;
     const result = await appendMessageCore(ctx, {
       phone: parsed.event.phone,
       role: parsed.event.role,

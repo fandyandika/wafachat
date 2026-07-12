@@ -15,6 +15,7 @@ import {
 import { getCsFeatureConfig } from "./csConfigs";
 import { bumpForOrderDoc } from "./rollups";
 import { requireDefaultOrgId } from "./orgs";
+import { canonicalizeCs } from "./agents";
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.literal("closed"));
 
@@ -247,6 +248,7 @@ export async function upsertOrderCore(
     orgId: Id<"organizations">;
   },
 ) {
+  const canon = await canonicalizeCs(ctx, args.csName);
   const now = Date.now();
   const phone = normalizePhone(args.phone);
   const orderId = args.order_id || makeOrderKey({ phone, productName: args.productName });
@@ -279,8 +281,8 @@ export async function upsertOrderCore(
     orderId,
     customerPhone: phone,
     customerName,
-    assignedCsName: args.csName,
-    csKey: csKey(args.csName),
+    assignedCsName: canon.csName,
+    csKey: canon.key,
     assignedCsNumber: args.csNumber,
     productName: args.productName || "",
     products: args.products || "",
@@ -325,7 +327,7 @@ export async function upsertOrderCore(
       conversationId = existingConversation._id;
       await ctx.db.patch(existingConversation._id, {
         customerName,
-        assignedCsName: args.csName,
+        assignedCsName: canon.csName,
         status: existingConversation.status === "active" ? "active"
           : existingConversation.status === "closed" || aiEligible ? "active"
           : existingConversation.status,
@@ -338,7 +340,7 @@ export async function upsertOrderCore(
         orderId,
         customerPhone: phone,
         customerName,
-        assignedCsName: args.csName,
+        assignedCsName: canon.csName,
         status: "active",
         aiEnabled: aiEligible,
         note: "",

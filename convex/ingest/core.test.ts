@@ -277,3 +277,30 @@ test("orgId absent (pre-seed source): event still processes, rows unstamped", as
     expect(order?.orgId).toEqual(orgId);
   });
 });
+
+test("rename-safety: after display rename, new orders keep the OLD immutable key", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  await t.run(async (ctx: any) => {
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "ayesha", csName: "Ayesha", key: "aisyah", // renamed: display new, key old
+      nameAliases: ["Aisyah"], berduStaffIds: ["B-1apQSy"],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: 1, updatedAt: 1,
+    });
+  });
+  const eventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}",
+    rawBody: JSON.stringify({ order: { id: "2607129001", assigned_to_staff: "B-1apQSy",
+      products: [{ name: "Quran Mapping", price: 100000, count: 1 }],
+      shipping_address: { phone: "6281234501111", firstName: "T", address: "X", district: "Y", city: "Z" } } }),
+    signatureOk: true, orgId,
+  });
+  await t.mutation(internal.ingest.core.processEvent, { eventId });
+  await t.run(async (ctx: any) => {
+    const order = (await ctx.db.query("orders").collect()).find((o: any) => o.orderId.includes("2607129001"));
+    expect(order?.assignedCsName).toBe("Ayesha"); // display = current name (via registry staff map)
+    expect(order?.csKey).toBe("aisyah");          // identity = OLD key (canonicalizeCs csName-match)
+  });
+});

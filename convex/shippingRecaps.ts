@@ -8,6 +8,7 @@ import { bumpForOrderDoc, bumpForRecapDoc, computeRollupRow } from "./rollups";
 import { performanceFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
+import { canonicalizeCs } from "./agents";
 
 // Re-export from lib for backward compatibility
 export const canonicalizeProduct = canonicalizeProductLib;
@@ -363,7 +364,9 @@ export const upsertFromN8n = internalMutation({
       conversationId: conversation?._id,
     });
 
-    const resolvedCsName = args.csName || order?.assignedCsName || conversation?.assignedCsName || "";
+    const rawResolvedCsName = args.csName || order?.assignedCsName || conversation?.assignedCsName || "";
+    const canonCs = await canonicalizeCs(ctx, rawResolvedCsName);
+    const resolvedCsName = canonCs.csName;
     const status: RecapStatus = existing?.status === "exported"
       ? "needs_review"
       : comparison.flags.length > 0
@@ -377,7 +380,7 @@ export const upsertFromN8n = internalMutation({
       customerPhone: args.customerPhone,
       customerName: isGeneratedCustomerName(args.customerName) ? order?.customerName ?? conversation?.customerName ?? "" : args.customerName ?? order?.customerName ?? conversation?.customerName ?? "",
       csName: resolvedCsName,
-      csKey: csKey(resolvedCsName),
+      csKey: canonCs.key,
       csPhone: args.csPhone ?? order?.assignedCsNumber,
       orderedAt: order?.createdAt,
       closedAt,
@@ -463,7 +466,9 @@ export const createFromPanelClosing = mutation({
       return { success: true, recapId: existing._id, status: existing.status, _action: "create_from_panel_closing", skipped: true };
     }
 
-    const resolvedCsName = args.csName || order?.assignedCsName || conversation?.assignedCsName || "";
+    const rawResolvedCsName = args.csName || order?.assignedCsName || conversation?.assignedCsName || "";
+    const canonCs = await canonicalizeCs(ctx, rawResolvedCsName);
+    const resolvedCsName = canonCs.csName;
     const panelFlags: string[] = order ? ["MANUAL_CLOSING"] : ["MANUAL_CLOSING", "NO_ORDER_DATA"];
     if (!resolvedCsName) panelFlags.push("NO_CS_DATA");
     const payload = {
@@ -472,7 +477,7 @@ export const createFromPanelClosing = mutation({
       customerPhone: args.customerPhone,
       customerName: order?.customerName ?? conversation?.customerName ?? "",
       csName: resolvedCsName,
-      csKey: csKey(resolvedCsName),
+      csKey: canonCs.key,
       csPhone: order?.assignedCsNumber,
       orderedAt: order?.createdAt,
       closedAt: now,

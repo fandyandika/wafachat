@@ -10,6 +10,7 @@ import { messageHasDoneMarker } from "./followUpMath";
 import { countFollowUpTouchesBeforeTime } from "./followUp";
 import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
 import { requireDefaultOrgId } from "./orgs";
+import { canonicalizeCs } from "./agents";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
   if (args.orderId) {
@@ -216,8 +217,10 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     // Outbound (non-template, non-system) with pending: create sample and clear pending
     const activeMs = Math.round(businessMinutesBetween(conversation.rtPendingInboundAt, createdAt) * 60_000);
     const deltaMs = activeMs > 0 ? activeMs : createdAt - conversation.rtPendingInboundAt;
-    const csName = conversation.assignedCsName ?? args.csName ?? "Unknown";
-    const csKeyValue = csKey(csName);
+    const rawCsName = conversation.assignedCsName ?? args.csName ?? "Unknown";
+    const canon = await canonicalizeCs(ctx, rawCsName);
+    const csName = canon.csName;
+    const csKeyValue = canon.key;
 
     // Wrap sample extraction in try/catch to prevent message ingestion failure.
     // If sampling fails, true-up/live retry can still pair; we log the error and continue.

@@ -140,3 +140,26 @@ test("orgId stamping: created rows carry orgId when org seeded", async () => {
     ctx.db.get(result.conversationId));
   expect(createdConversation?.orgId).toBe(orgId);
 });
+
+test("canonical stamp: upsertOrderCore via alias resolves to canonical csName + immutable key", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  // Seed registry: Aisyah with key "aisyah", alias "CS Aisyah"
+  await t.run(async (ctx) => {
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "aisyah", csName: "Aisyah", key: "aisyah", nameAliases: ["CS Aisyah"],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: 1, updatedAt: 1,
+    });
+  });
+  // Create order via upsertOrderFromN8n with alias form "CS Aisyah"
+  await t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6285735647635", csName: "CS Aisyah", order_id: "O-CANONICAL-1", createdAt: Date.UTC(2026, 6, 7, 10, 0, 0),
+  });
+  // Verify: stored order has canonical csName "Aisyah" and immutable key "aisyah"
+  const order = await t.run(async (ctx) =>
+    ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-CANONICAL-1")).unique());
+  expect(order?.assignedCsName).toBe("Aisyah");
+  expect(order?.csKey).toBe("aisyah");
+});
