@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, mutation } from "../_generated/server";
+import type { Id } from "../_generated/dataModel";
 import { requireAdmin } from "../authz";
 import { appendMessageCore } from "../messages";
 import { parseKirimdevWebhook } from "./kirimdevAdapter";
@@ -34,7 +35,7 @@ type ProcessOutcome =
 // processing errors (caller decides how to record the failure).
 export async function processCapturedEvent(
   ctx: any,
-  event: { sourceKey: string; kind: string; rawHeaders: string; rawBody: string; receivedAt: number; orgId?: any },
+  event: { sourceKey: string; kind: string; rawHeaders: string; rawBody: string; receivedAt: number; orgId: Id<"organizations"> },
 ): Promise<ProcessOutcome> {
   const headers = JSON.parse(event.rawHeaders || "{}");
   const body = JSON.parse(event.rawBody);
@@ -53,7 +54,7 @@ export async function processCapturedEvent(
       createdAt: parsed.event.createdAt,
       csName,
       source: "ingest",
-      orgId: (event as any).orgId ?? null,
+      orgId: event.orgId,
     });
     return { status: "processed", resultRef: String(result?.messageId ?? "") };
   }
@@ -69,7 +70,7 @@ export async function processCapturedEvent(
       shippingCost: e.shippingCost, total: e.total,
       shippingAddress: e.shippingAddress, shippingDistrict: e.shippingDistrict,
       shippingCity: e.shippingCity, order_id: e.orderId, createdAt: e.createdAt,
-      orgId: (event as any).orgId ?? null,
+      orgId: event.orgId,
     });
     return { status: "processed", resultRef: String(result?.orderId ?? e.orderId) };
   }
@@ -86,7 +87,7 @@ export async function processCapturedEvent(
       createdAt: typeof p.timestamp === "number" ? p.timestamp : event.receivedAt,
       csName: typeof p.csName === "string" ? p.csName : undefined,
       source: "ingest",
-      orgId: (event as any).orgId ?? null,
+      orgId: event.orgId,
     });
     return { status: "processed", resultRef: String(result?.messageId ?? "") };
   }
@@ -101,7 +102,7 @@ export async function processCapturedEvent(
       total: p.total ? String(p.total) : undefined,
       order_id: String(p.orderId),
       createdAt: typeof p.timestamp === "number" ? p.timestamp : undefined,
-      orgId: (event as any).orgId ?? null,
+      orgId: event.orgId,
     });
     return { status: "processed", resultRef: String(result?.orderId ?? p.orderId) };
   }
