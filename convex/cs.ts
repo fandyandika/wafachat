@@ -9,6 +9,7 @@ type CsRow = {
   csName: string; normalizedName: string; key: string; avatarUrl: string | null;
   isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
   reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string; berduStaffIds?: string[];
+  registryKey?: string; nameAliases?: string[];
 };
 
 export const listCs = query({
@@ -23,6 +24,7 @@ export const listCs = query({
     type Entry = {
       csName: string; isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
       reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string; berduStaffIds?: string[]; avatarStorageId?: typeof stored[number]["avatarStorageId"];
+      registryKey?: string; nameAliases?: string[];
     };
     const byKey = new Map<string, Entry>();
     // Built-in defaults first…
@@ -43,6 +45,7 @@ export const listCs = query({
         csName: c.csName, isActive: c.isActive, orderAutomationEnabled: c.orderAutomationEnabled,
         aiAssistantEnabled: c.aiAssistantEnabled, reportingEnabled: c.reportingEnabled,
         autoFollowUpEnabled: c.autoFollowUpEnabled, csPhone: c.csPhone, berduStaffIds: c.berduStaffIds, avatarStorageId: c.avatarStorageId,
+        registryKey: c.key, nameAliases: c.nameAliases,
       });
     }
 
@@ -58,6 +61,8 @@ export const listCs = query({
         autoFollowUpEnabled: e.autoFollowUpEnabled,
         csPhone: e.csPhone,
         berduStaffIds: e.berduStaffIds,
+        registryKey: e.registryKey,
+        nameAliases: e.nameAliases,
       });
     }
     rows.sort((a, b) => a.csName.localeCompare(b.csName));

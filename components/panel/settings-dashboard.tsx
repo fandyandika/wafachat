@@ -22,6 +22,9 @@ type CsRow = {
   autoFollowUpEnabled?: boolean;
   isActive: boolean;
   berduStaffIds?: string[];
+  registryKey?: string;
+  nameAliases?: string[];
+  key: string;
 };
 
 function OrgSection() {
@@ -88,6 +91,29 @@ function BerduStaffIdsField({ csName, initial, disabled }: { csName: string; ini
         {dirty && (
           <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={disabled || busy}
             onClick={async () => { setBusy(true); try { await setIds({ csName, berduStaffIds: parsed }); } catch (e) { alert(e instanceof Error ? e.message : 'Gagal'); setValue(initial.join(', ')); } setBusy(false); }}>
+            Simpan
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NameAliasesField({ csName, initial, disabled }: { csName: string; initial: string[]; disabled: boolean }) {
+  const setAliases = useMutation(api.agents.setNameAliases);
+  const [value, setValue] = useState(initial.join(', '));
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { setValue(initial.join(', ')); }, [initial]);
+  const parsed = value.split(',').map((s) => s.trim()).filter(Boolean);
+  const dirty = parsed.join(',') !== initial.join(',');
+  return (
+    <div className="rounded-lg bg-muted/40 px-3 py-2">
+      <div className="text-xs font-medium text-muted-foreground">Alias nama (bentuk lain yang dikenali)</div>
+      <div className="mt-1 flex gap-2">
+        <input className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs" placeholder="CS Aisyah, Kak Aisyah" value={value} disabled={disabled || busy} onChange={(e) => setValue(e.target.value)} />
+        {dirty && (
+          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={disabled || busy}
+            onClick={async () => { setBusy(true); try { await setAliases({ csName, nameAliases: parsed }); } catch (e) { alert(e instanceof Error ? e.message : 'Gagal'); setValue(initial.join(', ')); } setBusy(false); }}>
             Simpan
           </Button>
         )}
@@ -310,6 +336,7 @@ export function SettingsDashboard() {
                 <CsAvatar name={c.csName} size="md" src={c.avatarUrl ?? undefined} />
                 <div className="min-w-0 flex-1">
                   <CardTitle className="text-base truncate">{c.csName}</CardTitle>
+                  <span className="font-mono text-[10px] text-muted-foreground" title="Kunci identitas — tetap walau nama diganti">#{c.registryKey ?? c.key}</span>
                 </div>
                 <div className="flex shrink-0 items-center gap-0.5">
                   <Button
@@ -381,6 +408,8 @@ export function SettingsDashboard() {
               )}
 
               <BerduStaffIdsField csName={c.csName} initial={c.berduStaffIds ?? []} disabled={busy === c.csName} />
+
+              <NameAliasesField csName={c.csName} initial={c.nameAliases ?? []} disabled={busy === c.csName} />
 
               {/* Toggles */}
               <div className="space-y-3 border-t border-border pt-4">
