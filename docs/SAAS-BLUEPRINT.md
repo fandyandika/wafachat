@@ -293,8 +293,8 @@ Jalur resmi dikerjakan PARALEL mulai fase 2:
 | Secret Berdu (`BERDU_APP_ID/SECRET/HMAC/USER_ID`) di **ENV Convex global** | Convex env | tabel `tenantIntegrations` per-org, secret **dienkripsi** app-side | §10.4 |
 | Source key **hardcoded** `berdu-pustakaislam` / `kirimdev-pustakaislam` | http.ts | source key **unik per-org**; route resolve org dari key/token | §11 |
 | ✅ **LUNAS 2026-07-11** — `BERDU_STAFF_MAP` (staff Berdu → nama CS) | ~~berduAdapter.ts~~ → `csConfigs.berduStaffIds` + `resolveBerduStaffMap` (fallback baked) | `agentAliases` per-org (staffId → agentId) | §10.3 |
-| Attribution phone_number_id → CS via `csConfigs` (1 org) | csConfigs.ts | `agentAliases` per-org (phoneNumberId → agentId) | §10.3 |
-| CS = **string nama** + `csKey` normalisasi | seluruh analytics | `agents` ber-ID stabil + alias resolver | §3.4, §10.3 |
+| ✅ **LUNAS 2026-07-12 (B2a)** — Attribution phone_number_id → CS | → `resolveAgent({phoneNumberId})` (`convex/agents.ts`) — SATU resolver di semua write entry | `agentAliases` per-org (embedded arrays di csConfigs) | §10.3 |
+| ✅ **LUNAS 2026-07-12 (B2a)** — CS = string nama + csKey normalisasi | → registry `csConfigs.key` (kanonik, IMMUTABLE across rename) + `nameAliases` + resolver `resolveAgent`/`canonicalizeCs` di tiap write-stamp; rename-safe (key tak berubah → data tak membelah). **Keputusan sadar:** row tetap bawa csKey kanonik (BUKAN agentId) → nol re-key 218k row, nol perubahan rollup/FE. csConfigs = tabel agents (tak di-rename, cosmetic-deferral). Reader org-filter/isolation = **B2b** | `agents` ber-ID stabil + alias resolver | §3.4, §10.3 |
 | Frasa closing "PEMESANAN BERHASIL" | closingRules (sebagian sudah tabel) | closing-rule builder **per-org** | §3.6 |
 | ✅ **LUNAS 2026-07-11** — Nomor internal/test hardcoded | ~~lib.ts `INTERNAL_TEST_PHONES`~~ → `orgSettings.internalPhones` (reader `getInternalPhoneSet`, fallback in-code) | settings per-org | §3.2 |
 | ✅ **LUNAS 2026-07-11** — Identitas org (belum ada) | → `orgSettings` (`key="default"` + `orgName`) — anchor tenant #1 | per-org rows di Fase B | §10.2 |
