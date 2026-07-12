@@ -114,10 +114,10 @@ export const createTestConversation = mutation({
     await requireAdmin(ctx, "state.createTestConversation");
     const now = Date.now();
     const phone = normalizePhone(args.phone);
-    const csName = args.csName ?? "CS Aisyah";
+    const canonTest = await canonicalizeCs(ctx, args.csName ?? "CS Aisyah");
     const productName = args.productName ?? "Test Product";
     const orderId = `TEST-${phone}-${Date.now()}`;
-    const csConfig = await getCsFeatureConfig(ctx, csName);
+    const csConfig = await getCsFeatureConfig(ctx, canonTest.csName);
     const reportable = csConfig.isActive && csConfig.reportingEnabled;
     const aiEligible = reportable && csConfig.aiAssistantEnabled;
 
@@ -136,8 +136,8 @@ export const createTestConversation = mutation({
       orderId,
       customerPhone: phone,
       customerName: "Test Customer",
-      assignedCsName: csName,
-      csKey: csKey(csName),
+      assignedCsName: canonTest.csName,
+      csKey: canonTest.key,
       productName,
       products: productName,
       productsSubtotal: "",
@@ -159,7 +159,7 @@ export const createTestConversation = mutation({
       orderId,
       customerPhone: phone,
       customerName: "Test Customer",
-      assignedCsName: csName,
+      assignedCsName: canonTest.csName,
       status: "active",
       aiEnabled: aiEligible,
       note: "",
@@ -168,7 +168,7 @@ export const createTestConversation = mutation({
       orgId,
     });
 
-    return { success: true, phone, orderId, conversationId, aiEnabled: aiEligible, csName };
+    return { success: true, phone, orderId, conversationId, aiEnabled: aiEligible, csName: canonTest.csName };
   },
 });
 

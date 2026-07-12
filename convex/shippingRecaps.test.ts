@@ -162,3 +162,35 @@ test("renameCsName: renames CS across orders/recaps/conversations, others untouc
     expect(rec.csName).toBe("Nabila");
   });
 });
+
+test("importBerduVerifiedRows: canonicalizes raw csName through the registry (alias/case forms)", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
+  // Seed a csConfigs row with key and nameAliases
+  await t.run(async (ctx: any) => {
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "aisyah", csName: "Aisyah", key: "aisyah", nameAliases: ["CS Aisyah", "cs aisyah"],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: 1, updatedAt: 1,
+    });
+  });
+  // Import a verified row with raw csName "cs aisyah" (alias form)
+  await t.run(async (ctx: any) => {
+    const { internal } = await import("./_generated/api");
+    await ctx.runMutation(internal.shippingRecaps.importBerduVerifiedRows, {
+      rows: [{
+        orderIdBerdu: "BERDU-001", customerPhone: "62811111", recipientPhone: "62811111",
+        customerName: "Test", recipientName: "Test", recipientAddress: "X", recipientDistrict: "Y", recipientCity: "Z",
+        csName: "cs aisyah",  // raw alias form
+        packageContent: "Book", paymentMethod: "cod", itemPrice: 100000, total: 100000, shippingCost: 10000,
+        closedAt: t0, orderedAt: t0, sourceMessageText: "",
+      }],
+      importBatchId: "batch-1",
+    });
+  });
+  const recaps = await t.run(async (ctx: any) => ctx.db.query("shippingRecaps").collect());
+  expect(recaps.length).toBe(1);
+  expect(recaps[0].csName).toBe("Aisyah");  // canonical form
+  expect(recaps[0].csKey).toBe("aisyah");   // immutable key
+});

@@ -1150,13 +1150,15 @@ export const importBerduVerifiedRows = internalMutation({
           ? existing.status
           : "ready";
       const flags = unique([...(existing?.flags ?? []).filter((flag) => flag !== "MISSING_ORDER_CONTEXT"), "BERDU_VERIFIED"]);
+      const rawImportCsName = row.csName || order?.assignedCsName || conversation?.assignedCsName || "";
+      const canonImport = await canonicalizeCs(ctx, rawImportCsName);
       const payload = {
         orderIdBerdu,
         conversationId: conversation?._id,
         customerPhone,
         customerName: row.customerName || order?.customerName || conversation?.customerName || "",
-        csName: row.csName || order?.assignedCsName || conversation?.assignedCsName || "",
-        csKey: csKey(row.csName || order?.assignedCsName || conversation?.assignedCsName || ""),
+        csName: canonImport.csName,
+        csKey: canonImport.key,
         csPhone: order?.assignedCsNumber,
         orderedAt: order?.createdAt ?? row.orderedAt,
         closedAt: row.closedAt,
@@ -1483,6 +1485,7 @@ export const backfillCsNameByOrderIds = mutation({
     await requireAdmin(ctx, "shippingRecaps.backfillCsNameByOrderIds");
     const now = Date.now();
     const results: Array<{ orderId: string; recap: string; order: string; conversation: string }> = [];
+    const canonBf = await canonicalizeCs(ctx, args.csName);
 
     for (const rawId of args.orderIds) {
       const orderId = normalizeOrderId(rawId);
@@ -1496,7 +1499,7 @@ export const backfillCsNameByOrderIds = mutation({
         .first();
       if (recap) {
         const recapBefore = recap;
-        await ctx.db.patch(recap._id, { csName: args.csName, csKey: csKey(args.csName), updatedAt: now });
+        await ctx.db.patch(recap._id, { csName: canonBf.csName, csKey: canonBf.key, updatedAt: now });
         const recapAfter = await ctx.db.get(recap._id);
         await bumpForRecapDoc(ctx, recapBefore, recapAfter);
         recapAction = "patched";
@@ -1508,7 +1511,7 @@ export const backfillCsNameByOrderIds = mutation({
         .unique();
       if (order) {
         const orderBefore = order;
-        await ctx.db.patch(order._id, { assignedCsName: args.csName, csKey: csKey(args.csName), updatedAt: now });
+        await ctx.db.patch(order._id, { assignedCsName: canonBf.csName, csKey: canonBf.key, updatedAt: now });
         const orderAfter = await ctx.db.get(order._id);
         await bumpForOrderDoc(ctx, orderBefore, orderAfter);
         orderAction = "patched";
@@ -1519,7 +1522,7 @@ export const backfillCsNameByOrderIds = mutation({
         .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
         .unique();
       if (conversation) {
-        await ctx.db.patch(conversation._id, { assignedCsName: args.csName, updatedAt: now });
+        await ctx.db.patch(conversation._id, { assignedCsName: canonBf.csName, updatedAt: now });
         conversationAction = "patched";
       }
 

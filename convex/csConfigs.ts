@@ -1,7 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
-import { normalizeCsName } from "./lib";
+import { normalizeCsName, csKey } from "./lib";
 import { requireDefaultOrgId } from "./orgs";
 
 export type CsFeatureConfig = {
@@ -214,7 +214,12 @@ export const renameCs = mutation({
         .unique();
       if (clash) return { ok: false as const, error: `sudah ada CS "${to}"` };
     }
-    await ctx.db.patch(stored._id, { csName: to, normalizedName: toNorm, updatedAt: Date.now() });
+    const stableKey = stored.key ?? csKey(args.fromCsName); // backstop for pre-seed rows
+    const aliases = Array.from(new Set([...(stored.nameAliases ?? []), stored.csName]
+      .map((a: string) => a.trim()).filter((a: string) => a && a.toLowerCase() !== to.toLowerCase())));
+    await ctx.db.patch(stored._id, {
+      csName: to, normalizedName: toNorm, key: stableKey, nameAliases: aliases, updatedAt: Date.now(),
+    });
     return { ok: true as const, from: args.fromCsName, to };
   },
 });
