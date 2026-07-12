@@ -1,5 +1,5 @@
 import { query, mutation } from "./_generated/server";
-import { requireAdmin, requireMember } from "./authz";
+import { requireAdmin, requireMember, requireAdminOrg } from "./authz";
 import { v } from "convex/values";
 import { csKey, normalizeCsName } from "./lib";
 import { DEFAULT_CONFIGS } from "./csConfigs";
@@ -78,13 +78,11 @@ export const generateUploadUrl = mutation({
 export const setCsAvatar = mutation({
   args: { csName: v.string(), storageId: v.id("_storage") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "cs.setCsAvatar");
-    await requireAdmin(ctx, "cs.generateUploadUrl");
+    const { orgId } = await requireAdminOrg(ctx, "cs.setCsAvatar");
     const normalizedName = normalizeCsName(args.csName);
     const now = Date.now();
-    const orgId = await requireDefaultOrgId(ctx);
     const existing = await ctx.db.query("csConfigs")
-      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName)).unique();
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName)).unique();
     if (existing) {
       if (existing.avatarStorageId && existing.avatarStorageId !== args.storageId) {
         await ctx.storage.delete(existing.avatarStorageId);
@@ -104,10 +102,10 @@ export const setCsAvatar = mutation({
 export const clearCsAvatar = mutation({
   args: { csName: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "cs.clearCsAvatar");
+    const { orgId } = await requireAdminOrg(ctx, "cs.clearCsAvatar");
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db.query("csConfigs")
-      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName)).unique();
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName)).unique();
     if (existing?.avatarStorageId) {
       await ctx.storage.delete(existing.avatarStorageId);
       await ctx.db.patch(existing._id, { avatarStorageId: undefined, updatedAt: Date.now() });

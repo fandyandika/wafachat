@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { requireAdmin } from "./authz";
+import { requireAdmin, requireAdminOrg } from "./authz";
 import { csKey, normalizeCsName } from "./lib";
 
 // ─── Fase B2a: agents = the csConfigs registry, addressed through ONE resolver. ───
@@ -81,10 +81,10 @@ export const seedKeys = mutation({
 export const setNameAliases = mutation({
   args: { csName: v.string(), nameAliases: v.array(v.string()) },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "agents.setNameAliases");
+    const { orgId } = await requireAdminOrg(ctx, "agents.setNameAliases");
     const existing = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizeCsName(args.csName)))
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizeCsName(args.csName)))
       .unique();
     if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
     const nameAliases = Array.from(new Set(args.nameAliases.map((a) => a.trim()).filter(Boolean)));

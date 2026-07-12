@@ -1,5 +1,5 @@
 import { mutation, query } from "./_generated/server";
-import { requireAdmin, requireMember } from "./authz";
+import { requireAdmin, requireMember, requireAdminOrg } from "./authz";
 import { v } from "convex/values";
 import { normalizeCsName, csKey } from "./lib";
 import { requireDefaultOrgId } from "./orgs";
@@ -136,13 +136,12 @@ export const upsert = mutation({
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "csConfigs.upsert");
+    const { orgId } = await requireAdminOrg(ctx, "csConfigs.upsert");
     const now = Date.now();
-    const orgId = await requireDefaultOrgId(ctx);
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName))
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
     const payload = { ...args, normalizedName, updatedAt: now };
 
@@ -162,11 +161,11 @@ export const upsert = mutation({
 export const setProviderNumberIds = mutation({
   args: { csName: v.string(), providerNumberIds: v.array(v.string()) },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "csConfigs.setProviderNumberIds");
+    const { orgId } = await requireAdminOrg(ctx, "csConfigs.setProviderNumberIds");
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName))
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
     if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
     await ctx.db.patch(existing._id, { providerNumberIds: args.providerNumberIds, updatedAt: Date.now() });
@@ -179,11 +178,11 @@ export const setProviderNumberIds = mutation({
 export const setBerduStaffIds = mutation({
   args: { csName: v.string(), berduStaffIds: v.array(v.string()) },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "csConfigs.setBerduStaffIds");
+    const { orgId } = await requireAdminOrg(ctx, "csConfigs.setBerduStaffIds");
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName))
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
     if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
     await ctx.db.patch(existing._id, { berduStaffIds: args.berduStaffIds, updatedAt: Date.now() });
@@ -197,20 +196,20 @@ export const setBerduStaffIds = mutation({
 export const renameCs = mutation({
   args: { fromCsName: v.string(), toCsName: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "csConfigs.renameCs");
+    const { orgId } = await requireAdminOrg(ctx, "csConfigs.renameCs");
     const to = args.toCsName.trim();
     if (!to) return { ok: false as const, error: "nama baru kosong" };
     const fromNorm = normalizeCsName(args.fromCsName);
     const toNorm = normalizeCsName(to);
     const stored = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", fromNorm))
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", fromNorm))
       .unique();
     if (!stored) return { ok: false as const, error: `tidak ada config tersimpan untuk "${args.fromCsName}" (CS bawaan)` };
     if (toNorm !== fromNorm) {
       const clash = await ctx.db
         .query("csConfigs")
-        .withIndex("by_normalizedName", (q) => q.eq("normalizedName", toNorm))
+        .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", toNorm))
         .unique();
       if (clash) return { ok: false as const, error: `sudah ada CS "${to}"` };
     }
@@ -228,10 +227,10 @@ export const renameCs = mutation({
 export const deleteCsConfig = mutation({
   args: { csName: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "csConfigs.deleteCsConfig");
+    const { orgId } = await requireAdminOrg(ctx, "csConfigs.deleteCsConfig");
     const stored = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizeCsName(args.csName)))
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizeCsName(args.csName)))
       .unique();
     if (!stored) return { ok: false as const, error: "tidak ada config tersimpan (mungkin CS bawaan — pakai toggle Aktif)" };
     await ctx.db.delete(stored._id);
