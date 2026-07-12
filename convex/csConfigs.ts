@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import { normalizeCsName } from "./lib";
+import { getDefaultOrgId } from "./orgs";
 
 export type CsFeatureConfig = {
   csName: string;
@@ -137,6 +138,7 @@ export const upsert = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "csConfigs.upsert");
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db
       .query("csConfigs")
@@ -149,7 +151,7 @@ export const upsert = mutation({
       return { success: true, action: "updated", csName: args.csName };
     }
 
-    await ctx.db.insert("csConfigs", { ...payload, createdAt: now });
+    await ctx.db.insert("csConfigs", { ...payload, createdAt: now, orgId: orgId ?? undefined });
     return { success: true, action: "inserted", csName: args.csName };
   },
 });

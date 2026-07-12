@@ -6,6 +6,7 @@ import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
 import { internal } from "./_generated/api";
 import { followUpEffectivenessFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
+import { getDefaultOrgId } from "./orgs";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
@@ -198,12 +199,13 @@ export const stampFollowUp = internalMutation({
   args: { conversationId: v.id("conversations"), stage: v.number(), at: v.number(),
           orderId: v.string(), customerPhone: v.string(), content: v.string() },
   handler: async (ctx, a) => {
+    const orgId = await getDefaultOrgId(ctx);
     // Feature #8: clear override after send; auto-staging resumes next check.
     await ctx.db.patch(a.conversationId, { followUpStage: a.stage, followUpStageAt: a.at, followUpStageOverride: undefined, updatedAt: a.at });
     await ctx.db.insert("messages", {
       conversationId: a.conversationId, orderId: a.orderId, customerPhone: a.customerPhone,
       role: "cs", direction: "outbound", content: a.content, messageType: "template",
-      source: "panel", createdAt: a.at,
+      source: "panel", createdAt: a.at, orgId: orgId ?? undefined,
     });
   },
 });
@@ -369,6 +371,7 @@ export const setAutoFollowUp = mutation({
       return { ok: false, error: "unauthorized" };
     }
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db
       .query("csConfigs")
@@ -389,6 +392,7 @@ export const setAutoFollowUp = mutation({
         isActive: true,
         createdAt: now,
         updatedAt: now,
+        orgId: orgId ?? undefined,
       });
     }
     return { ok: true, enabled: args.enabled };

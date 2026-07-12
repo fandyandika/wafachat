@@ -435,6 +435,7 @@ export const setConversationStatusFromN8n = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -497,6 +498,7 @@ export const setConversationStatusFromN8n = internalMutation({
       actor: "n8n",
       metadata: { previousStatus, status: args.status, note: args.note ?? "" },
       createdAt: now,
+      orgId: orgId ?? undefined,
     });
 
     return {
@@ -522,6 +524,7 @@ export const markConversationNotClosing = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.markConversationNotClosing");
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -568,6 +571,7 @@ export const markConversationNotClosing = mutation({
       actor: "cs",
       metadata: { previousStatus, status: "active", note: nextNote, closingCorrected: true },
       createdAt: now,
+      orgId: orgId ?? undefined,
     });
 
     return {
@@ -591,6 +595,7 @@ export const markConversationCancelled = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.markConversationCancelled");
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -627,6 +632,7 @@ export const markConversationCancelled = mutation({
       actor: "cs",
       metadata: { key: transitionKey, note: nextNote },
       createdAt: now,
+      orgId: orgId ?? undefined,
     });
 
     return {
@@ -649,6 +655,7 @@ export const undoConversationCancelled = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.undoConversationCancelled");
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -682,6 +689,7 @@ export const undoConversationCancelled = mutation({
       actor: "cs",
       metadata: { key: transitionKey, note: nextNote },
       createdAt: now,
+      orgId: orgId ?? undefined,
     });
 
     return {
@@ -704,6 +712,7 @@ export const markConversationClosing = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.markConversationClosing");
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -735,6 +744,7 @@ export const markConversationClosing = mutation({
       actor: "cs",
       metadata: { key: transitionKey, source: "manual", note: nextNote },
       createdAt: now,
+      orgId: orgId ?? undefined,
     });
 
     return {
@@ -755,6 +765,7 @@ export const deleteConversationOrder = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.deleteConversationOrder");
+    const orgId = await getDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -826,6 +837,7 @@ export const deleteConversationOrder = mutation({
       actor: "cs",
       metadata: { transitionKey },
       createdAt: Date.now(),
+      orgId: orgId ?? undefined,
     });
 
     await ctx.db.delete(conversation._id);
@@ -849,6 +861,7 @@ export const recordStatEventFromN8n = internalMutation({
     source: v.optional(v.union(v.literal("ai"), v.literal("manual"))),
   },
   handler: async (ctx, args) => {
+    const orgId = await getDefaultOrgId(ctx);
     if (args.phone && EXCLUDED_PHONES.has(normalizePhone(args.phone))) {
       return { success: true, skipped: true, reason: "excluded_phone", _action: "increment_stat" };
     }
@@ -880,6 +893,7 @@ export const recordStatEventFromN8n = internalMutation({
           actor: args.source === "manual" ? "cs" : "ai",
           metadata: { key, source: args.source ?? "ai" },
           createdAt: Date.now(),
+          orgId: orgId ?? undefined,
         });
       }
     } else {

@@ -7,6 +7,7 @@ import { getActiveClosingPhrases } from "./closingRules";
 import { bumpForOrderDoc, bumpForRecapDoc, computeRollupRow } from "./rollups";
 import { performanceFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
+import { getDefaultOrgId } from "./orgs";
 
 // Re-export from lib for backward compatibility
 export const canonicalizeProduct = canonicalizeProductLib;
@@ -350,6 +351,7 @@ export const upsertFromN8n = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const closedAt = args.closedAt ?? now;
     const order = await findOrder(ctx, { orderIdBerdu: args.orderIdBerdu, customerPhone: args.customerPhone });
     const conversation = await findConversation(ctx, { orderIdBerdu: args.orderIdBerdu, customerPhone: args.customerPhone });
@@ -414,6 +416,7 @@ export const upsertFromN8n = internalMutation({
         ...payload,
         version: 1,
         createdAt: now,
+        orgId: orgId ?? undefined,
       });
       const after = await ctx.db.get(recapId);
       await bumpForRecapDoc(ctx, null, after);
@@ -426,6 +429,7 @@ export const upsertFromN8n = internalMutation({
       type: "shipping_recap_upserted",
       actor: "n8n",
       metadata: { recapId, status, flags },
+      orgId: orgId ?? undefined,
       createdAt: now,
     });
 
@@ -445,6 +449,7 @@ export const createFromPanelClosing = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.createFromPanelClosing");
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const order = await findOrder(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone });
     const conversation = await findConversation(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone });
     const existing = await findExistingRecap(ctx, {
@@ -494,7 +499,7 @@ export const createFromPanelClosing = mutation({
       const after = await ctx.db.get(existing._id);
       await bumpForRecapDoc(ctx, before, after);
     } else {
-      recapId = await ctx.db.insert("shippingRecaps", { ...payload, version: 1, createdAt: now });
+      recapId = await ctx.db.insert("shippingRecaps", { ...payload, version: 1, createdAt: now, orgId: orgId ?? undefined });
       const after = await ctx.db.get(recapId);
       await bumpForRecapDoc(ctx, null, after);
     }
@@ -507,6 +512,7 @@ export const createFromPanelClosing = mutation({
       actor: "cs",
       metadata: { recapId, source: "panel_manual_closing" },
       createdAt: now,
+      orgId: orgId ?? undefined,
     });
 
     return { success: true, recapId, status: "needs_review", _action: "create_from_panel_closing" };
@@ -823,6 +829,7 @@ export const markCancelled = mutation({
   args: { recapId: v.id("shippingRecaps"), reason: v.string() },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markCancelled");
+    const orgId = await getDefaultOrgId(ctx);
     const row = await ctx.db.get(args.recapId);
     if (!row) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.status === "exported" ? "cancelled_after_export" : "cancelled";
@@ -844,6 +851,7 @@ export const markCancelled = mutation({
       actor: "cs",
       metadata: { recapId: args.recapId, reason: args.reason, status },
       createdAt: now,
+      orgId: orgId ?? undefined,
     });
     return { success: true, recapId: args.recapId, status };
   },
@@ -853,6 +861,7 @@ export const undoCancelled = mutation({
   args: { recapId: v.id("shippingRecaps") },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.undoCancelled");
+    const orgId = await getDefaultOrgId(ctx);
     const row = await ctx.db.get(args.recapId);
     if (!row) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.flags.length > 0 ? "needs_review" : "ready";
@@ -874,6 +883,7 @@ export const undoCancelled = mutation({
       actor: "cs",
       metadata: { recapId: args.recapId, status },
       createdAt: now,
+      orgId: orgId ?? undefined,
     });
     return { success: true, recapId: args.recapId, status };
   },
@@ -883,6 +893,7 @@ export const markExported = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")), exportBatchId: v.string() },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markExported");
+    const orgId = await getDefaultOrgId(ctx);
     const now = Date.now();
     const pairs = new Map<string, { k: string; w: string }>();
 
@@ -1596,3 +1607,4 @@ export const backfillByPhone = mutation({
     return { success: true, results };
   },
 });
+

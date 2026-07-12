@@ -113,3 +113,18 @@ test("upsertOrderFromN8n updates explicit createdAt on existing order", async ()
   expect(order?.createdAt).toBe(orderedAt);
   expect(conversation?.createdAt).toBe(orderedAt);
 });
+
+test("orgId stamping: created rows carry orgId when org seeded", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+
+  // Seed the default org
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  expect(orgId).not.toBeNull();
+
+  // Create a conversation via createTestConversation — should stamp orgId
+  const result = await asAdmin.mutation(api.state.createTestConversation, { phone: "6281234567890" });
+  const createdConversation = await t.run(async (ctx) =>
+    ctx.db.get(result.conversationId));
+  expect(createdConversation?.orgId).toBe(orgId);
+});

@@ -1,5 +1,6 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import { getDefaultOrgId } from "./orgs";
 
 const GLOBAL_AI_KEY = "global_ai_enabled";
 
@@ -19,6 +20,7 @@ export const setGlobalAiEnabled = internalMutation({
   args: { enabled: v.boolean() },
   handler: async (ctx, args) => {
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     const existing = await ctx.db
       .query("settings")
       .withIndex("by_key", (q) => q.eq("key", GLOBAL_AI_KEY))
@@ -27,7 +29,7 @@ export const setGlobalAiEnabled = internalMutation({
     if (existing) {
       await ctx.db.patch(existing._id, { value: args.enabled, updatedAt: now });
     } else {
-      await ctx.db.insert("settings", { key: GLOBAL_AI_KEY, value: args.enabled, updatedAt: now });
+      await ctx.db.insert("settings", { key: GLOBAL_AI_KEY, value: args.enabled, updatedAt: now, orgId: orgId ?? undefined });
     }
 
     await ctx.db.insert("events", {
@@ -35,6 +37,7 @@ export const setGlobalAiEnabled = internalMutation({
       actor: "cs",
       metadata: { enabled: args.enabled },
       createdAt: now,
+      orgId: orgId ?? undefined,
     });
 
     return { success: true, globalEnabled: args.enabled };

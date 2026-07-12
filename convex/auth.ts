@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { hashPassword, verifyPassword } from "./passwordHash";
+import { getDefaultOrgId } from "./orgs";
 
 const roleValidator = v.union(v.literal("admin"), v.literal("cs"));
 
@@ -30,13 +31,14 @@ export const createUser = mutation({
   handler: async (ctx, args) => {
     checkSecret(args.authSecret);
     const email = normEmail(args.email);
+    const orgId = await getDefaultOrgId(ctx);
     const existing = await ctx.db.query("users").withIndex("by_email", (q) => q.eq("email", email)).unique();
     if (existing) return { ok: false as const, error: "email already exists" };
     const now = Date.now();
     await ctx.db.insert("users", {
       email, name: args.name, passwordHash: await hashPassword(args.password),
       role: args.role, csName: args.role === "cs" ? (args.csName || undefined) : undefined,
-      isActive: true, createdAt: now, updatedAt: now,
+      isActive: true, createdAt: now, updatedAt: now, orgId: orgId ?? undefined,
     });
     return { ok: true as const };
   },
@@ -109,9 +111,10 @@ export const seedFirstAdmin = mutation({
     const any = await ctx.db.query("users").take(1);
     if (any.length > 0) return { ok: false as const, error: "users already exist" };
     const now = Date.now();
+    const orgId = await getDefaultOrgId(ctx);
     await ctx.db.insert("users", {
       email: normEmail(args.email), name: args.name, passwordHash: await hashPassword(args.password),
-      role: "admin", isActive: true, createdAt: now, updatedAt: now,
+      role: "admin", isActive: true, createdAt: now, updatedAt: now, orgId: orgId ?? undefined,
     });
     return { ok: true as const };
   },

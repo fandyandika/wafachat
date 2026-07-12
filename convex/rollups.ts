@@ -6,6 +6,7 @@ import { csKey as csKeyOf, isInternalTestPhone, normalizePhone, windowKeyFor, wi
 import { canonicalizeProduct } from "./shippingRecaps";
 import { pairResponsePairs, isSlaBreach, type RtMessage } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
+import { getDefaultOrgId } from "./orgs";
 
 const PRODUCT_CAP = 50;
 // Production showed 40 windows exceeded Convex mutation limits.
@@ -216,6 +217,7 @@ export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey:
 
 export async function computeRollupRow(ctx: any, csKeyArg: string, windowKey: string): Promise<void> {
   const values = await computeRollupValues(ctx, csKeyArg, windowKey);
+  const orgId = await getDefaultOrgId(ctx);
 
   if (values === null) {
     // Delete existing row
@@ -236,7 +238,7 @@ export async function computeRollupRow(ctx: any, csKeyArg: string, windowKey: st
     if (existing) {
       await ctx.db.patch(existing._id, values);
     } else {
-      await ctx.db.insert("dailyRollups", values);
+      await ctx.db.insert("dailyRollups", { ...values, orgId: orgId ?? undefined });
     }
   }
 }
@@ -315,6 +317,7 @@ export const recomputeWindow = internalMutation({
 
 export async function rebuildSamplesForWindowImpl(ctx: any, windowKey: string): Promise<number> {
   const internalPhones = await getInternalPhoneSet(ctx);
+  const orgId = await getDefaultOrgId(ctx);
   const { startAt, endAt } = windowRangeForKey(windowKey);
 
   // Delete all responseSamples in this window
@@ -371,6 +374,7 @@ export async function rebuildSamplesForWindowImpl(ctx: any, windowKey: string): 
         inboundAt: pair.inboundAt,
         slaBreach: isSlaBreach(pair.inboundAt, pair.replyAt),
         createdAt: pair.replyAt,
+        orgId: orgId ?? undefined,
       });
       sampleCount++;
     }

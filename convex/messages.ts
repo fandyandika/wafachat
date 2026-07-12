@@ -44,7 +44,8 @@ export const appendMessage = mutation({
   handler: async (ctx, args) => {
     await requireMember(ctx, "messages.appendMessage");
     const createdAt = args.createdAt ?? Date.now();
-    const messageId = await ctx.db.insert("messages", { ...args, createdAt });
+    const orgId = await getDefaultOrgId(ctx);
+    const messageId = await ctx.db.insert("messages", { ...args, createdAt, orgId: orgId ?? undefined });
 
     await ctx.db.patch(args.conversationId, { lastMessageAt: createdAt, updatedAt: createdAt });
     await ctx.db.insert("events", {
@@ -61,6 +62,7 @@ export const appendMessage = mutation({
         source: args.source,
       },
       createdAt,
+      orgId: orgId ?? undefined,
     });
 
     return { success: true, messageId };
