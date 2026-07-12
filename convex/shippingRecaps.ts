@@ -925,6 +925,7 @@ export const markExported = mutation({
         actor: "cs",
         metadata: { recapId, exportBatchId: args.exportBatchId },
         createdAt: now,
+        orgId: orgId ?? undefined,
       });
     }
 
