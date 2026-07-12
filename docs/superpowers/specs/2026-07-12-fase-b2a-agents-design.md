@@ -68,8 +68,9 @@ export async function resolveAgent(ctx, args: {
 Implementasi: baca csConfigs org (tabel kecil ~6 row, collect — pola
 `resolveCsByPhoneNumberId` existing), cocokkan berurutan: `phoneNumberId` ∈
 providerNumberIds/providerNumberId → `berduStaffId` ∈ berduStaffIds → `name`:
-persis ∈ nameAliases (case-insensitive trim) ATAU `csKey(name) == key`.
-Kembalikan key+csName kanonik agent.
+persis == `csName` saat-ini (case-insensitive trim; WAJIB — pasca-rename csKey(namaBaru)
+≠ key, hanya csName-match yang mengembalikan key lama) ATAU persis ∈ nameAliases ATAU
+`csKey(name) == key`. Kembalikan key+csName kanonik agent.
 
 `resolveCsByPhoneNumberId` dan `resolveBerduStaffMap` (ingest/core.ts) menjadi
 pemakai/alias tipis dari resolveAgent (atau digantikan langsung) — SATU sumber logika.
