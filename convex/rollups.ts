@@ -1,12 +1,12 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { requireAdmin } from "./authz";
+import { requireAdminOrg } from "./authz";
+import type { Id } from "./_generated/dataModel";
 import { csKey as csKeyOf, isInternalTestPhone, normalizePhone, windowKeyFor, windowRangeForKey, windowKeyToday } from "./lib";
 import { canonicalizeProduct } from "./shippingRecaps";
 import { pairResponsePairs, isSlaBreach, type RtMessage } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
-import { requireDefaultOrgId } from "./orgs";
 
 const PRODUCT_CAP = 50;
 // Production showed 40 windows exceeded Convex mutation limits.
@@ -34,22 +34,22 @@ export type RollupValues = {
   updatedAt: number;
 };
 
-export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey: string): Promise<RollupValues | null> {
+export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, csKeyArg: string, windowKey: string): Promise<RollupValues | null> {
   const internalPhones = await getInternalPhoneSet(ctx);
   const { startAt, endAt } = windowRangeForKey(windowKey);
 
-  // Fetch THIS CS's orders in the window via the csKey index — a per-CS slice, not the
+  // Fetch THIS CS's orders in the window via the org-scoped csKey index — a per-CS slice, not the
   // whole window (kills the O(window^2) write-amplification). Exclude internal test phones.
   const orders = (
     await ctx.db.query("orders")
-      .withIndex("by_csKey_createdAt", (q: any) => q.eq("csKey", csKeyArg).gte("createdAt", startAt).lte("createdAt", endAt))
+      .withIndex("by_org_csKey_createdAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("createdAt", startAt).lte("createdAt", endAt))
       .collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
 
   // Fetch THIS CS's recaps in the window in ONE read; split active vs cancelled in memory.
   const recapsAll = (
     await ctx.db.query("shippingRecaps")
-      .withIndex("by_csKey_closedAt", (q: any) => q.eq("csKey", csKeyArg).gte("closedAt", startAt).lte("closedAt", endAt))
+      .withIndex("by_org_csKey_closedAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("closedAt", startAt).lte("closedAt", endAt))
       .collect()
   ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
   const recaps = recapsAll.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export");
@@ -76,10 +76,10 @@ export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey:
     fbNeeded.map(async ({ phone, orderIdBerdu }) => {
       let order: any = null;
       if (orderIdBerdu) {
-        order = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderIdBerdu)).unique();
+        order = await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", orderIdBerdu)).unique();
       }
       if (!order) {
-        const all = await ctx.db.query("orders").withIndex("by_customerPhone", (q: any) => q.eq("customerPhone", phone)).collect();
+        const all = await ctx.db.query("orders").withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone)).collect();
         order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
       }
       return { phone, order };
@@ -215,24 +215,23 @@ export async function computeRollupValues(ctx: any, csKeyArg: string, windowKey:
   };
 }
 
-export async function computeRollupRow(ctx: any, csKeyArg: string, windowKey: string): Promise<void> {
-  const values = await computeRollupValues(ctx, csKeyArg, windowKey);
-  const orgId = await requireDefaultOrgId(ctx);
+export async function computeRollupRow(ctx: any, orgId: Id<"organizations">, csKeyArg: string, windowKey: string): Promise<void> {
+  const values = await computeRollupValues(ctx, orgId, csKeyArg, windowKey);
 
   if (values === null) {
     // Delete existing row
     const existing = await ctx.db
       .query("dailyRollups")
-      .withIndex("by_window_cs", (q: any) => q.eq("windowKey", windowKey).eq("csKey", csKeyArg))
+      .withIndex("by_org_window_cs", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey).eq("csKey", csKeyArg))
       .unique();
     if (existing) {
       await ctx.db.delete(existing._id);
     }
   } else {
-    // Upsert via by_window_cs
+    // Upsert via by_org_window_cs
     const existing = await ctx.db
       .query("dailyRollups")
-      .withIndex("by_window_cs", (q: any) => q.eq("windowKey", windowKey).eq("csKey", csKeyArg))
+      .withIndex("by_org_window_cs", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey).eq("csKey", csKeyArg))
       .unique();
 
     if (existing) {
@@ -244,39 +243,41 @@ export async function computeRollupRow(ctx: any, csKeyArg: string, windowKey: st
 }
 
 export async function bumpForOrderDoc(ctx: any, before: any | null, after: any | null): Promise<void> {
-  const pairs = new Map<string, { k: string; w: string }>();
+  const pairs = new Map<string, { orgId: Id<"organizations">; k: string; w: string }>();
   for (const doc of [before, after]) {
     if (!doc?.createdAt) continue;
     const k = csKeyOf(doc.assignedCsName);
     const w = windowKeyFor(doc.createdAt);
-    pairs.set(`${k}|${w}`, { k, w });
+    const orgId = doc.orgId;
+    pairs.set(`${orgId}|${k}|${w}`, { orgId, k, w });
   }
-  for (const { k, w } of pairs.values()) await computeRollupRow(ctx, k, w);
+  for (const { orgId, k, w } of pairs.values()) await computeRollupRow(ctx, orgId, k, w);
 }
 
 export async function bumpForRecapDoc(ctx: any, before: any | null, after: any | null): Promise<void> {
-  const pairs = new Map<string, { k: string; w: string }>();
+  const pairs = new Map<string, { orgId: Id<"organizations">; k: string; w: string }>();
   for (const doc of [before, after]) {
     if (!doc?.closedAt) continue;
     const k = csKeyOf(doc.csName);
     const w = windowKeyFor(doc.closedAt);
-    pairs.set(`${k}|${w}`, { k, w });
+    const orgId = doc.orgId;
+    pairs.set(`${orgId}|${k}|${w}`, { orgId, k, w });
   }
-  for (const { k, w } of pairs.values()) await computeRollupRow(ctx, k, w);
+  for (const { orgId, k, w } of pairs.values()) await computeRollupRow(ctx, orgId, k, w);
 }
 
-export async function recomputeWindowImpl(ctx: any, windowKey: string): Promise<number> {
+export async function recomputeWindowImpl(ctx: any, orgId: Id<"organizations">, windowKey: string): Promise<number> {
   const internalPhones = await getInternalPhoneSet(ctx);
   const { startAt, endAt } = windowRangeForKey(windowKey);
   const keys = new Set<string>();
 
   // Collect csKeys from orders in the window
   const orders = (
-    await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
   for (const o of orders) {
     // Self-heal: stamp csKey if a doc predates the field or a write site missed it.
-    // No-op in prod (backfill + write-path guarantee csKey); keeps the by_csKey_* reads
+    // No-op in prod (backfill + write-path guarantee csKey); keeps the by_org_csKey_* reads
     // in computeRollupValues correct even for stragglers. Runs only in trueUp/backfill.
     if (o.csKey === undefined) await ctx.db.patch(o._id, { csKey: csKeyOf(o.assignedCsName) });
     keys.add(csKeyOf(o.assignedCsName));
@@ -284,7 +285,7 @@ export async function recomputeWindowImpl(ctx: any, windowKey: string): Promise<
 
   // Collect csKeys from recaps in the window (including orphan attribution)
   const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
   ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
   for (const r of recaps) {
     if (r.csKey === undefined) await ctx.db.patch(r._id, { csKey: csKeyOf(r.csName) });
@@ -293,7 +294,7 @@ export async function recomputeWindowImpl(ctx: any, windowKey: string): Promise<
 
   // Collect csKeys from existing dailyRollups rows in the window (so stale rows get zeroed/deleted)
   const existingRollups = (
-    await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", windowKey)).collect()
+    await ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey)).collect()
   );
   for (const row of existingRollups) {
     keys.add(row.csKey);
@@ -301,28 +302,27 @@ export async function recomputeWindowImpl(ctx: any, windowKey: string): Promise<
 
   // Recompute all csKeys in the window
   for (const k of keys) {
-    await computeRollupRow(ctx, k, windowKey);
+    await computeRollupRow(ctx, orgId, k, windowKey);
   }
 
   return keys.size;
 }
 
 export const recomputeWindow = internalMutation({
-  args: { windowKey: v.string() },
+  args: { orgId: v.string(), windowKey: v.string() },
   handler: async (ctx, args) => {
-    const csKeys = await recomputeWindowImpl(ctx, args.windowKey);
+    const csKeys = await recomputeWindowImpl(ctx, args.orgId as Id<"organizations">, args.windowKey);
     return { windowKey: args.windowKey, csKeys };
   },
 });
 
-export async function rebuildSamplesForWindowImpl(ctx: any, windowKey: string): Promise<number> {
+export async function rebuildSamplesForWindowImpl(ctx: any, orgId: Id<"organizations">, windowKey: string): Promise<number> {
   const internalPhones = await getInternalPhoneSet(ctx);
-  const orgId = await requireDefaultOrgId(ctx);
   const { startAt, endAt } = windowRangeForKey(windowKey);
 
-  // Delete all responseSamples in this window
+  // Delete all responseSamples in this window for this org
   const existingSamples = (
-    await ctx.db.query("responseSamples").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    await ctx.db.query("responseSamples").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
   );
   for (const sample of existingSamples) {
     await ctx.db.delete(sample._id);
@@ -332,7 +332,7 @@ export async function rebuildSamplesForWindowImpl(ctx: any, windowKey: string): 
   const msgs = (
     await ctx.db
       .query("messages")
-      .withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt))
+      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt))
       .collect()
   ).filter((m: any) => !isInternalTestPhone(m.customerPhone, internalPhones));
 
@@ -384,9 +384,9 @@ export async function rebuildSamplesForWindowImpl(ctx: any, windowKey: string): 
 }
 
 export const rebuildSamplesForWindow = internalMutation({
-  args: { windowKey: v.string() },
+  args: { orgId: v.string(), windowKey: v.string() },
   handler: async (ctx, args) => {
-    const sampleCount = await rebuildSamplesForWindowImpl(ctx, args.windowKey);
+    const sampleCount = await rebuildSamplesForWindowImpl(ctx, args.orgId as Id<"organizations">, args.windowKey);
     return { windowKey: args.windowKey, samplesRebuilt: sampleCount };
   },
 });
@@ -399,10 +399,14 @@ export const trueUp = internalAction({
     const todayRange = windowRangeForKey(today);
     const yesterday = windowKeyFor(todayRange.startAt - 1);
 
-    // Rebuild samples for both windows
-    for (const windowKey of [yesterday, today]) {
-      await ctx.runMutation(internal.rollups.rebuildSamplesForWindow, { windowKey });
-      await ctx.runMutation(internal.rollups.recomputeWindow, { windowKey });
+    // Process each org separately
+    const orgs = await ctx.runQuery(internal.orgs.listOrgsInternal, {});
+    for (const org of orgs) {
+      // Rebuild samples for both windows
+      for (const windowKey of [yesterday, today]) {
+        await ctx.runMutation(internal.rollups.rebuildSamplesForWindow, { orgId: String(org._id), windowKey });
+        await ctx.runMutation(internal.rollups.recomputeWindow, { orgId: String(org._id), windowKey });
+      }
     }
 
     return { yesterday, today, status: "ok" };
@@ -412,10 +416,10 @@ export const trueUp = internalAction({
 export const oldestWindowKey = query({
   args: {},
   handler: async (ctx) => {
-    await requireAdmin(ctx, "rollups.oldestWindowKey");
+    const { orgId } = await requireAdminOrg(ctx, "rollups.oldestWindowKey");
 
-    // Get the first order by createdAt asc
-    const order = await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", 0)).first();
+    // Get the first order by createdAt asc for this org
+    const order = await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", 0)).first();
 
     if (!order) {
       return null;
@@ -428,7 +432,7 @@ export const oldestWindowKey = query({
 export const backfillRange = mutation({
   args: { fromKey: v.string(), toKey: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "rollups.backfillRange");
+    const { orgId } = await requireAdminOrg(ctx, "rollups.backfillRange");
 
     const processed: string[] = [];
     let currentKey = args.fromKey;
@@ -441,8 +445,8 @@ export const backfillRange = mutation({
       }
 
       // Execute both rebuild and recompute for this window
-      await rebuildSamplesForWindowImpl(ctx, currentKey);
-      await recomputeWindowImpl(ctx, currentKey);
+      await rebuildSamplesForWindowImpl(ctx, orgId, currentKey);
+      await recomputeWindowImpl(ctx, orgId, currentKey);
 
       processed.push(currentKey);
 
@@ -472,7 +476,7 @@ export const backfillRange = mutation({
 export const backfillCsKey = mutation({
   args: { table: v.union(v.literal("orders"), v.literal("shippingRecaps")), limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "rollups.backfillCsKey");
+    await requireAdminOrg(ctx, "rollups.backfillCsKey");
     const limit = args.limit ?? 500;
     const rows = await ctx.db
       .query(args.table)
@@ -489,12 +493,12 @@ export const backfillCsKey = mutation({
 export const csKeyCoverage = query({
   args: {},
   handler: async (ctx) => {
-    await requireAdmin(ctx, "rollups.csKeyCoverage");
+    const { orgId } = await requireAdminOrg(ctx, "rollups.csKeyCoverage");
     const ordersMissing = (
-      await ctx.db.query("orders").filter((q: any) => q.eq(q.field("csKey"), undefined)).collect()
+      await ctx.db.query("orders").filter((q: any) => q.and(q.eq(q.field("orgId"), orgId), q.eq(q.field("csKey"), undefined))).collect()
     ).length;
     const recapsMissing = (
-      await ctx.db.query("shippingRecaps").filter((q: any) => q.eq(q.field("csKey"), undefined)).collect()
+      await ctx.db.query("shippingRecaps").filter((q: any) => q.and(q.eq(q.field("orgId"), orgId), q.eq(q.field("csKey"), undefined))).collect()
     ).length;
     return { ordersMissing, recapsMissing };
   },
@@ -503,18 +507,18 @@ export const csKeyCoverage = query({
 export const debugRollupParity = query({
   args: { windowKey: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "rollups.debugRollupParity");
+    const { orgId } = await requireAdminOrg(ctx, "rollups.debugRollupParity");
     const internalPhones = await getInternalPhoneSet(ctx);
 
     const { startAt, endAt } = windowRangeForKey(args.windowKey);
     const mismatches: Array<{ csKey: string; field: string; stored: any; fresh: any }> = [];
 
-    // Fetch all csKeys in the window
+    // Fetch all csKeys in the window for this org
     const keys = new Set<string>();
 
     // From orders
     const orders = (
-      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
     for (const o of orders) {
       keys.add(csKeyOf(o.assignedCsName));
@@ -522,14 +526,14 @@ export const debugRollupParity = query({
 
     // From recaps
     const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
     ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
     for (const r of recaps) {
       keys.add(csKeyOf(r.csName));
     }
 
-    // From existing rollups
-    const storedRollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", args.windowKey)).collect();
+    // From existing rollups (scoped to this org)
+    const storedRollups = await ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", args.windowKey)).collect();
     const storedMap = new Map<string, any>();
     for (const row of storedRollups) {
       keys.add(row.csKey);
@@ -538,7 +542,7 @@ export const debugRollupParity = query({
 
     // Compute fresh for each csKey
     for (const csKey of keys) {
-      const fresh = await computeRollupValues(ctx, csKey, args.windowKey);
+      const fresh = await computeRollupValues(ctx, orgId, csKey, args.windowKey);
       const stored = storedMap.get(csKey);
 
       // Compare

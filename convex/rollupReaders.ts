@@ -1,3 +1,4 @@
+import type { Id } from "./_generated/dataModel";
 import { windowKeyFor, windowRangeForKey, csKey as csKeyOf, getJakartaDate, normalizePhone, isInternalTestPhone, canonicalizeProduct } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile } from "./responseTimeMath";
@@ -38,13 +39,14 @@ function windowKeysForRange(startAt: number, endAt: number): string[] {
 
 export async function responseTimesFromSamples(
   ctx: any,
+  orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; csName?: string }
 ) {
   // Fetch samples in range, sorted by createdAt
   const samples = (
     await ctx.db
       .query("responseSamples")
-      .withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect()
   ).sort((a: any, b: any) => a.createdAt - b.createdAt);
 
@@ -136,10 +138,10 @@ export async function responseTimesFromSamples(
 
 // ── 2. Daily Report from Rollups ────────────────────────────────────────────
 
-export async function dailyReportFromRollups(ctx: any, args: { startAt: number; endAt: number }) {
+export async function dailyReportFromRollups(ctx: any, orgId: Id<"organizations">, args: { startAt: number; endAt: number }) {
   const keys = windowKeysForRange(args.startAt, args.endAt);
   const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
+    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
   const rollups = rollupsByKey.flat();
 
@@ -254,13 +256,14 @@ function bucketKeyFromWindowKey(windowKey: string, bucket: "day" | "week" | "mon
 
 export async function trendFromRollups(
   ctx: any,
+  orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; bucket: "day" | "week" | "month"; csName?: string }
 ) {
   const keys = windowKeysForRange(args.startAt, args.endAt);
   const key = args.csName ? csKeyOf(args.csName) : null;
 
   const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
+    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
   const rollups = rollupsByKey.flat();
 
@@ -300,12 +303,12 @@ export async function trendFromRollups(
 
 // ── 4. Dashboard Summary from Rollups ───────────────────────────────────────
 
-export async function dashboardSummaryFromRollups(ctx: any, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
+export async function dashboardSummaryFromRollups(ctx: any, orgId: Id<"organizations">, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
   const key = args.csName ? csKeyOf(args.csName) : null;
   const keys = windowKeysForRange(args.startAt, args.endAt);
 
   const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
+    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
   const rollups = rollupsByKey.flat();
 
@@ -330,14 +333,14 @@ export async function dashboardSummaryFromRollups(ctx: any, args: { startAt: num
   // Note: These cannot be derived from rollups, so we read from raw tables
   const events = await ctx.db
     .query("events")
-    .withIndex("by_type_createdAt", (q: any) => q.eq("type", "handover").gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+    .withIndex("by_org_type_createdAt", (q: any) => q.eq("orgId", orgId).eq("type", "handover").gte("createdAt", args.startAt).lte("createdAt", args.endAt))
     .collect();
 
   const csOk = (cs: string | undefined) => !key || csKeyOf(cs) === key;
   const handovers = new Set(events.filter((e: any) => csOk(e.customerPhone ?? "")).map((e: any) => e.orderId ?? e.customerPhone ?? String(e._id))).size;
   // activeChats scans the WHOLE active pool (unbounded) — only when a caller asks (default off).
   const activeChats = args.includeActiveChats
-    ? (await ctx.db.query("conversations").withIndex("by_status_updatedAt", (q: any) => q.eq("status", "active")).collect())
+    ? (await ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", orgId).eq("status", "active")).collect())
         .filter((c: any) => csOk(c.assignedCsName)).length
     : 0;
 
@@ -357,6 +360,7 @@ export async function dashboardSummaryFromRollups(ctx: any, args: { startAt: num
 
 export async function leaderboardFromRollups(
   ctx: any,
+  orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; csName?: string }
 ) {
   const key = args.csName ? csKeyOf(args.csName) : null;
@@ -365,14 +369,14 @@ export async function leaderboardFromRollups(
   // Current period
   const keys = windowKeysForRange(args.startAt, args.endAt);
   const curRollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
+    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
   const curRollups = curRollupsByKey.flat();
 
   // Previous period
   const prevKeys = windowKeysForRange(args.startAt - len, args.startAt - 1);
   const prevRollupsByKey = await Promise.all(
-    prevKeys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
+    prevKeys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
   const prevRollups = prevRollupsByKey.flat();
 
@@ -433,6 +437,7 @@ export async function leaderboardFromRollups(
 
 export async function productDifficultyFromRollups(
   ctx: any,
+  orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; minLeads?: number; csName?: string }
 ) {
   // Note: This function reads from raw tables like the legacy getProductDifficulty
@@ -448,11 +453,11 @@ export async function productDifficultyFromRollups(
   // Helper to aggregate products from raw tables (counts raw orders for leads, not distinct customers)
   const aggregateFromRawTables = async (startAt: number, endAt: number) => {
     const orders = (
-      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKeyOf(o.assignedCsName) === key));
 
     const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
     ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKeyOf(r.csName) === key));
 
     const leads = new Map<string, number>();
@@ -530,6 +535,7 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
 
 export async function periodReportFromRollups(
   ctx: any,
+  orgId: Id<"organizations">,
   args: { period: "week" | "month"; anchor?: number; csName?: string }
 ) {
   const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
@@ -540,12 +546,12 @@ export async function periodReportFromRollups(
   const prevKeys = windowKeysForRange(prevStart, prevEnd);
 
   const curRollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
+    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
   const curRollups = curRollupsByKey.flat();
 
   const prevRollupsByKey = await Promise.all(
-    prevKeys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
+    prevKeys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
   const prevRollups = prevRollupsByKey.flat();
 
@@ -572,7 +578,7 @@ export async function periodReportFromRollups(
   // Cancelled from raw table (cannot derive from rollups easily)
   const shippingRecaps = await ctx.db
     .query("shippingRecaps")
-    .withIndex("by_closedAt", (q: any) => q.gte("closedAt", start).lte("closedAt", end))
+    .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", start).lte("closedAt", end))
     .collect();
 
   const cancelled = shippingRecaps.filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && (!key || csKeyOf(r.csName) === key)).length;
@@ -622,6 +628,7 @@ export async function periodReportFromRollups(
 
 export async function performanceFromRollups(
   ctx: any,
+  orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; includeInferredDiscount?: boolean; csName?: string }
 ) {
   const internalPhones = await getInternalPhoneSet(ctx);
@@ -629,7 +636,7 @@ export async function performanceFromRollups(
   const keys = windowKeysForRange(args.startAt, args.endAt);
 
   const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
+    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
   const rollups = rollupsByKey.flat();
 
@@ -664,12 +671,12 @@ export async function performanceFromRollups(
   // Read raw recaps for detailed product breakdown and closed customer count (rollups don't have per-product revenue)
   const recaps = await ctx.db
     .query("shippingRecaps")
-    .withIndex("by_closedAt", (q: any) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
+    .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lte("closedAt", args.endAt))
     .collect();
 
   const orders = await ctx.db
     .query("orders")
-    .withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+    .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
     .collect();
 
   const realOrders = orders.filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKeyOf(o.assignedCsName) === key));
@@ -708,10 +715,10 @@ export async function performanceFromRollups(
     fbNeeded.map(async ({ phone, orderIdBerdu }) => {
       let order: any = null;
       if (orderIdBerdu) {
-        order = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderIdBerdu)).unique();
+        order = await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", orderIdBerdu)).unique();
       }
       if (!order) {
-        const all = await ctx.db.query("orders").withIndex("by_customerPhone", (q: any) => q.eq("customerPhone", phone)).collect();
+        const all = await ctx.db.query("orders").withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone)).collect();
         order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
       }
       return { phone, order };
@@ -774,13 +781,14 @@ export async function performanceFromRollups(
 
 export async function followUpEffectivenessFromRollups(
   ctx: any,
+  orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; csName?: string }
 ) {
   const key = args.csName ? csKeyOf(args.csName) : null;
   const keys = windowKeysForRange(args.startAt, args.endAt);
 
   const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_windowKey", (q: any) => q.eq("windowKey", k)).collect())
+    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
   const rollups = rollupsByKey.flat();
 

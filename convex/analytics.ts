@@ -1,10 +1,12 @@
 import { query, internalQuery } from "./_generated/server";
-import { requireMember } from "./authz";
+import { requireMember, requireMemberOrg } from "./authz";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct, startOfJakartaDayMs } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRollups, periodReportFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
+import { requireDefaultOrgId } from "./orgs";
 
 // leads/closedCust are keyed by customer PHONE (unique customers); closings by ORDER
 // (orderIdBerdu) — order-level is right for volume + revenue (a double-ordering customer
@@ -12,14 +14,14 @@ import { getInternalPhoneSet } from "./orgSettings";
 // must therefore use closedCust/leads (same unit: customers).
 type CsAgg = { leads: Set<string>; closings: Set<string>; closedCust: Set<string>; revenue: number; rawCounts: Map<string, number> };
 
-async function computeCsAgg(ctx: any, startAt: number, endAt: number, csName?: string): Promise<Map<string, CsAgg>> {
+async function computeCsAgg(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number, csName?: string): Promise<Map<string, CsAgg>> {
   const internalPhones = await getInternalPhoneSet(ctx);
   const key = csName ? csKey(csName) : null;
   const orders = (
-    await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
   const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
   ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKey(r.csName) === key));
 
   // Group by csKey so a CS's raw name-forms ("Aisyah"/"CS Aisyah") merge into one row.
@@ -46,10 +48,10 @@ function aggName(a: CsAgg): string {
   return Array.from(a.rawCounts.entries()).sort((x, y) => y[1] - x[1])[0]?.[0] ?? "";
 }
 
-export async function computeCsLeaderboardRaw(ctx: any, args: { startAt: number; endAt: number; csName?: string }) {
+export async function computeCsLeaderboardRaw(ctx: any, orgId: Id<"organizations">, args: { startAt: number; endAt: number; csName?: string }) {
     const len = args.endAt - args.startAt;
-    const cur = await computeCsAgg(ctx, args.startAt, args.endAt, args.csName);
-    const prev = await computeCsAgg(ctx, args.startAt - len, args.startAt - 1, args.csName);
+    const cur = await computeCsAgg(ctx, orgId, args.startAt, args.endAt, args.csName);
+    const prev = await computeCsAgg(ctx, orgId, args.startAt - len, args.startAt - 1, args.csName);
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
     const keys = Array.from(new Set(Array.from(cur.keys()).concat(Array.from(prev.keys()))));
     const rows = keys.map((k) => {
@@ -75,7 +77,10 @@ export async function computeCsLeaderboardRaw(ctx: any, args: { startAt: number;
 
 export const getCsLeaderboardLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => computeCsLeaderboardRaw(ctx, args),
+  handler: async (ctx, args) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    return computeCsLeaderboardRaw(ctx, orgId, args);
+  },
 });
 
 export const getCsLeaderboard = query({
@@ -83,19 +88,19 @@ export const getCsLeaderboard = query({
   // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getCsLeaderboard");
-    return args.raw ? computeCsLeaderboardRaw(ctx, args) : leaderboardFromRollups(ctx, args);
+    const { orgId } = await requireMemberOrg(ctx, "analytics.getCsLeaderboard");
+    return args.raw ? computeCsLeaderboardRaw(ctx, orgId, args) : leaderboardFromRollups(ctx, orgId, args);
   },
 });
 
-async function computeProductAgg(ctx: any, startAt: number, endAt: number, csName?: string) {
+async function computeProductAgg(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number, csName?: string) {
   const internalPhones = await getInternalPhoneSet(ctx);
   const key = csName ? csKey(csName) : null;
   const orders = (
-    await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
   const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
   ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKey(r.csName) === key));
 
   const leads = new Map<string, number>();
@@ -116,11 +121,12 @@ async function computeProductAgg(ctx: any, startAt: number, endAt: number, csNam
 export const getProductDifficultyLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const orgId = await requireDefaultOrgId(ctx);
     const minLeads = args.minLeads ?? 3;
     const len = args.endAt - args.startAt;
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-    const cur = await computeProductAgg(ctx, args.startAt, args.endAt, args.csName);
-    const prev = await computeProductAgg(ctx, args.startAt - len, args.startAt - 1, args.csName);
+    const cur = await computeProductAgg(ctx, orgId, args.startAt, args.endAt, args.csName);
+    const prev = await computeProductAgg(ctx, orgId, args.startAt - len, args.startAt - 1, args.csName);
     const rows = Array.from(cur.leads.entries())
       .filter(([, leads]) => leads >= minLeads)
       .map(([productName, leads]) => {
@@ -138,8 +144,8 @@ export const getProductDifficultyLegacy = internalQuery({
 export const getProductDifficulty = query({
   args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getProductDifficulty");
-    return productDifficultyFromRollups(ctx, args);
+    const { orgId } = await requireMemberOrg(ctx, "analytics.getProductDifficulty");
+    return productDifficultyFromRollups(ctx, orgId, args);
   },
 });
 
@@ -171,11 +177,12 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
 export const getPeriodReportLegacy = internalQuery({
   args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const orgId = await requireDefaultOrgId(ctx);
     const internalPhones = await getInternalPhoneSet(ctx);
     const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-    const cur = await computeCsAgg(ctx, start, end, args.csName);
-    const prev = await computeCsAgg(ctx, prevStart, prevEnd, args.csName);
+    const cur = await computeCsAgg(ctx, orgId, start, end, args.csName);
+    const prev = await computeCsAgg(ctx, orgId, prevStart, prevEnd, args.csName);
     const totals = (m: Map<string, CsAgg>) => {
       const leads = new Set<string>(), closings = new Set<string>(), closedCust = new Set<string>();
       let revenue = 0;
@@ -206,8 +213,8 @@ export const getPeriodReportLegacy = internalQuery({
 export const getPeriodReport = query({
   args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getPeriodReport");
-    return periodReportFromRollups(ctx, args);
+    const { orgId } = await requireMemberOrg(ctx, "analytics.getPeriodReport");
+    return periodReportFromRollups(ctx, orgId, args);
   },
 });
 
@@ -229,18 +236,18 @@ type CsReportAcc = {
 export const getCsDetail = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.string() },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getCsDetail");
+    const { orgId } = await requireMemberOrg(ctx, "analytics.getCsDetail");
     const internalPhones = await getInternalPhoneSet(ctx);
     const k = csKey(args.csName);
     const BOUNDARY_MS = 6 * 60 * 60 * 1000; // neighbor-period peek on each side
 
     const orders = (
-      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
+      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && csKey(o.assignedCsName) === k);
 
     // One index read covers the window AND both boundary peeks.
     const recapsAll = (
-      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", args.startAt - BOUNDARY_MS).lte("closedAt", args.endAt + BOUNDARY_MS)).collect()
+      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt - BOUNDARY_MS).lte("closedAt", args.endAt + BOUNDARY_MS)).collect()
     ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones) && csKey(r.csName) === k);
 
     const inWin = (r: any) => r.closedAt >= args.startAt && r.closedAt <= args.endAt;
@@ -324,13 +331,13 @@ export const getCsDetail = query({
 // Daily CS report on a 16:00→16:00 WIB window. Mirrors computeCsAgg's dedup/exclusion
 // rules exactly (so totals match the Performance page), adding discount + per-CS×product
 // nesting + a duplicate-phone count (a judging aid for the CS-reported "Mis Rep").
-export async function computeDailyReportRaw(ctx: any, startAt: number, endAt: number) {
+export async function computeDailyReportRaw(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number) {
     const internalPhones = await getInternalPhoneSet(ctx);
     const orders = (
-      await ctx.db.query("orders").withIndex("by_createdAt", (q: any) => q.gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
     const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
     ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones));
 
     // Resolve a closing's product to the matched in-window order's name (anti-fragmentation),
@@ -361,10 +368,10 @@ export async function computeDailyReportRaw(ctx: any, startAt: number, endAt: nu
       fbNeeded.map(async ({ phone, orderIdBerdu }) => {
         let order: any = null;
         if (orderIdBerdu) {
-          order = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderIdBerdu)).unique();
+          order = await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", orderIdBerdu)).unique();
         }
         if (!order) {
-          const all = await ctx.db.query("orders").withIndex("by_customerPhone", (q: any) => q.eq("customerPhone", phone)).collect();
+          const all = await ctx.db.query("orders").withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone)).collect();
           order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
         }
         return { phone, order };
@@ -457,7 +464,10 @@ export async function computeDailyReportRaw(ctx: any, startAt: number, endAt: nu
 
 export const getDailyReportLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number() },
-  handler: async (ctx, args) => computeDailyReportRaw(ctx, args.startAt, args.endAt),
+  handler: async (ctx, args) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    return computeDailyReportRaw(ctx, orgId, args.startAt, args.endAt);
+  },
 });
 
 // Owner "Live Hari Ini" — calendar-day (midnight WIB → now), raw bounded read of today's
@@ -466,17 +476,17 @@ export const getDailyReportLegacy = internalQuery({
 export const getLiveToday = query({
   args: { nowMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getLiveToday");
+    const { orgId } = await requireMemberOrg(ctx, "analytics.getLiveToday");
     const now = args.nowMs ?? Date.now();
     const startAt = startOfJakartaDayMs(now);
-    return computeDailyReportRaw(ctx, startAt, now);
+    return computeDailyReportRaw(ctx, orgId, startAt, now);
   },
 });
 
 export const getDailyReport = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "analytics.getDailyReport");
-    return dailyReportFromRollups(ctx, args);
+    const { orgId } = await requireMemberOrg(ctx, "analytics.getDailyReport");
+    return dailyReportFromRollups(ctx, orgId, args);
   },
 });

@@ -1,20 +1,22 @@
 import { query, internalQuery, type QueryCtx } from "./_generated/server";
-import { requireAdmin, requireMember } from "./authz";
+import { requireAdminOrg, requireMember, requireMemberOrg } from "./authz";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
 import { dashboardSummaryFromRollups, trendFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
+import { requireDefaultOrgId } from "./orgs";
 
-export async function computeDashboardSummaryRaw(ctx: QueryCtx, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
+export async function computeDashboardSummaryRaw(ctx: QueryCtx, orgId: Id<"organizations">, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
     const internalPhones = await getInternalPhoneSet(ctx);
     const orders = await ctx.db.query("orders")
-      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+      .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
     const recaps = await ctx.db.query("shippingRecaps")
-      .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
+      .withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lte("closedAt", args.endAt))
       .collect();
     const events = await ctx.db.query("events")
-      .withIndex("by_type_createdAt", (q) => q.eq("type", "handover").gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+      .withIndex("by_org_type_createdAt", (q) => q.eq("orgId", orgId).eq("type", "handover").gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
 
     const key = args.csName ? csKey(args.csName) : null;
@@ -39,7 +41,7 @@ export async function computeDashboardSummaryRaw(ctx: QueryCtx, args: { startAt:
     // does not render it, so only compute it when a caller explicitly asks (default off →
     // skip the read entirely). A future CS-AI ops page can pass includeActiveChats: true.
     const activeChats = args.includeActiveChats
-      ? (await ctx.db.query("conversations").withIndex("by_status_updatedAt", (q) => q.eq("status", "active")).collect())
+      ? (await ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", orgId).eq("status", "active")).collect())
           .filter((c) => !isInternalTestPhone(c.customerPhone, internalPhones) && csOk(c.assignedCsName)).length
       : 0;
 
@@ -56,7 +58,10 @@ export async function computeDashboardSummaryRaw(ctx: QueryCtx, args: { startAt:
 
 export const getDashboardSummaryLegacy = internalQuery({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => computeDashboardSummaryRaw(ctx, args),
+  handler: async (ctx, args) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    return computeDashboardSummaryRaw(ctx, orgId, args);
+  },
 });
 
 export const getDashboardSummary = query({
@@ -64,8 +69,8 @@ export const getDashboardSummary = query({
   // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()), includeActiveChats: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "metrics.getDashboardSummary");
-    return args.raw ? computeDashboardSummaryRaw(ctx, args) : dashboardSummaryFromRollups(ctx, args);
+    const { orgId } = await requireMemberOrg(ctx, "metrics.getDashboardSummary");
+    return args.raw ? computeDashboardSummaryRaw(ctx, orgId, args) : dashboardSummaryFromRollups(ctx, orgId, args);
   },
 });
 
@@ -115,21 +120,21 @@ export const getTrend = query({
   args: { startAt: v.number(), endAt: v.number(),
     bucket: v.union(v.literal("day"), v.literal("week"), v.literal("month")), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "metrics.getTrend");
-    return trendFromRollups(ctx, args);
+    const { orgId } = await requireMemberOrg(ctx, "metrics.getTrend");
+    return trendFromRollups(ctx, orgId, args);
   },
 });
 
 export const getDuplicateOrders = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "metrics.getDuplicateOrders");
+    const { orgId } = await requireMemberOrg(ctx, "metrics.getDuplicateOrders");
     const internalPhones = await getInternalPhoneSet(ctx);
     const key = args.csName ? csKey(args.csName) : null;
     const orders = (
       await ctx.db
         .query("orders")
-        .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+        .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
         .collect()
     ).filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
 
@@ -175,14 +180,14 @@ export const getDuplicateOrders = query({
 export const debugFindOrders = query({
   args: { orderIds: v.array(v.string()) },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "metrics.debugFindOrders");
+    const { orgId } = await requireAdminOrg(ctx, "metrics.debugFindOrders");
     const results = [];
     for (const raw of args.orderIds) {
       const stripped = raw.replace(/^#/, "").trim();
       const orderId = stripped.startsWith("O-") ? stripped : `O-${stripped}`;
       const order = await ctx.db
         .query("orders")
-        .withIndex("by_orderId", (q) => q.eq("orderId", orderId))
+        .withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", orderId))
         .unique();
       results.push({
         orderId,
@@ -202,11 +207,11 @@ export const debugFindOrders = query({
 export const debugOrderReconcile = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "metrics.debugOrderReconcile");
+    const { orgId } = await requireAdminOrg(ctx, "metrics.debugOrderReconcile");
     const internalPhones = await getInternalPhoneSet(ctx);
     const orders = await ctx.db
       .query("orders")
-      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+      .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
     const excluded = orders.filter((o) => isInternalTestPhone(o.customerPhone, internalPhones));
     const valid = orders.filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones));
