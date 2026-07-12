@@ -54,6 +54,7 @@ export const runReconcile = internalAction({
     const counters = await ctx.runQuery(internal.state.listOrderCountersByPrefix, { datePrefix });
     const gaps = computeGaps(counters.counters, counters.min, counters.max);
     const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
+    if (!orgId) return;
     let healed = 0;
     for (const c of gaps.slice(0, 50)) { // bound one run
       const orderId = `O-${datePrefix}${String(c).padStart(6, "0")}`;
@@ -62,7 +63,7 @@ export const runReconcile = internalAction({
       const eventId = await ctx.runMutation(internal.ingest.events.captureEvent, {
         sourceKey: "berdu-reconciler", kind: "lead.created",
         rawHeaders: "{}", rawBody: JSON.stringify({ order: detail }), signatureOk: true,
-        orgId: orgId ?? undefined,
+        orgId,
       });
       try {
         await ctx.runMutation(internal.ingest.core.processEvent, { eventId });

@@ -9,7 +9,7 @@ import { getActiveClosingPhrases } from "./closingRules";
 import { messageHasDoneMarker } from "./followUpMath";
 import { countFollowUpTouchesBeforeTime } from "./followUp";
 import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
-import { getDefaultOrgId } from "./orgs";
+import { requireDefaultOrgId } from "./orgs";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }) {
   if (args.orderId) {
@@ -44,8 +44,8 @@ export const appendMessage = mutation({
   handler: async (ctx, args) => {
     await requireMember(ctx, "messages.appendMessage");
     const createdAt = args.createdAt ?? Date.now();
-    const orgId = await getDefaultOrgId(ctx);
-    const messageId = await ctx.db.insert("messages", { ...args, createdAt, orgId: orgId ?? undefined });
+    const orgId = await requireDefaultOrgId(ctx);
+    const messageId = await ctx.db.insert("messages", { ...args, createdAt, orgId });
 
     await ctx.db.patch(args.conversationId, { lastMessageAt: createdAt, updatedAt: createdAt });
     await ctx.db.insert("events", {
@@ -62,7 +62,7 @@ export const appendMessage = mutation({
         source: args.source,
       },
       createdAt,
-      orgId: orgId ?? undefined,
+      orgId,
     });
 
     return { success: true, messageId };
@@ -106,6 +106,7 @@ export const deleteMessage = mutation({
         deletedDirection: message.direction,
       },
       createdAt: Date.now(),
+      orgId: message.orgId,
     });
 
     return { success: true, messageId: args.messageId };
@@ -127,7 +128,7 @@ export type AppendMessageCoreArgs = {
   externalMessageId?: string;
   createdAt?: number;
   source?: string; // "n8n" (default) | "ingest"
-  orgId?: Id<"organizations"> | null;
+  orgId: Id<"organizations">;
 };
 
 export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
@@ -164,7 +165,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
       note: "created from webhook message",
       createdAt: now,
       updatedAt: now,
-      orgId: args.orgId ?? undefined,
+      orgId: args.orgId,
     });
 
     conversation = await ctx.db.get(conversationId);
@@ -181,7 +182,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
         aiEnabled: false,
       },
       createdAt: now,
-      orgId: args.orgId ?? undefined,
+      orgId: args.orgId,
     });
   }
 
@@ -197,7 +198,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     source: args.source ?? "n8n",
     externalMessageId: args.externalMessageId,
     createdAt,
-    orgId: args.orgId ?? undefined,
+    orgId: args.orgId,
   });
 
   const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string; followUpStageOverride?: undefined; rtPendingInboundAt?: number | undefined } = {
@@ -230,7 +231,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
         inboundAt: conversation.rtPendingInboundAt,
         slaBreach: isSlaBreach(conversation.rtPendingInboundAt, createdAt),
         createdAt,
-        orgId: args.orgId ?? undefined,
+        orgId: args.orgId,
       });
     } catch (e) {
       console.warn("[rt-sample] extraction failed; true-up will heal", (e as Error).message);
@@ -268,7 +269,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
       source: args.source ?? "n8n",
     },
     createdAt,
-    orgId: args.orgId ?? undefined,
+    orgId: args.orgId,
   });
 
   let closingRecapId: Id<"shippingRecaps"> | undefined;
@@ -304,7 +305,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
           actor: "n8n",
           metadata: { recapId: result.recapId, source: "auto_message", externalMessageId: args.externalMessageId },
           createdAt,
-          orgId: args.orgId ?? undefined,
+          orgId: args.orgId,
         });
       }
     }
@@ -342,7 +343,7 @@ export const appendMessageFromN8n = internalMutation({
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     return appendMessageCore(ctx, { ...args, orgId });
   },
 });

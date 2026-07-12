@@ -3,7 +3,7 @@ import { v } from "convex/values";
 
 export default defineSchema({
   customers: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     phone: v.string(),
     name: v.string(),
     firstSeenAt: v.number(),
@@ -11,7 +11,7 @@ export default defineSchema({
   }).index("by_phone", ["phone"]),
 
   orders: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     orderId: v.string(),
     customerPhone: v.string(),
     customerName: v.string(),
@@ -39,7 +39,7 @@ export default defineSchema({
     .index("by_csKey_createdAt", ["csKey", "createdAt"]),
 
   conversations: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     orderId: v.string(),
     customerPhone: v.string(),
     customerName: v.string(),
@@ -62,7 +62,7 @@ export default defineSchema({
     .index("by_assignedCsName_status", ["assignedCsName", "status"]),
 
   csConfigs: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     normalizedName: v.string(),
     csName: v.string(),
     csPhone: v.optional(v.string()),
@@ -89,7 +89,7 @@ export default defineSchema({
   // processing bug never loses data and failed events replay from OUR table,
   // not the vendor's dead-letter UI. (Incident 2026-07-07.)
   ingestEvents: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     sourceKey: v.string(),
     kind: v.string(), // "message.event" | "lead.created" | "generic.message" | "generic.lead" | "unknown"
     rawHeaders: v.string(), // JSON string of the relevant header subset
@@ -112,7 +112,7 @@ export default defineSchema({
     .index("by_receivedAt", ["receivedAt"]),
 
   ingestSources: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     sourceKey: v.string(),
     name: v.string(),
     kind: v.union(v.literal("kirimdev"), v.literal("berdu"), v.literal("custom")),
@@ -126,7 +126,7 @@ export default defineSchema({
   }).index("by_sourceKey", ["sourceKey"]),
 
   alertState: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     alertKey: v.string(), // "silence" | "failure-spike"
     lastSentAt: v.number(),
   }).index("by_alertKey", ["alertKey"]),
@@ -135,7 +135,7 @@ export default defineSchema({
   // 1 row per (csKey, 16:00-WIB window). Recomputed-bounded on every order/recap
   // write; idempotent (row = pure function of raw rows) -> drift impossible.
   dailyRollups: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     windowKey: v.string(),
     csKey: v.string(),
     csName: v.string(),
@@ -162,7 +162,7 @@ export default defineSchema({
   // window-dependent (earliest pair per conversation WITHIN the queried window),
   // so readers derive it — exactly reproducing pairResponseEvents semantics.
   responseSamples: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     csKey: v.string(),
     csName: v.string(),
     conversationId: v.id("conversations"),
@@ -175,7 +175,7 @@ export default defineSchema({
     .index("by_cs_createdAt", ["csKey", "createdAt"]),
 
   messages: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     conversationId: v.id("conversations"),
     orderId: v.string(),
     customerPhone: v.string(),
@@ -194,7 +194,7 @@ export default defineSchema({
     .index("by_externalMessageId", ["externalMessageId"]),
 
   events: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     conversationId: v.optional(v.id("conversations")),
     orderId: v.optional(v.string()),
     customerPhone: v.optional(v.string()),
@@ -247,7 +247,7 @@ export default defineSchema({
   }).index("by_date", ["date"]),
 
   shippingRecaps: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     orderIdBerdu: v.optional(v.string()),
     conversationId: v.optional(v.id("conversations")),
     customerPhone: v.string(),
@@ -304,7 +304,7 @@ export default defineSchema({
     .index("by_csKey_closedAt", ["csKey", "closedAt"]),
 
   settings: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     key: v.string(),
     value: v.boolean(),
     updatedAt: v.number(),
@@ -314,7 +314,7 @@ export default defineSchema({
   // Values here override the in-code DEFAULT_ORG_SETTINGS fallback (empty table
   // = fallback = pre-Fase-A behavior). Phones stored normalized (62…).
   orgSettings: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     key: v.string(), // "default" — becomes a per-org lookup in Fase B
     orgName: v.string(),
     internalPhones: v.array(v.string()),
@@ -330,14 +330,14 @@ export default defineSchema({
   }).index("by_slug", ["slug"]),
 
   closingRules: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     phrase: v.string(),
     active: v.boolean(),
     createdAt: v.number(),
   }).index("by_active", ["active"]),
 
   users: defineTable({
-    orgId: v.optional(v.id("organizations")), // B1: required after backfill (spec §3.4)
+    orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     email: v.string(),
     name: v.string(),
     passwordHash: v.string(),

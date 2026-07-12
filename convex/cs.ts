@@ -3,7 +3,7 @@ import { requireAdmin, requireMember } from "./authz";
 import { v } from "convex/values";
 import { csKey, normalizeCsName } from "./lib";
 import { DEFAULT_CONFIGS } from "./csConfigs";
-import { getDefaultOrgId } from "./orgs";
+import { requireDefaultOrgId } from "./orgs";
 
 type CsRow = {
   csName: string; normalizedName: string; key: string; avatarUrl: string | null;
@@ -77,7 +77,7 @@ export const setCsAvatar = mutation({
     await requireAdmin(ctx, "cs.generateUploadUrl");
     const normalizedName = normalizeCsName(args.csName);
     const now = Date.now();
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const existing = await ctx.db.query("csConfigs")
       .withIndex("by_normalizedName", (q) => q.eq("normalizedName", normalizedName)).unique();
     if (existing) {
@@ -89,7 +89,7 @@ export const setCsAvatar = mutation({
       await ctx.db.insert("csConfigs", {
         normalizedName, csName: args.csName, avatarStorageId: args.storageId,
         orderAutomationEnabled: false, aiAssistantEnabled: false, reportingEnabled: true, isActive: true,
-        createdAt: now, updatedAt: now, orgId: orgId ?? undefined,
+        createdAt: now, updatedAt: now, orgId,
       });
     }
     return { success: true } as const;

@@ -14,7 +14,7 @@ import {
 } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 import { bumpForOrderDoc } from "./rollups";
-import { getDefaultOrgId } from "./orgs";
+import { requireDefaultOrgId } from "./orgs";
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.literal("closed"));
 
@@ -120,7 +120,7 @@ export const createTestConversation = mutation({
     const reportable = csConfig.isActive && csConfig.reportingEnabled;
     const aiEligible = reportable && csConfig.aiAssistantEnabled;
 
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const existingCustomer = await ctx.db
       .query("customers")
       .withIndex("by_phone", (q) => q.eq("phone", phone))
@@ -128,7 +128,7 @@ export const createTestConversation = mutation({
     if (existingCustomer) {
       await ctx.db.patch(existingCustomer._id, { lastSeenAt: now });
     } else {
-      await ctx.db.insert("customers", { phone, name: "Test Customer", firstSeenAt: now, lastSeenAt: now, orgId: orgId ?? undefined });
+      await ctx.db.insert("customers", { phone, name: "Test Customer", firstSeenAt: now, lastSeenAt: now, orgId });
     }
 
     await ctx.db.insert("orders", {
@@ -149,7 +149,7 @@ export const createTestConversation = mutation({
       aiEligible,
       createdAt: now,
       updatedAt: now,
-      orgId: orgId ?? undefined,
+      orgId,
     });
     const insertedOrder = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderId)).unique();
     await bumpForOrderDoc(ctx, null, insertedOrder);
@@ -164,7 +164,7 @@ export const createTestConversation = mutation({
       note: "",
       createdAt: now,
       updatedAt: now,
-      orgId: orgId ?? undefined,
+      orgId,
     });
 
     return { success: true, phone, orderId, conversationId, aiEnabled: aiEligible, csName };
@@ -244,7 +244,7 @@ export async function upsertOrderCore(
     shippingCity?: string;
     order_id?: string;
     createdAt?: number;
-    orgId?: Id<"organizations"> | null;
+    orgId: Id<"organizations">;
   },
 ) {
   const now = Date.now();
@@ -271,7 +271,7 @@ export async function upsertOrderCore(
       name: customerName,
       firstSeenAt: now,
       lastSeenAt: now,
-      orgId: args.orgId ?? undefined,
+      orgId: args.orgId,
     });
   }
 
@@ -309,7 +309,7 @@ export async function upsertOrderCore(
     const after = await ctx.db.get(existingOrder._id);
     await bumpForOrderDoc(ctx, before, after);
   } else {
-    await ctx.db.insert("orders", { ...orderPayload, createdAt: args.createdAt ?? now, orgId: args.orgId ?? undefined });
+    await ctx.db.insert("orders", { ...orderPayload, createdAt: args.createdAt ?? now, orgId: args.orgId });
     const after = await ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", orderId)).unique();
     await bumpForOrderDoc(ctx, null, after);
   }
@@ -344,7 +344,7 @@ export async function upsertOrderCore(
         note: "",
         createdAt: args.createdAt ?? now,
         updatedAt: now,
-        orgId: args.orgId ?? undefined,
+        orgId: args.orgId,
       });
     }
 
@@ -368,7 +368,7 @@ export async function upsertOrderCore(
       csName: args.csName,
     },
     createdAt: now,
-    orgId: args.orgId ?? undefined,
+    orgId: args.orgId,
   });
 
   return { success: true, phone, orderId, aiEligible, reportable, conversationId };
@@ -392,7 +392,7 @@ export const upsertOrderFromN8n = internalMutation({
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     return upsertOrderCore(ctx, { ...args, orgId });
   },
 });
@@ -435,7 +435,7 @@ export const setConversationStatusFromN8n = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -498,7 +498,7 @@ export const setConversationStatusFromN8n = internalMutation({
       actor: "n8n",
       metadata: { previousStatus, status: args.status, note: args.note ?? "" },
       createdAt: now,
-      orgId: orgId ?? undefined,
+      orgId,
     });
 
     return {
@@ -524,7 +524,7 @@ export const markConversationNotClosing = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.markConversationNotClosing");
     const now = Date.now();
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -571,7 +571,7 @@ export const markConversationNotClosing = mutation({
       actor: "cs",
       metadata: { previousStatus, status: "active", note: nextNote, closingCorrected: true },
       createdAt: now,
-      orgId: orgId ?? undefined,
+      orgId,
     });
 
     return {
@@ -595,7 +595,7 @@ export const markConversationCancelled = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.markConversationCancelled");
     const now = Date.now();
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -632,7 +632,7 @@ export const markConversationCancelled = mutation({
       actor: "cs",
       metadata: { key: transitionKey, note: nextNote },
       createdAt: now,
-      orgId: orgId ?? undefined,
+      orgId,
     });
 
     return {
@@ -655,7 +655,7 @@ export const undoConversationCancelled = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.undoConversationCancelled");
     const now = Date.now();
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -689,7 +689,7 @@ export const undoConversationCancelled = mutation({
       actor: "cs",
       metadata: { key: transitionKey, note: nextNote },
       createdAt: now,
-      orgId: orgId ?? undefined,
+      orgId,
     });
 
     return {
@@ -712,7 +712,7 @@ export const markConversationClosing = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.markConversationClosing");
     const now = Date.now();
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -744,7 +744,7 @@ export const markConversationClosing = mutation({
       actor: "cs",
       metadata: { key: transitionKey, source: "manual", note: nextNote },
       createdAt: now,
-      orgId: orgId ?? undefined,
+      orgId,
     });
 
     return {
@@ -765,7 +765,7 @@ export const deleteConversationOrder = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "state.deleteConversationOrder");
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone });
 
     if (!conversation) {
@@ -837,7 +837,7 @@ export const deleteConversationOrder = mutation({
       actor: "cs",
       metadata: { transitionKey },
       createdAt: Date.now(),
-      orgId: orgId ?? undefined,
+      orgId,
     });
 
     await ctx.db.delete(conversation._id);
@@ -861,7 +861,7 @@ export const recordStatEventFromN8n = internalMutation({
     source: v.optional(v.union(v.literal("ai"), v.literal("manual"))),
   },
   handler: async (ctx, args) => {
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     if (args.phone && EXCLUDED_PHONES.has(normalizePhone(args.phone))) {
       return { success: true, skipped: true, reason: "excluded_phone", _action: "increment_stat" };
     }
@@ -893,7 +893,7 @@ export const recordStatEventFromN8n = internalMutation({
           actor: args.source === "manual" ? "cs" : "ai",
           metadata: { key, source: args.source ?? "ai" },
           createdAt: Date.now(),
-          orgId: orgId ?? undefined,
+          orgId,
         });
       }
     } else {

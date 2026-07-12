@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireAdmin } from "./authz";
 import { normalizePhone } from "./lib";
-import { getDefaultOrgId } from "./orgs";
+import { requireDefaultOrgId } from "./orgs";
 
 // In-code fallback = tenant #1's values, verbatim from the old convex/lib.ts
 // INTERNAL_TEST_PHONES hardcode. Used whenever the orgSettings table is empty
@@ -56,7 +56,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "orgSettings.update");
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.orgName !== undefined) {
       const name = args.orgName.trim();
@@ -83,7 +83,7 @@ export const update = mutation({
       internalPhones: DEFAULT_INTERNAL_PHONES,
       updatedAt: Date.now(),
       ...patch,
-      orgId: orgId ?? undefined,
+      orgId,
     });
     return { ok: true, action: "inserted" as const };
   },
@@ -94,7 +94,7 @@ export const seedDefault = mutation({
   args: {},
   handler: async (ctx) => {
     await requireAdmin(ctx, "orgSettings.seedDefault");
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const existing = await ctx.db
       .query("orgSettings")
       .withIndex("by_key", (q) => q.eq("key", "default"))
@@ -105,7 +105,7 @@ export const seedDefault = mutation({
       orgName: DEFAULT_ORG_SETTINGS.orgName,
       internalPhones: DEFAULT_INTERNAL_PHONES,
       updatedAt: Date.now(),
-      orgId: orgId ?? undefined,
+      orgId,
     });
     return { seeded: true as const };
   },

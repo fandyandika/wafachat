@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { getDefaultOrgId } from "../orgs";
+import { requireDefaultOrgId } from "../orgs";
 
 const SILENCE_MIN = 45;
 const SPIKE_THRESHOLD = 5;
@@ -48,14 +48,14 @@ export const getHealthSnapshot = internalQuery({
 export const stampAlertIfCool = internalMutation({
   args: { alertKey: v.string(), nowMs: v.number() },
   handler: async (ctx, args) => {
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const existing = await ctx.db
       .query("alertState")
       .withIndex("by_alertKey", (q) => q.eq("alertKey", args.alertKey))
       .unique();
     if (existing && args.nowMs - existing.lastSentAt < COOLDOWN_MS) return { sent: false };
     if (existing) await ctx.db.patch(existing._id, { lastSentAt: args.nowMs });
-    else await ctx.db.insert("alertState", { alertKey: args.alertKey, lastSentAt: args.nowMs, orgId: orgId ?? undefined });
+    else await ctx.db.insert("alertState", { alertKey: args.alertKey, lastSentAt: args.nowMs, orgId });
     return { sent: true };
   },
 });

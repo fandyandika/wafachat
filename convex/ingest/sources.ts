@@ -34,7 +34,8 @@ export const upsertSource = mutation({
       await ctx.db.patch(existing._id, args);
       return existing._id;
     }
-    return ctx.db.insert("ingestSources", { ...args, createdAt: Date.now() });
+    const orgId = await requireDefaultOrgId(ctx);
+    return ctx.db.insert("ingestSources", { orgId, ...args, createdAt: Date.now() });
   },
 });
 

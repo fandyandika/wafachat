@@ -1,6 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { requireAdmin } from "./authz";
-import { getDefaultOrgId } from "./orgs";
+import { requireDefaultOrgId } from "./orgs";
 
 const DEFAULT_PHRASES = ["PEMESANAN BERHASIL"];
 
@@ -24,11 +24,11 @@ export const seedDefault = mutation({
   args: {},
   handler: async (ctx) => {
     await requireAdmin(ctx, "closingRules.seedDefault");
-    const orgId = await getDefaultOrgId(ctx);
+    const orgId = await requireDefaultOrgId(ctx);
     const existing = await ctx.db.query("closingRules").collect();
     if (existing.length > 0) return { seeded: false, count: existing.length };
     for (const phrase of DEFAULT_PHRASES) {
-      await ctx.db.insert("closingRules", { phrase, active: true, createdAt: Date.now(), orgId: orgId ?? undefined });
+      await ctx.db.insert("closingRules", { phrase, active: true, createdAt: Date.now(), orgId });
     }
     return { seeded: true, count: DEFAULT_PHRASES.length };
   },
