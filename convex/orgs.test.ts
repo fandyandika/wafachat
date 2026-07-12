@@ -42,13 +42,16 @@ test("seedDefaultOrg: idempotent, single row, name follows orgSettings fallback"
   });
 });
 
-test("backfillOrgId: cursor-paged stamping (no re-scan of stamped prefix); coverage pages the same way", async () => {
+// NOTE: post-required-flip (B1), the schema REJECTS any orgId-less insert, so the
+// undefined->default patch behaviour of backfillOrgId is no longer reproducible at the
+// unit level — it was exercised once, for real, against prod at GATE A (218k rows,
+// coverage 0). What stays testable (and gets reused by B2 migrations) is the cursor-
+// paging CONTRACT: bounded per-page scan, monotonic cursor, correct done flag, and
+// patched=0 idempotency over already-stamped rows.
+test("backfillOrgId/orgIdCoverage: cursor-paging contract over already-stamped rows", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity(ADMIN);
-  const defaultOrgResult = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
-  const defaultOrgId = defaultOrgResult.orgId;
-  // Insert 3 orders with a test orgId (not the default) - they will NOT be stamped by backfillOrgId
-  const testOrgId = await t.run((ctx: any) => ctx.db.insert("organizations", { slug: "test-org", name: "Test Org", createdAt: 1, updatedAt: 1 })) as any;
+  const orgId = (await asAdmin.mutation(api.orgs.seedDefaultOrg, {})).orgId;
   await t.run(async (ctx) => {
     for (let i = 0; i < 3; i++) {
       await ctx.db.insert("orders", {
@@ -56,25 +59,24 @@ test("backfillOrgId: cursor-paged stamping (no re-scan of stamped prefix); cover
         assignedCsName: "Aisyah", productName: "P", products: "P (1x)", productsSubtotal: "Rp1",
         shippingCost: "Rp1", total: "Rp2", shippingAddress: "A", shippingDistrict: "D",
         shippingCity: "C", source: "berdu", aiEligible: false, createdAt: 1, updatedAt: 1,
-        orgId: testOrgId, // Use the seeded testOrg initially
+        orgId,
       });
     }
   });
-  // Coverage should show 0 missing (all have orgId)
-  const cov1 = await asAdmin.query(api.orgs.orgIdCoverage, { table: "orders" });
-  expect(cov1.scanned).toBeGreaterThanOrEqual(3);
-  // Test cursor-paged backfillOrgId with limit 2 (won't patch because already stamped with testOrgId)
+  // Coverage: all 3 stamped -> 0 missing, and 3 < default page so done in one call.
+  const cov = await asAdmin.query(api.orgs.orgIdCoverage, { table: "orders" });
+  expect(cov.missing).toBe(0);
+  expect(cov.scanned).toBe(3);
+  expect(cov.done).toBe(true);
+  // Backfill page 1: scans exactly `limit`, patches 0 (already stamped), hands a cursor.
   const r1 = await asAdmin.mutation(api.orgs.backfillOrgId, { table: "orders", limit: 2 });
   expect(r1.scanned).toBe(2);
-  expect(r1.done).toBe(false); // 2 < default limit of 500, but we have 3 rows
+  expect(r1.patched).toBe(0);
+  expect(r1.done).toBe(false);
   expect(r1.nextCursor).not.toBeNull();
-  // Page 2 should process the remaining row
+  // Page 2 resumes AFTER the cursor — the prefix is never re-scanned — and finishes.
   const r2 = await asAdmin.mutation(api.orgs.backfillOrgId, { table: "orders", limit: 2, cursor: r1.nextCursor! });
-  expect(r2.scanned).toBeGreaterThanOrEqual(1);
+  expect(r2.scanned).toBe(1);
+  expect(r2.patched).toBe(0);
   expect(r2.done).toBe(true);
-  // Idempotent re-run: scans all, patches 0 (cursor > 0 after all rows seen)
-  const r3 = await asAdmin.mutation(api.orgs.backfillOrgId, { table: "orders", limit: 10 });
-  expect(r3.scanned).toBeGreaterThanOrEqual(0);
-  const cov2 = await asAdmin.query(api.orgs.orgIdCoverage, { table: "orders" });
-  expect(cov2.missing).toBe(0); // Still no missing orgIds
 });

@@ -141,7 +141,7 @@ export const replayEvent = mutation({
       rawHeaders: event.rawHeaders, rawBody: event.rawBody,
       signatureOk: event.signatureOk, status: "received",
       receivedAt: Date.now(), replayOf: args.eventId,
-      orgId: (event as any).orgId ?? undefined,
+      orgId: event.orgId,
     });
     const outcome = await processCapturedEvent(ctx, { ...event, receivedAt: Date.now() });
     await finishReplay(ctx, replayId, outcome);
@@ -168,7 +168,7 @@ export const replayAllFailed = mutation({
         rawHeaders: event.rawHeaders, rawBody: event.rawBody,
         signatureOk: event.signatureOk, status: "received",
         receivedAt: Date.now(), replayOf: event._id,
-        orgId: (event as any).orgId ?? undefined,
+        orgId: event.orgId,
       });
       const outcome = await processCapturedEvent(ctx, { ...event, receivedAt: Date.now() });
       await finishReplay(ctx, replayId, outcome);
