@@ -8,7 +8,9 @@ export default defineSchema({
     name: v.string(),
     firstSeenAt: v.number(),
     lastSeenAt: v.number(),
-  }).index("by_phone", ["phone"]),
+  })
+    .index("by_phone", ["phone"])
+    .index("by_org_phone", ["orgId", "phone"]),
 
   orders: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -36,7 +38,11 @@ export default defineSchema({
     .index("by_createdAt", ["createdAt"])
     .index("by_assignedCsName_createdAt", ["assignedCsName", "createdAt"])
     .index("by_aiEligible_createdAt", ["aiEligible", "createdAt"])
-    .index("by_csKey_createdAt", ["csKey", "createdAt"]),
+    .index("by_csKey_createdAt", ["csKey", "createdAt"])
+    .index("by_org_orderId", ["orgId", "orderId"])
+    .index("by_org_customerPhone", ["orgId", "customerPhone"])
+    .index("by_org_createdAt", ["orgId", "createdAt"])
+    .index("by_org_csKey_createdAt", ["orgId", "csKey", "createdAt"]),
 
   conversations: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -59,7 +65,11 @@ export default defineSchema({
     .index("by_orderId", ["orderId"])
     .index("by_status_updatedAt", ["status", "updatedAt"])
     .index("by_customerPhone_updatedAt", ["customerPhone", "updatedAt"])
-    .index("by_assignedCsName_status", ["assignedCsName", "status"]),
+    .index("by_assignedCsName_status", ["assignedCsName", "status"])
+    .index("by_org_orderId", ["orgId", "orderId"])
+    .index("by_org_status_updatedAt", ["orgId", "status", "updatedAt"])
+    .index("by_org_customerPhone_updatedAt", ["orgId", "customerPhone", "updatedAt"])
+    .index("by_org_assignedCsName_status", ["orgId", "assignedCsName", "status"]),
 
   csConfigs: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -85,7 +95,9 @@ export default defineSchema({
   })
     .index("by_normalizedName", ["normalizedName"])
     .index("by_active", ["isActive"])
-    .index("by_org_key", ["orgId", "key"]),
+    .index("by_org_key", ["orgId", "key"])
+    .index("by_org_normalizedName", ["orgId", "normalizedName"])
+    .index("by_org_active", ["orgId", "isActive"]),
 
   // ── Ingestion API (Fase 1) ────────────────────────────────────────────────
   // Capture-first: every inbound webhook is stored raw BEFORE processing, so a
@@ -159,7 +171,9 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_window_cs", ["windowKey", "csKey"])
-    .index("by_windowKey", ["windowKey"]),
+    .index("by_windowKey", ["windowKey"])
+    .index("by_org_window_cs", ["orgId", "windowKey", "csKey"])
+    .index("by_org_windowKey", ["orgId", "windowKey"]),
 
   // Tiny fact row per detected reply pair. NO first/ongoing tag: "first" is
   // window-dependent (earliest pair per conversation WITHIN the queried window),
@@ -175,7 +189,9 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_createdAt", ["createdAt"])
-    .index("by_cs_createdAt", ["csKey", "createdAt"]),
+    .index("by_cs_createdAt", ["csKey", "createdAt"])
+    .index("by_org_createdAt", ["orgId", "createdAt"])
+    .index("by_org_cs_createdAt", ["orgId", "csKey", "createdAt"]),
 
   messages: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -194,7 +210,10 @@ export default defineSchema({
     .index("by_conversation_createdAt", ["conversationId", "createdAt"])
     .index("by_customerPhone_createdAt", ["customerPhone", "createdAt"])
     .index("by_orderId_createdAt", ["orderId", "createdAt"])
-    .index("by_externalMessageId", ["externalMessageId"]),
+    .index("by_externalMessageId", ["externalMessageId"])
+    .index("by_org_createdAt", ["orgId", "createdAt"])
+    .index("by_org_customerPhone_createdAt", ["orgId", "customerPhone", "createdAt"])
+    .index("by_org_externalMessageId", ["orgId", "externalMessageId"]),
 
   events: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -228,7 +247,9 @@ export default defineSchema({
   })
     .index("by_createdAt", ["createdAt"])
     .index("by_conversation_createdAt", ["conversationId", "createdAt"])
-    .index("by_type_createdAt", ["type", "createdAt"]),
+    .index("by_type_createdAt", ["type", "createdAt"])
+    .index("by_org_createdAt", ["orgId", "createdAt"])
+    .index("by_org_type_createdAt", ["orgId", "type", "createdAt"]),
 
   dailyStats: defineTable({
     date: v.string(),
@@ -304,7 +325,12 @@ export default defineSchema({
     .index("by_status_closedAt", ["status", "closedAt"])
     .index("by_csName_closedAt", ["csName", "closedAt"])
     .index("by_paymentMethod_closedAt", ["paymentMethod", "closedAt"])
-    .index("by_csKey_closedAt", ["csKey", "closedAt"]),
+    .index("by_csKey_closedAt", ["csKey", "closedAt"])
+    .index("by_org_orderIdBerdu", ["orgId", "orderIdBerdu"])
+    .index("by_org_customerPhone", ["orgId", "customerPhone"])
+    .index("by_org_closedAt", ["orgId", "closedAt"])
+    .index("by_org_status_closedAt", ["orgId", "status", "closedAt"])
+    .index("by_org_csKey_closedAt", ["orgId", "csKey", "closedAt"]),
 
   settings: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
