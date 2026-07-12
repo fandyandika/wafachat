@@ -299,7 +299,7 @@ Jalur resmi dikerjakan PARALEL mulai fase 2:
 | ✅ **LUNAS 2026-07-11** — Nomor internal/test hardcoded | ~~lib.ts `INTERNAL_TEST_PHONES`~~ → `orgSettings.internalPhones` (reader `getInternalPhoneSet`, fallback in-code) | settings per-org | §3.2 |
 | ✅ **LUNAS 2026-07-11** — Identitas org (belum ada) | → `orgSettings` (`key="default"` + `orgName`) — anchor tenant #1 | per-org rows di Fase B | §10.2 |
 | Cutoff harian 16:00 WIB + timezone hardcoded | lib window helpers | timezone + jam cutoff **per-org** | §3.2 |
-| Belum ada `orgId` di tabel data | schema | `orgId` + index di **semua** tabel; isolasi = test #1 | §10.2 |
+| ✅ **LUNAS 2026-07-12 (Fase B1)** — `orgId` di tabel data | → `organizations` table + `orgId` **REQUIRED** (schema-enforced) di 16 tabel data; ~218k row di-backfill, coverage 0, parity 0. Reader belum filter (B2). Sisa target: index org-scoped + read-isolation = **B2** | §10.2 |
 | Kredensial diset manual (dashboard/CLI oleh dev) | operasional | **wizard onboarding self-serve** (paste/OAuth → DB) | §11 |
 | Webhook enrich sinkron fetch order (`fetchBerduOrderDetail` pakai ENV) | http.ts/reconciler | fetch pakai creds **per-org dari DB**; reconciler per-org | §4 |
 
