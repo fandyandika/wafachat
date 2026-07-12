@@ -70,6 +70,8 @@ export default defineSchema({
     providerNumberId: v.optional(v.string()),
     providerNumberIds: v.optional(v.array(v.string())), // one CS can own >1 WABA number (e.g. Nabila has 2)
     berduStaffIds: v.optional(v.array(v.string())), // Berdu staff id(s) owned by this CS (order attribution)
+    key: v.optional(v.string()),          // canonical per-org identity key (= csKey(csName) at creation; IMMUTABLE across renames)
+    nameAliases: v.optional(v.array(v.string())), // raw name forms that resolve to this agent (e.g. "CS Aisyah", pre-rename names)
     orderAutomationEnabled: v.boolean(),
     aiAssistantEnabled: v.boolean(),
     reportingEnabled: v.boolean(),
@@ -82,7 +84,8 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_normalizedName", ["normalizedName"])
-    .index("by_active", ["isActive"]),
+    .index("by_active", ["isActive"])
+    .index("by_org_key", ["orgId", "key"]),
 
   // ── Ingestion API (Fase 1) ────────────────────────────────────────────────
   // Capture-first: every inbound webhook is stored raw BEFORE processing, so a
