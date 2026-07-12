@@ -38,7 +38,7 @@ test("seedDefaultOrg: idempotent, single row, name follows orgSettings fallback"
   });
 });
 
-test("backfillOrgId: stamps unlabeled rows bounded per call; coverage reports missing", async () => {
+test("backfillOrgId: cursor-paged stamping (no re-scan of stamped prefix); coverage pages the same way", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity(ADMIN);
   await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
@@ -52,14 +52,23 @@ test("backfillOrgId: stamps unlabeled rows bounded per call; coverage reports mi
       }); // no orgId — simulates pre-B1 rows
     }
   });
-  const cov1 = await asAdmin.query(api.orgs.orgIdCoverage, {});
-  expect(cov1.orders).toBe(3);
+  const cov1 = await asAdmin.query(api.orgs.orgIdCoverage, { table: "orders" });
+  expect(cov1.missing).toBe(3);
+  expect(cov1.done).toBe(true); // 3 rows < default page
+  // Page 1: scans 2 docs (both unstamped) -> patches 2, hands back a cursor.
   const r1 = await asAdmin.mutation(api.orgs.backfillOrgId, { table: "orders", limit: 2 });
   expect(r1.patched).toBe(2);
+  expect(r1.scanned).toBe(2);
   expect(r1.done).toBe(false);
-  const r2 = await asAdmin.mutation(api.orgs.backfillOrgId, { table: "orders", limit: 2 });
+  expect(r1.nextCursor).not.toBeNull();
+  // Page 2 resumes AFTER the cursor — the stamped prefix is never re-read.
+  const r2 = await asAdmin.mutation(api.orgs.backfillOrgId, { table: "orders", limit: 2, cursor: r1.nextCursor! });
   expect(r2.patched).toBe(1);
   expect(r2.done).toBe(true);
-  const cov2 = await asAdmin.query(api.orgs.orgIdCoverage, {});
-  expect(cov2.orders).toBe(0);
+  // Idempotent re-run from the top: scans all 3, patches 0 (all stamped).
+  const r3 = await asAdmin.mutation(api.orgs.backfillOrgId, { table: "orders", limit: 10 });
+  expect(r3.patched).toBe(0);
+  expect(r3.scanned).toBe(3);
+  const cov2 = await asAdmin.query(api.orgs.orgIdCoverage, { table: "orders" });
+  expect(cov2.missing).toBe(0);
 });

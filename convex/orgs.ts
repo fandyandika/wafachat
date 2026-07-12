@@ -71,37 +71,58 @@ const tableValidator = v.union(
   v.literal("users"),
 );
 
-// One-time B1 backfill (pattern: rollups.backfillCsKey). Idempotent; controller
-// loops per table until { done: true }. Bounded read via take(limit).
+// One-time B1 backfill. CURSOR-PAGED over the by_creation_time system index:
+// each call reads exactly <=limit docs regardless of how many are already
+// stamped. (The first version used .filter(orgId==undefined).take(limit) —
+// that SCANS past the already-stamped prefix, and once the prefix exceeded
+// Convex's ~16k docs-read-per-transaction limit it Server-Errored on the big
+// tables. Live-hit at GATE A on `events`.) Idempotent; controller threads
+// nextCursor and loops per table until { done: true }.
 export const backfillOrgId = mutation({
-  args: { table: tableValidator, limit: v.optional(v.number()) },
+  args: { table: tableValidator, limit: v.optional(v.number()), cursor: v.optional(v.number()) },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "orgs.backfillOrgId");
     const orgId = await requireDefaultOrgId(ctx);
     const limit = args.limit ?? 500;
     const rows = await ctx.db
       .query(args.table as any)
-      .filter((q: any) => q.eq(q.field("orgId"), undefined))
+      .withIndex("by_creation_time", (q: any) => q.gt("_creationTime", args.cursor ?? 0))
       .take(limit);
-    for (const r of rows) await ctx.db.patch(r._id, { orgId });
-    return { patched: rows.length, done: rows.length < limit };
+    let patched = 0;
+    for (const r of rows) {
+      if ((r as any).orgId === undefined) {
+        await ctx.db.patch(r._id, { orgId });
+        patched++;
+      }
+    }
+    return {
+      patched,
+      scanned: rows.length,
+      nextCursor: rows.length > 0 ? rows[rows.length - 1]._creationTime : null,
+      done: rows.length < limit,
+    };
   },
 });
 
+// Coverage check, cursor-paged for the same read-limit reason (a fully-stamped
+// big table would otherwise scan to the transaction cap looking for misses).
+// Controller pages each table and sums `missing`.
 export const orgIdCoverage = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { table: tableValidator, limit: v.optional(v.number()), cursor: v.optional(v.number()) },
+  handler: async (ctx, args) => {
     await requireAdmin(ctx, "orgs.orgIdCoverage");
-    const out: Record<string, number> = {};
-    for (const table of B1_TABLES) {
-      // take(1001): bounded read — exact up to 1000, "1001" = more remain. Enough
-      // to steer the backfill loop without scanning huge tables in one query.
-      const missing = await ctx.db
-        .query(table as any)
-        .filter((q: any) => q.eq(q.field("orgId"), undefined))
-        .take(1001);
-      out[table] = missing.length;
-    }
-    return out;
+    const limit = args.limit ?? 2000;
+    const rows = await ctx.db
+      .query(args.table as any)
+      .withIndex("by_creation_time", (q: any) => q.gt("_creationTime", args.cursor ?? 0))
+      .take(limit);
+    let missing = 0;
+    for (const r of rows) if ((r as any).orgId === undefined) missing++;
+    return {
+      missing,
+      scanned: rows.length,
+      nextCursor: rows.length > 0 ? rows[rows.length - 1]._creationTime : null,
+      done: rows.length < limit,
+    };
   },
 });
