@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, internalQuery } from "./_generated/server";
+import { mutation, internalQuery, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { requireAdmin } from "./authz";
 import { loadOrgSettings } from "./orgSettings";
@@ -45,4 +45,63 @@ export const seedDefaultOrg = mutation({
 export const defaultOrgIdInternal = internalQuery({
   args: {},
   handler: async (ctx) => getDefaultOrgId(ctx),
+});
+
+const B1_TABLES = [
+  "orders", "shippingRecaps", "messages", "conversations", "customers", "events",
+  "csConfigs", "ingestEvents", "ingestSources", "dailyRollups", "responseSamples",
+  "alertState", "settings", "closingRules", "orgSettings", "users",
+] as const;
+const tableValidator = v.union(
+  v.literal("orders"),
+  v.literal("shippingRecaps"),
+  v.literal("messages"),
+  v.literal("conversations"),
+  v.literal("customers"),
+  v.literal("events"),
+  v.literal("csConfigs"),
+  v.literal("ingestEvents"),
+  v.literal("ingestSources"),
+  v.literal("dailyRollups"),
+  v.literal("responseSamples"),
+  v.literal("alertState"),
+  v.literal("settings"),
+  v.literal("closingRules"),
+  v.literal("orgSettings"),
+  v.literal("users"),
+);
+
+// One-time B1 backfill (pattern: rollups.backfillCsKey). Idempotent; controller
+// loops per table until { done: true }. Bounded read via take(limit).
+export const backfillOrgId = mutation({
+  args: { table: tableValidator, limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, "orgs.backfillOrgId");
+    const orgId = await requireDefaultOrgId(ctx);
+    const limit = args.limit ?? 500;
+    const rows = await ctx.db
+      .query(args.table as any)
+      .filter((q: any) => q.eq(q.field("orgId"), undefined))
+      .take(limit);
+    for (const r of rows) await ctx.db.patch(r._id, { orgId });
+    return { patched: rows.length, done: rows.length < limit };
+  },
+});
+
+export const orgIdCoverage = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx, "orgs.orgIdCoverage");
+    const out: Record<string, number> = {};
+    for (const table of B1_TABLES) {
+      // take(1001): bounded read — exact up to 1000, "1001" = more remain. Enough
+      // to steer the backfill loop without scanning huge tables in one query.
+      const missing = await ctx.db
+        .query(table as any)
+        .filter((q: any) => q.eq(q.field("orgId"), undefined))
+        .take(1001);
+      out[table] = missing.length;
+    }
+    return out;
+  },
 });
