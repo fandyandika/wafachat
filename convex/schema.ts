@@ -82,7 +82,6 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_active", ["isActive"])
     .index("by_org_key", ["orgId", "key"])
     .index("by_org_normalizedName", ["orgId", "normalizedName"])
     .index("by_org_active", ["orgId", "isActive"]),

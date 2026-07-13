@@ -1,5 +1,5 @@
 import { mutation, query } from "./_generated/server";
-import { requireAdmin, requireMember, requireAdminOrg } from "./authz";
+import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizeCsName, csKey } from "./lib";
@@ -85,8 +85,8 @@ export async function getCsFeatureConfig(ctx: { db: any }, orgId: Id<"organizati
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    await requireMember(ctx, "csConfigs.list");
-    const stored = await ctx.db.query("csConfigs").withIndex("by_active", (q) => q.eq("isActive", true)).collect();
+    const { orgId } = await requireMemberOrg(ctx, "csConfigs.list");
+    const stored = await ctx.db.query("csConfigs").withIndex("by_org_active", (q) => q.eq("orgId", orgId).eq("isActive", true)).collect();
     const byName = new Map(stored.map((config) => [config.normalizedName, config]));
 
     const defaults = DEFAULT_CONFIGS.map((config) => {
