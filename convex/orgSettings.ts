@@ -1,8 +1,9 @@
 import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
-import { requireAdmin } from "./authz";
+import type { Id } from "./_generated/dataModel";
+import { requireAdminOrg } from "./authz";
 import { normalizePhone } from "./lib";
-import { requireDefaultOrgId } from "./orgs";
+import { DEFAULT_ORG_SLUG } from "./orgs";
 
 // In-code fallback = tenant #1's values, verbatim from the old convex/lib.ts
 // INTERNAL_TEST_PHONES hardcode. Used whenever the orgSettings table is empty
@@ -25,27 +26,37 @@ export const DEFAULT_ORG_SETTINGS = {
   internalPhones: DEFAULT_INTERNAL_PHONES,
 };
 
+// Non-default org with no row yet: neutral empty settings (spec §2.1) — NOT
+// tenant #1's phone list, which would leak pustakaislam filters into org #2.
+export const EMPTY_ORG_SETTINGS = { orgName: "", internalPhones: [] as string[] };
+
 // Structural { db } ctx (same convention as getActiveClosingPhrases) so this
 // works from queries, mutations, and convex-test t.run alike.
-export async function loadOrgSettings(ctx: { db: any }): Promise<{ orgName: string; internalPhones: string[] }> {
+export async function loadOrgSettings(
+  ctx: { db: any }, orgId: Id<"organizations">,
+): Promise<{ orgName: string; internalPhones: string[] }> {
   const row = await ctx.db
     .query("orgSettings")
-    .withIndex("by_key", (q: any) => q.eq("key", "default"))
+    .withIndex("by_org_key", (q: any) => q.eq("orgId", orgId).eq("key", "default"))
     .unique();
-  return row ?? DEFAULT_ORG_SETTINGS;
+  if (row) return row;
+  const org = await ctx.db.get(orgId);
+  return org?.slug === DEFAULT_ORG_SLUG ? DEFAULT_ORG_SETTINGS : EMPTY_ORG_SETTINGS;
 }
 
 /** One indexed point-read per handler; pass the returned set down into filters. */
-export async function getInternalPhoneSet(ctx: { db: any }): Promise<ReadonlySet<string>> {
-  const s = await loadOrgSettings(ctx);
+export async function getInternalPhoneSet(
+  ctx: { db: any }, orgId: Id<"organizations">,
+): Promise<ReadonlySet<string>> {
+  const s = await loadOrgSettings(ctx, orgId);
   return new Set(s.internalPhones);
 }
 
 export const get = query({
   args: {},
   handler: async (ctx) => {
-    await requireAdmin(ctx, "orgSettings.get");
-    return loadOrgSettings(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "orgSettings.get");
+    return loadOrgSettings(ctx, orgId);
   },
 });
 
@@ -55,8 +66,7 @@ export const update = mutation({
     internalPhones: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "orgSettings.update");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "orgSettings.update");
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.orgName !== undefined) {
       const name = args.orgName.trim();
@@ -71,7 +81,7 @@ export const update = mutation({
     }
     const existing = await ctx.db
       .query("orgSettings")
-      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .withIndex("by_org_key", (q: any) => q.eq("orgId", orgId).eq("key", "default"))
       .unique();
     if (existing) {
       await ctx.db.patch(existing._id, patch);
@@ -93,11 +103,10 @@ export const update = mutation({
 export const seedDefault = mutation({
   args: {},
   handler: async (ctx) => {
-    await requireAdmin(ctx, "orgSettings.seedDefault");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "orgSettings.seedDefault");
     const existing = await ctx.db
       .query("orgSettings")
-      .withIndex("by_key", (q) => q.eq("key", "default"))
+      .withIndex("by_org_key", (q: any) => q.eq("orgId", orgId).eq("key", "default"))
       .unique();
     if (existing) return { seeded: false as const };
     await ctx.db.insert("orgSettings", {

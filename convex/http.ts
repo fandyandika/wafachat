@@ -188,14 +188,16 @@ http.route({
     }
 
     if (action === "set_global") {
-      const result = await ctx.runMutation(internal.settings.setGlobalAiEnabled, {
-        enabled: body.enabled !== false,
-      });
+      const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
+      if (!orgId) return jsonResponse({ success: false, error: "no default org" }, 500);
+      const result = await ctx.runMutation(internal.settings.setGlobalAiEnabled, { enabled: body.enabled !== false, orgId });
       return jsonResponse({ ...result, _action: "set_global" });
     }
 
     if (action === "get_global") {
-      const globalEnabled = await ctx.runQuery(internal.settings.getGlobalAiEnabled, {});
+      const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
+      if (!orgId) return jsonResponse({ success: false, error: "no default org" }, 500);
+      const globalEnabled = await ctx.runQuery(internal.settings.getGlobalAiEnabled, { orgId });
       return jsonResponse({ success: true, globalEnabled, _action: "get_global" });
     }
 

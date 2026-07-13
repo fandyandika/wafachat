@@ -35,7 +35,7 @@ export type RollupValues = {
 };
 
 export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, csKeyArg: string, windowKey: string): Promise<RollupValues | null> {
-  const internalPhones = await getInternalPhoneSet(ctx);
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const { startAt, endAt } = windowRangeForKey(windowKey);
 
   // Fetch THIS CS's orders in the window via the org-scoped csKey index — a per-CS slice, not the
@@ -267,7 +267,7 @@ export async function bumpForRecapDoc(ctx: any, before: any | null, after: any |
 }
 
 export async function recomputeWindowImpl(ctx: any, orgId: Id<"organizations">, windowKey: string): Promise<number> {
-  const internalPhones = await getInternalPhoneSet(ctx);
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const { startAt, endAt } = windowRangeForKey(windowKey);
   const keys = new Set<string>();
 
@@ -317,7 +317,7 @@ export const recomputeWindow = internalMutation({
 });
 
 export async function rebuildSamplesForWindowImpl(ctx: any, orgId: Id<"organizations">, windowKey: string): Promise<number> {
-  const internalPhones = await getInternalPhoneSet(ctx);
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const { startAt, endAt } = windowRangeForKey(windowKey);
 
   // Delete all responseSamples in this window for this org
@@ -508,7 +508,7 @@ export const debugRollupParity = query({
   args: { windowKey: v.string() },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "rollups.debugRollupParity");
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
 
     const { startAt, endAt } = windowRangeForKey(args.windowKey);
     const mismatches: Array<{ csKey: string; field: string; stored: any; fresh: any }> = [];

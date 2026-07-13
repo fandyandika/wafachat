@@ -10,6 +10,7 @@ async function seedOrg(t: any) {
 test("getActivePhrases: empty table falls back to default", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  await seedOrg(t);
   const phrases = await asAdmin.query(api.closingRules.getActivePhrases, {});
   expect(phrases).toEqual(["PEMESANAN BERHASIL"]);
 });

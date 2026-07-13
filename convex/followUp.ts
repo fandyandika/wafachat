@@ -43,7 +43,7 @@ export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: a
 // nowOverride is test-only (Date.now() is unavailable in some runtimes); prod passes nothing.
 // Shared by the guarded panel query AND the identity-less cron sweep (autoFollowUp).
 async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowOverride?: number; orgId: any }) {
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, args.orgId);
     const now = args.nowOverride ?? Date.now();
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
 
@@ -323,7 +323,7 @@ export const getArchivedFollowUps = query({
   args: { csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "followUp.getArchivedFollowUps");
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const now = Date.now();
     const DAY = 86_400_000;
     const since = now - 14 * DAY;
@@ -430,7 +430,7 @@ export const getClosedFollowUps = query({
   args: { csName: v.optional(v.string()), sinceDays: v.optional(v.number()), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "followUp.getClosedFollowUps");
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
     const since = now - (args.sinceDays ?? 7) * DAY;

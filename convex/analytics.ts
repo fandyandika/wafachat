@@ -15,7 +15,7 @@ import { requireDefaultOrgId } from "./orgs";
 type CsAgg = { leads: Set<string>; closings: Set<string>; closedCust: Set<string>; revenue: number; rawCounts: Map<string, number> };
 
 async function computeCsAgg(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number, csName?: string): Promise<Map<string, CsAgg>> {
-  const internalPhones = await getInternalPhoneSet(ctx);
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = csName ? csKey(csName) : null;
   const orders = (
     await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
@@ -86,7 +86,7 @@ export const getCsLeaderboard = query({
 });
 
 async function computeProductAgg(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number, csName?: string) {
-  const internalPhones = await getInternalPhoneSet(ctx);
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = csName ? csKey(csName) : null;
   const orders = (
     await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
@@ -170,7 +170,7 @@ export const getCsDetail = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.string() },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getCsDetail");
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const k = csKey(args.csName);
     const BOUNDARY_MS = 6 * 60 * 60 * 1000; // neighbor-period peek on each side
 
@@ -265,7 +265,7 @@ export const getCsDetail = query({
 // rules exactly (so totals match the Performance page), adding discount + per-CS×product
 // nesting + a duplicate-phone count (a judging aid for the CS-reported "Mis Rep").
 export async function computeDailyReportRaw(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number) {
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const orders = (
       await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));

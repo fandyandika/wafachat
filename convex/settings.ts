@@ -1,15 +1,14 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
-import { requireDefaultOrgId } from "./orgs";
 
 const GLOBAL_AI_KEY = "global_ai_enabled";
 
 export const getGlobalAiEnabled = internalQuery({
-  args: {},
-  handler: async (ctx) => {
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
     const setting = await ctx.db
       .query("settings")
-      .withIndex("by_key", (q) => q.eq("key", GLOBAL_AI_KEY))
+      .withIndex("by_org_key", (q) => q.eq("orgId", args.orgId).eq("key", GLOBAL_AI_KEY))
       .unique();
 
     return setting?.value !== false;
@@ -17,19 +16,18 @@ export const getGlobalAiEnabled = internalQuery({
 });
 
 export const setGlobalAiEnabled = internalMutation({
-  args: { enabled: v.boolean() },
+  args: { enabled: v.boolean(), orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const orgId = await requireDefaultOrgId(ctx);
     const existing = await ctx.db
       .query("settings")
-      .withIndex("by_key", (q) => q.eq("key", GLOBAL_AI_KEY))
+      .withIndex("by_org_key", (q) => q.eq("orgId", args.orgId).eq("key", GLOBAL_AI_KEY))
       .unique();
 
     if (existing) {
       await ctx.db.patch(existing._id, { value: args.enabled, updatedAt: now });
     } else {
-      await ctx.db.insert("settings", { key: GLOBAL_AI_KEY, value: args.enabled, updatedAt: now, orgId });
+      await ctx.db.insert("settings", { key: GLOBAL_AI_KEY, value: args.enabled, updatedAt: now, orgId: args.orgId });
     }
 
     await ctx.db.insert("events", {
@@ -37,7 +35,7 @@ export const setGlobalAiEnabled = internalMutation({
       actor: "cs",
       metadata: { enabled: args.enabled },
       createdAt: now,
-      orgId,
+      orgId: args.orgId,
     });
 
     return { success: true, globalEnabled: args.enabled };

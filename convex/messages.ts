@@ -277,7 +277,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
 
   let closingRecapId: Id<"shippingRecaps"> | undefined;
   if (args.direction === "outbound") {
-    const phrases = await getActiveClosingPhrases(ctx);
+    const phrases = await getActiveClosingPhrases(ctx, args.orgId);
     if (messageMatchesPhrase(args.content, phrases)) {
       const result = await upsertRecapFromMessage(ctx, {
         orderId: conversation.orderId,

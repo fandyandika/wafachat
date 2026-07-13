@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { mutation, internalQuery, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { requireAdmin } from "./authz";
-import { loadOrgSettings } from "./orgSettings";
+import { DEFAULT_ORG_SETTINGS } from "./orgSettings";
 import { hashPassword } from "./passwordHash";
 
 export const DEFAULT_ORG_SLUG = "pustakaislam";
@@ -32,10 +32,9 @@ export const seedDefaultOrg = mutation({
     await requireAdmin(ctx, "orgs.seedDefaultOrg");
     const existing = await getDefaultOrgId(ctx);
     if (existing) return { seeded: false as const, orgId: existing };
-    const settings = await loadOrgSettings(ctx);
     const orgId = await ctx.db.insert("organizations", {
       slug: DEFAULT_ORG_SLUG,
-      name: settings.orgName,
+      name: DEFAULT_ORG_SETTINGS.orgName,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });

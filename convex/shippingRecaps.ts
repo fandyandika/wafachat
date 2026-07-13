@@ -616,7 +616,7 @@ export const backfillFromMessages = mutation({
     let skipped = 0;
     const recapIds: Id<"shippingRecaps">[] = [];
 
-    const phrases = await getActiveClosingPhrases(ctx);
+    const phrases = await getActiveClosingPhrases(ctx, orgId);
     for (const message of messages) {
       if (args.startAt && message.createdAt < args.startAt) continue;
       if (args.endAt && message.createdAt > args.endAt) continue;
@@ -706,7 +706,7 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "shippingRecaps.list");
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const rows = args.status
       ? await ctx.db
           .query("shippingRecaps")
@@ -751,7 +751,7 @@ export const getCounts = query({
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "shippingRecaps.getCounts");
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const rows = await ctx.db
       .query("shippingRecaps")
       .withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lte("closedAt", args.endAt))

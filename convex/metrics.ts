@@ -8,7 +8,7 @@ import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
 
 export async function computeDashboardSummaryRaw(ctx: QueryCtx, orgId: Id<"organizations">, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const orders = await ctx.db.query("orders")
       .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
       .collect();
@@ -91,7 +91,7 @@ export const getDuplicateOrders = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "metrics.getDuplicateOrders");
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const key = args.csName ? csKey(args.csName) : null;
     const orders = (
       await ctx.db
@@ -170,7 +170,7 @@ export const debugOrderReconcile = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "metrics.debugOrderReconcile");
-    const internalPhones = await getInternalPhoneSet(ctx);
+    const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const orders = await ctx.db
       .query("orders")
       .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))

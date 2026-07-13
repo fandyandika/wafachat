@@ -444,7 +444,7 @@ export async function productDifficultyFromRollups(
   // because the rollups byProduct counts distinct customers, not raw orders.
   // getProductDifficulty needs raw order counts per product.
 
-  const internalPhones = await getInternalPhoneSet(ctx);
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = args.csName ? csKeyOf(args.csName) : null;
   const minLeads = args.minLeads ?? 3;
   const len = args.endAt - args.startAt;
@@ -631,7 +631,7 @@ export async function performanceFromRollups(
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; includeInferredDiscount?: boolean; csName?: string }
 ) {
-  const internalPhones = await getInternalPhoneSet(ctx);
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = args.csName ? csKeyOf(args.csName) : null;
   const keys = windowKeysForRange(args.startAt, args.endAt);
 
