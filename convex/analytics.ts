@@ -75,14 +75,6 @@ export async function computeCsLeaderboardRaw(ctx: any, orgId: Id<"organizations
     return rows;
 }
 
-export const getCsLeaderboardLegacy = internalQuery({
-  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const orgId = await requireDefaultOrgId(ctx);
-    return computeCsLeaderboardRaw(ctx, orgId, args);
-  },
-});
-
 export const getCsLeaderboard = query({
   // raw=true → calendar-day / any-range raw computation (cheap for a small "today" slice);
   // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
@@ -118,29 +110,6 @@ async function computeProductAgg(ctx: any, orgId: Id<"organizations">, startAt: 
   return { leads, closings };
 }
 
-export const getProductDifficultyLegacy = internalQuery({
-  args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const orgId = await requireDefaultOrgId(ctx);
-    const minLeads = args.minLeads ?? 3;
-    const len = args.endAt - args.startAt;
-    const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-    const cur = await computeProductAgg(ctx, orgId, args.startAt, args.endAt, args.csName);
-    const prev = await computeProductAgg(ctx, orgId, args.startAt - len, args.startAt - 1, args.csName);
-    const rows = Array.from(cur.leads.entries())
-      .filter(([, leads]) => leads >= minLeads)
-      .map(([productName, leads]) => {
-        const closings = cur.closings.get(productName)?.size ?? 0;
-        const prevLeads = prev.leads.get(productName) ?? 0;
-        const prevClosings = prev.closings.get(productName)?.size ?? 0;
-        const crNow = cr(closings, leads), prevCr = cr(prevClosings, prevLeads);
-        return { productName, leads, closings, cr: crNow, prevCr, deltaCr: Math.round((crNow - prevCr) * 10) / 10 };
-      });
-    rows.sort((a, b) => a.cr - b.cr || b.leads - a.leads);
-    return rows;
-  },
-});
-
 export const getProductDifficulty = query({
   args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -173,42 +142,6 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
   const label = `${y}-${String(m + 1).padStart(2, "0")}`;
   return { start, end, prevStart, prevEnd: start - 1, label };
 }
-
-export const getPeriodReportLegacy = internalQuery({
-  args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const orgId = await requireDefaultOrgId(ctx);
-    const internalPhones = await getInternalPhoneSet(ctx);
-    const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
-    const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-    const cur = await computeCsAgg(ctx, orgId, start, end, args.csName);
-    const prev = await computeCsAgg(ctx, orgId, prevStart, prevEnd, args.csName);
-    const totals = (m: Map<string, CsAgg>) => {
-      const leads = new Set<string>(), closings = new Set<string>(), closedCust = new Set<string>();
-      let revenue = 0;
-      m.forEach((a) => {
-        a.leads.forEach((p) => leads.add(p));
-        a.closings.forEach((c) => closings.add(c));
-        a.closedCust.forEach((p) => closedCust.add(p));
-        revenue += a.revenue;
-      });
-      return { leads: leads.size, closings: closings.size, closedCust: closedCust.size, revenue };
-    };
-    const curT = totals(cur), prevT = totals(prev);
-    const cancelled = (
-      await ctx.db.query("shippingRecaps").withIndex("by_closedAt", (q: any) => q.gte("closedAt", start).lte("closedAt", end)).collect()
-    ).filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && !isInternalTestPhone(r.customerPhone, internalPhones)).length;
-    const perCs = Array.from(cur.values())
-      .map((a) => ({ csName: aggName(a), leads: a.leads.size, closings: a.closings.size, cr: cr(a.closedCust.size, a.leads.size), revenue: a.revenue }))
-      .sort((a, b) => b.closings - a.closings);
-    return {
-      label, rangeStart: start, rangeEnd: end,
-      leads: curT.leads, closings: curT.closings, cr: cr(curT.closedCust, curT.leads), revenue: curT.revenue, cancelled,
-      prevLeads: prevT.leads, prevClosings: prevT.closings, prevCr: cr(prevT.closedCust, prevT.leads), prevRevenue: prevT.revenue,
-      perCs,
-    };
-  },
-});
 
 export const getPeriodReport = query({
   args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
@@ -461,14 +394,6 @@ export async function computeDailyReportRaw(ctx: any, orgId: Id<"organizations">
       cs,
     };
 }
-
-export const getDailyReportLegacy = internalQuery({
-  args: { startAt: v.number(), endAt: v.number() },
-  handler: async (ctx, args) => {
-    const orgId = await requireDefaultOrgId(ctx);
-    return computeDailyReportRaw(ctx, orgId, args.startAt, args.endAt);
-  },
-});
 
 // Owner "Live Hari Ini" — calendar-day (midnight WIB → now), raw bounded read of today's
 // slice (cheap; NOT the 16:00 CS-report window, NOT the whole-history scan). On-demand page.

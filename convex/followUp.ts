@@ -415,39 +415,6 @@ export const getAutoFollowUp = query({
 });
 
 // Feature #10: KPI — follow-up effectiveness
-export const getFollowUpEffectivenessLegacy = internalQuery({
-  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const internalPhones = await getInternalPhoneSet(ctx);
-    const csKeyMemo = args.csName ? csKey(args.csName) : null;
-    const recaps = await ctx.db
-      .query("shippingRecaps")
-      .withIndex("by_closedAt", (q: any) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
-      .collect();
-
-    // Exclude cancelled, internal-test, scope by csName.
-    const filtered = recaps
-      .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export")
-      .filter((r) => !isInternalTestPhone(r.customerPhone, internalPhones))
-      .filter((r) => (csKeyMemo ? csKey(r.csName) === csKeyMemo : true));
-
-    const totalClosings = filtered.length;
-    const fromFollowUp = filtered.filter((r) => (r.followUpTouchesAtClose ?? 0) >= 1).length;
-    const byTouches = filtered.reduce(
-      (acc, r) => {
-        const touches = r.followUpTouchesAtClose ?? 0;
-        if (touches === 1) acc.h1++;
-        else if (touches === 2) acc.h2++;
-        else if (touches >= 3) acc.h3++;
-        return acc;
-      },
-      { h1: 0, h2: 0, h3: 0 }
-    );
-
-    return { totalClosings, fromFollowUp, byStage: byTouches };
-  },
-});
-
 export const getFollowUpEffectiveness = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {

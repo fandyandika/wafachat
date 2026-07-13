@@ -56,14 +56,6 @@ export async function computeDashboardSummaryRaw(ctx: QueryCtx, orgId: Id<"organ
     };
 }
 
-export const getDashboardSummaryLegacy = internalQuery({
-  args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const orgId = await requireDefaultOrgId(ctx);
-    return computeDashboardSummaryRaw(ctx, orgId, args);
-  },
-});
-
 export const getDashboardSummary = query({
   // raw=true → calendar-day / any-range raw computation (cheap for a small "today" slice);
   // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
@@ -85,36 +77,6 @@ function bucketKey(ts: number, bucket: "day" | "week" | "month"): string {
   }
   return d;
 }
-
-export const getTrendLegacy = internalQuery({
-  args: { startAt: v.number(), endAt: v.number(),
-    bucket: v.union(v.literal("day"), v.literal("week"), v.literal("month")), csName: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const internalPhones = await getInternalPhoneSet(ctx);
-    const key = args.csName ? csKey(args.csName) : null;
-    const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
-    const orders = (await ctx.db.query("orders")
-      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect())
-      .filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones) && csOk(o.assignedCsName));
-    const recaps = (await ctx.db.query("shippingRecaps")
-      .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt)).collect())
-      .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export" &&
-        !isInternalTestPhone(r.customerPhone, internalPhones) && csOk(r.csName));
-    const leadSets = new Map<string, Set<string>>();
-    const closeSets = new Map<string, Set<string>>();
-    const add = (m: Map<string, Set<string>>, k: string, v2: string) => {
-      const s = m.get(k) ?? new Set<string>(); s.add(v2); m.set(k, s);
-    };
-    for (const o of orders) add(leadSets, bucketKey(o.createdAt, args.bucket), normalizePhone(o.customerPhone));
-    for (const r of recaps) add(closeSets, bucketKey(r.closedAt, args.bucket), r.orderIdBerdu || normalizePhone(r.customerPhone));
-    const buckets = Array.from(new Set(Array.from(leadSets.keys()).concat(Array.from(closeSets.keys())))).sort();
-    return buckets.map((b) => {
-      const leads = leadSets.get(b)?.size ?? 0;
-      const closings = closeSets.get(b)?.size ?? 0;
-      return { bucket: b, leads, closings, cr: leads > 0 ? Math.round((closings / leads) * 1000) / 10 : 0 };
-    });
-  },
-});
 
 export const getTrend = query({
   args: { startAt: v.number(), endAt: v.number(),
