@@ -94,7 +94,7 @@ test("setNameAliases: patches a stored config; errors when no stored row", async
   const r = await asAdmin.mutation(api.agents.setNameAliases, { csName: "Aisyah", nameAliases: ["CS Aisyah", "Kak Aisyah"] });
   expect(r.success).toBe(true);
   await t.run(async (ctx: any) => {
-    const row = await ctx.db.query("csConfigs").withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", "aisyah")).unique();
+    const row = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "aisyah")).unique();
     expect(row?.nameAliases).toEqual(["CS Aisyah", "Kak Aisyah"]);
   });
   await expect(asAdmin.mutation(api.agents.setNameAliases, { csName: "Ghost", nameAliases: [] })).rejects.toThrow(/csConfig not found/);

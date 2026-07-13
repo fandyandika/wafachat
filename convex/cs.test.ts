@@ -46,13 +46,13 @@ test("setCsAvatar stores avatarStorageId and replacing removes the old file", as
   const id1 = await t.run(async (ctx) => await ctx.storage.store(new Blob(["a"], { type: "image/png" })));
   await asAdmin.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id1 as Id<"_storage"> });
   let cfg = await t.run(async (ctx) =>
-    ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", "aisyah")).unique());
+    ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", "aisyah")).unique());
   expect(cfg?.avatarStorageId).toBe(id1);
 
   const id2 = await t.run(async (ctx) => await ctx.storage.store(new Blob(["b"], { type: "image/png" })));
   await asAdmin.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id2 as Id<"_storage"> });
   cfg = await t.run(async (ctx) =>
-    ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", "aisyah")).unique());
+    ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", "aisyah")).unique());
   expect(cfg?.avatarStorageId).toBe(id2);
   expect(await t.run(async (ctx) => await ctx.storage.getUrl(id1 as Id<"_storage">))).toBeNull();
 });
@@ -65,7 +65,7 @@ test("clearCsAvatar removes the photo and deletes the storage object", async () 
   await asAdmin.mutation(api.cs.setCsAvatar, { csName: "Aisyah", storageId: id1 as Id<"_storage"> });
   await asAdmin.mutation(api.cs.clearCsAvatar, { csName: "Aisyah" });
   const cfg = await t.run(async (ctx) =>
-    ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", "aisyah")).unique());
+    ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", "aisyah")).unique());
   expect(cfg?.avatarStorageId).toBeUndefined();
   expect(await t.run(async (ctx) => await ctx.storage.getUrl(id1 as Id<"_storage">))).toBeNull();
 });

@@ -408,7 +408,7 @@ test("getArchivedFollowUps: lists recent manual archives, scoped by CS", async (
 test("setAutoFollowUp: inserts if not exists, patches if exists", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   process.env.PANEL_AUTH_SECRET = "s3cret";
 
   // First toggle (insert path)
@@ -420,7 +420,7 @@ test("setAutoFollowUp: inserts if not exists, patches if exists", async () => {
   await t.run(async (ctx) => {
     const cfg = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", "csnew"))
+      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "csnew"))
       .unique();
     expect(cfg?.autoFollowUpEnabled).toBe(true);
   });
@@ -433,7 +433,7 @@ test("setAutoFollowUp: inserts if not exists, patches if exists", async () => {
   await t.run(async (ctx) => {
     const cfg = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", "csnew"))
+      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "csnew"))
       .unique();
     expect(cfg?.autoFollowUpEnabled).toBe(false);
   });

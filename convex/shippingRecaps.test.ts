@@ -154,9 +154,9 @@ test("renameCsName: renames CS across orders/recaps/conversations, others untouc
   const res = await asAdmin.mutation(api.shippingRecaps.renameCsName, { from: "Afisah", to: "Nabila" });
   expect(res).toEqual({ from: "Afisah", to: "Nabila", orders: 1, recaps: 1, conversations: 1 });
   await t.run(async (ctx) => {
-    const o1 = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-1")).unique();
+    const o1 = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", "O-1")).unique();
     expect(o1!.assignedCsName).toBe("Nabila");
-    const o2 = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-2")).unique();
+    const o2 = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", "O-2")).unique();
     expect(o2!.assignedCsName).toBe("Lila"); // untouched
     const rec = (await ctx.db.query("shippingRecaps").collect())[0];
     expect(rec.csName).toBe("Nabila");

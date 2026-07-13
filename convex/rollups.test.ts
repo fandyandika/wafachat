@@ -52,7 +52,7 @@ test("computeRollupRow reproduces getDailyReport aggregation rules", async () =>
   const defaultOrg = await getDefaultOrgId(t);
   await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W));
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({
     windowKey: W,
@@ -77,7 +77,7 @@ test("empty window produces no row", async () => {
   const defaultOrg = await getDefaultOrgId(t);
   await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: "2026-07-01" });
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", "2026-07-01")).collect());
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === "2026-07-01"));
   expect(rows).toHaveLength(0);
 });
 
@@ -93,7 +93,7 @@ test("orphan recap attributed via order fallback like legacy", async () => {
   const defaultOrg = await getDefaultOrgId(t);
   await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W));
   expect(rows).toHaveLength(1);
   expect(rows[0].closings).toBe(1);
 });
@@ -111,7 +111,7 @@ test("upsertOrderFromN8n (new order) creates rollup entry via bump", async () =>
   const defaultOrg = await getDefaultOrgId(t);
   await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W));
   expect(rows.length).toBeGreaterThan(0);
   const csTestRow = rows.find((r: any) => r.csName === "CS Test");
   expect(csTestRow).toBeDefined();
@@ -142,7 +142,7 @@ test("appendMessageFromN8n with closing creates recap that bumps rollup", async 
   const defaultOrg = await getDefaultOrgId(t);
   await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W));
   const csTest2Row = rows.find((r: any) => r.csName === "CS Test2");
   expect(csTest2Row).toBeDefined();
   expect(csTest2Row!.closings).toBeGreaterThan(0);
@@ -150,7 +150,8 @@ test("appendMessageFromN8n with closing creates recap that bumps rollup", async 
 
 test("markCancelled bumps rollup with cancelled: 1, closings: 0", async () => {
   const t = convexTest(schema);
-  await seedDefaultOrg(t);
+  const result = await seedDefaultOrg(t);
+  const orgId = result.orgId;
   // Set up admin identity
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
@@ -173,7 +174,7 @@ test("markCancelled bumps rollup with cancelled: 1, closings: 0", async () => {
 
   // Get recap ID
   const recap = await t.run(async (ctx) =>
-    ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", "6281000000012")).first());
+    ctx.db.query("shippingRecaps").withIndex("by_org_customerPhone", (q) => q.eq("orgId", orgId).eq("customerPhone", "6281000000012")).first());
 
   if (!recap) throw new Error("recap not found");
 
@@ -187,7 +188,7 @@ test("markCancelled bumps rollup with cancelled: 1, closings: 0", async () => {
   const defaultOrg = await getDefaultOrgId(t);
   await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W));
 
   const csTest3Row = rows.find((r: any) => r.csName === "CS Test3");
   expect(csTest3Row).toBeDefined();
@@ -197,7 +198,8 @@ test("markCancelled bumps rollup with cancelled: 1, closings: 0", async () => {
 
 test("undoCancelled bumps rollup back to closings: 1, cancelled: 0", async () => {
   const t = convexTest(schema);
-  await seedDefaultOrg(t);
+  const result = await seedDefaultOrg(t);
+  const orgId = result.orgId;
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   // Create order and recap
@@ -219,7 +221,7 @@ test("undoCancelled bumps rollup back to closings: 1, cancelled: 0", async () =>
 
   // Get recap ID
   const recap = await t.run(async (ctx) =>
-    ctx.db.query("shippingRecaps").withIndex("by_customerPhone", (q) => q.eq("customerPhone", "6281000000013")).first());
+    ctx.db.query("shippingRecaps").withIndex("by_org_customerPhone", (q) => q.eq("orgId", orgId).eq("customerPhone", "6281000000013")).first());
 
   if (!recap) throw new Error("recap not found");
 
@@ -238,7 +240,7 @@ test("undoCancelled bumps rollup back to closings: 1, cancelled: 0", async () =>
   const defaultOrg = await getDefaultOrgId(t);
   await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W));
 
   const csTest4Row = rows.find((r: any) => r.csName === "CS Test4");
   expect(csTest4Row).toBeDefined();
@@ -279,7 +281,7 @@ test("backfillCsNameByOrderIds bumps old and new csKey rows", async () => {
   const defaultOrg = await getDefaultOrgId(t);
   await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W));
 
   const oldRow = rows.find((r: any) => r.csName === "CS Old");
   const newRow = rows.find((r: any) => r.csName === "CS New");
@@ -374,7 +376,7 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
 
   // Corrupt a rollup field
   await t.run(async (ctx) => {
-    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", today)).collect();
+    const rollups = (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === today);
     if (rollups.length > 0) {
       await ctx.db.patch(rollups[0]._id, { leadOrders: 999 }); // corrupt field
     }
@@ -397,7 +399,7 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
 
   // Verify before true-up: bogus sample exists, rollup is corrupted
   await t.run(async (ctx) => {
-    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", today)).collect();
+    const rollups = (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === today);
     const rollup = rollups.find((r: any) => r.csKey === "trueup");
     expect(rollup!.leadOrders).toBe(999); // Corrupted
     const samples = await ctx.db.query("responseSamples").collect();
@@ -410,7 +412,7 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
 
   // Verify: rollup field is corrected (not 999)
   await t.run(async (ctx) => {
-    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", today)).collect();
+    const rollups = (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === today);
     const rollup = rollups.find((r: any) => r.csKey === "trueup");
     expect(rollup).toBeDefined();
     expect(rollup!.leadOrders).not.toBe(999);
@@ -564,7 +566,7 @@ test("backfillRange: processes 2 seeded windows with nextFromKey null", async ()
 
   // Verify rollups were created
   const rollups = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", windowA)).collect()
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === windowA)
   );
   expect(rollups.length).toBeGreaterThan(0);
 });
@@ -714,7 +716,7 @@ test("importBerduVerifiedRows: batch import of 3 recaps same CS+window yields si
 
   // Verify rollup is correct and reflects all 3 recaps
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("dailyRollups").withIndex("by_window_cs", (q) => q.eq("windowKey", W).eq("csKey", "azelia")).collect()
+    (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W && r.csKey === "azelia")
   );
 
   expect(rows.length).toBe(1); // Single row for azelia in this window
@@ -813,7 +815,7 @@ test("debugRollupParity: detects corrupted rollup field", async () => {
 
   // Corrupt a field
   await t.run(async (ctx) => {
-    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect();
+    const rollups = await (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W);
     const testerRollup = rollups.find((r: any) => r.csName === "Tester2");
     if (testerRollup) {
       await ctx.db.patch(testerRollup._id, { leadOrders: 999 });
@@ -869,7 +871,7 @@ test("debugRollupParity: detects corrupted csName field", async () => {
 
   // Corrupt csName field
   await t.run(async (ctx) => {
-    const rollups = await ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect();
+    const rollups = await (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === W);
     const csRollup = rollups.find((r: any) => r.csName === "OriginalCS");
     if (csRollup) {
       await ctx.db.patch(csRollup._id, { csName: "CorruptedCS" });

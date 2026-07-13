@@ -21,7 +21,7 @@ test("appendMessageFromN8n: same externalMessageId twice -> one row", async () =
   expect(second.deduped).toBe(true);
   expect(second.messageId).toBe(first.messageId);
   const rows = await t.run(async (ctx) =>
-    ctx.db.query("messages").withIndex("by_externalMessageId", (q) => q.eq("externalMessageId", "msg_ABC")).collect());
+    (await ctx.db.query("messages").collect()).filter((m) => m.externalMessageId === "msg_ABC"));
   expect(rows.length).toBe(1);
 });
 
@@ -42,7 +42,7 @@ test("appendMessageFromN8n: outbound closing phrase -> exactly one recap + closi
   const recaps = await t.run(async (ctx) => ctx.db.query("shippingRecaps").collect());
   expect(recaps.length).toBe(1);
   const events = await t.run(async (ctx) =>
-    ctx.db.query("events").withIndex("by_type_createdAt", (q) => q.eq("type", "closing_detected")).collect());
+    (await ctx.db.query("events").collect()).filter((e) => e.type === "closing_detected"));
   expect(events.length).toBeGreaterThanOrEqual(1);
 });
 
@@ -68,7 +68,7 @@ test("appendMessageFromN8n: outbound 'cod diproses' marker -> conversation close
     messageType: "text", externalMessageId: "mk1", createdAt: 5000,
   });
   const conv = await t.run(async (ctx) =>
-    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62844")).first());
+    ctx.db.query("conversations").withIndex("by_org_customerPhone_updatedAt", (q) => q.eq("orgId", orgId).eq("customerPhone", "62844")).first());
   expect(conv?.status).toBe("closed");
 });
 
@@ -81,7 +81,7 @@ test("appendMessageFromN8n: ordinary inbound -> conversation NOT closed", async 
     content: "halo kak mau tanya", messageType: "text", externalMessageId: "ord1", createdAt: 5000,
   });
   const conv = await t.run(async (ctx) =>
-    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62845")).first());
+    ctx.db.query("conversations").withIndex("by_org_customerPhone_updatedAt", (q) => q.eq("orgId", orgId).eq("customerPhone", "62845")).first());
   expect(conv?.status).not.toBe("closed");
 });
 
@@ -95,7 +95,7 @@ test("appendMessageFromN8n: heals 'Unknown' conversation csName when a known CS 
     content: "halo kak", messageType: "text", externalMessageId: "h1", createdAt: 1000,
   });
   const before = await t.run(async (ctx) =>
-    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62833")).first());
+    ctx.db.query("conversations").withIndex("by_org_customerPhone_updatedAt", (q) => q.eq("orgId", orgId).eq("customerPhone", "62833")).first());
   expect(before?.assignedCsName).toBe("Unknown");
   // 2. Outbound with a known csName -> conversation healed to that CS
   await t.mutation(internal.messages.appendMessageFromN8n, {
@@ -103,7 +103,7 @@ test("appendMessageFromN8n: heals 'Unknown' conversation csName when a known CS 
     content: "siap kak", messageType: "text", externalMessageId: "h2", createdAt: 2000,
   });
   const after = await t.run(async (ctx) =>
-    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62833")).first());
+    ctx.db.query("conversations").withIndex("by_org_customerPhone_updatedAt", (q) => q.eq("orgId", orgId).eq("customerPhone", "62833")).first());
   expect(after?.assignedCsName).toBe("Risma");
   // 3. A later message with "Unknown" csName must NOT clobber the real CS
   await t.mutation(internal.messages.appendMessageFromN8n, {
@@ -111,7 +111,7 @@ test("appendMessageFromN8n: heals 'Unknown' conversation csName when a known CS 
     content: "oke", messageType: "text", externalMessageId: "h3", createdAt: 3000,
   });
   const after2 = await t.run(async (ctx) =>
-    ctx.db.query("conversations").withIndex("by_customerPhone_updatedAt", (q) => q.eq("customerPhone", "62833")).first());
+    ctx.db.query("conversations").withIndex("by_org_customerPhone_updatedAt", (q) => q.eq("orgId", orgId).eq("customerPhone", "62833")).first());
   expect(after2?.assignedCsName).toBe("Risma");
 });
 

@@ -93,7 +93,7 @@ test("autoFollowUpSweep: within hours, enabled CS, one ghosted H+1 lead -> sends
   await t.run(async (ctx) => {
     const cfg = (await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q) => q.eq("normalizedName", "nabila"))
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", "nabila"))
       .unique()) as Doc<"csConfigs"> | undefined;
     expect(cfg).toBeDefined();
     expect(cfg!.autoSentDay).toBe(wibDay(now));

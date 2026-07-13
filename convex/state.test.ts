@@ -78,32 +78,32 @@ test("listOrderCountersByPrefix returns sorted present counters for the date pre
 test("upsertOrderFromN8n honors explicit createdAt on insert (reconciler backfill keeps real order time)", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   const backdated = Date.UTC(2026, 5, 23, 18, 10, 43); // real Berdu order time, not now
   await t.mutation(internal.state.upsertOrderFromN8n, { phone: "6285735647633", csName: "Risma", order_id: "O-260624000009", createdAt: backdated });
   const order = await t.run(async (ctx) =>
-    ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-260624000009")).unique());
+    ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", "O-260624000009")).unique());
   expect(order?.createdAt).toBe(backdated);
 });
 
 test("upsertOrderCore stores csKey = csKey(assignedCsName) for a raw name variant", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   await t.mutation(internal.state.upsertOrderFromN8n, { phone: "6285735647634", csName: "CS Aisyah", order_id: "O-CSKEY-1", createdAt: Date.UTC(2026, 6, 7, 10, 0, 0) });
   const order = await t.run(async (ctx) =>
-    ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-CSKEY-1")).unique());
+    ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", "O-CSKEY-1")).unique());
   expect(order?.csKey).toBe(csKey("CS Aisyah"));
   // the csKey index returns this order for its csKey slice
   const viaIndex = await t.run(async (ctx) =>
-    ctx.db.query("orders").withIndex("by_csKey_createdAt", (q) => q.eq("csKey", csKey("CS Aisyah"))).collect());
+    ctx.db.query("orders").withIndex("by_org_csKey_createdAt", (q) => q.eq("orgId", orgId).eq("csKey", csKey("CS Aisyah"))).collect());
   expect(viaIndex.some((o) => o.orderId === "O-CSKEY-1")).toBe(true);
 });
 
 test("upsertOrderFromN8n updates explicit createdAt on existing order", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   const replayedAt = Date.parse("2026-07-07T14:15:45.000Z");
   const orderedAt = Date.parse("2026-07-07T12:45:04.316Z");
   await t.mutation(internal.state.upsertOrderFromN8n, {
@@ -119,9 +119,9 @@ test("upsertOrderFromN8n updates explicit createdAt on existing order", async ()
     createdAt: orderedAt,
   });
   const order = await t.run(async (ctx) =>
-    ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-260707000251")).unique());
+    ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", "O-260707000251")).unique());
   const conversation = await t.run(async (ctx) =>
-    ctx.db.query("conversations").withIndex("by_orderId", (q) => q.eq("orderId", "O-260707000251")).unique());
+    ctx.db.query("conversations").withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", "O-260707000251")).unique());
   expect(order?.createdAt).toBe(orderedAt);
   expect(conversation?.createdAt).toBe(orderedAt);
 });
@@ -159,7 +159,7 @@ test("canonical stamp: upsertOrderCore via alias resolves to canonical csName + 
   });
   // Verify: stored order has canonical csName "Aisyah" and immutable key "aisyah"
   const order = await t.run(async (ctx) =>
-    ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", "O-CANONICAL-1")).unique());
+    ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", "O-CANONICAL-1")).unique());
   expect(order?.assignedCsName).toBe("Aisyah");
   expect(order?.csKey).toBe("aisyah");
 });
