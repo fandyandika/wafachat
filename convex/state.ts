@@ -920,7 +920,7 @@ export const recordStatEventFromN8n = internalMutation({
 });
 
 export const listConversations = internalQuery({
-  args: { includeClosed: v.optional(v.boolean()), csName: v.optional(v.string()) },
+  args: { includeClosed: v.optional(v.boolean()), csName: v.optional(v.string()), orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const startToday = startOfJakartaDayMs();
     const rows: Doc<"conversations">[] = [];
@@ -930,7 +930,7 @@ export const listConversations = internalQuery({
       rows.push(
         ...(await ctx.db
           .query("conversations")
-          .withIndex("by_status_updatedAt", (q) => q.eq("status", status))
+          .withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", args.orgId).eq("status", status))
           .order("desc")
           .collect()),
       );
@@ -940,7 +940,7 @@ export const listConversations = internalQuery({
       rows.push(
         ...(await ctx.db
           .query("conversations")
-          .withIndex("by_status_updatedAt", (q) => q.eq("status", "closed").gte("updatedAt", startToday))
+          .withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", args.orgId).eq("status", "closed").gte("updatedAt", startToday))
           .order("desc")
           .collect()),
       );
@@ -959,7 +959,7 @@ export const listConversations = internalQuery({
     const orderIds = unique(conversations.map((c) => c.orderId));
     const orderDocs = await Promise.all(
       orderIds.map((id) =>
-        ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", id)).unique(),
+        ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", args.orgId).eq("orderId", id)).unique(),
       ),
     );
     const orderById = new Map(

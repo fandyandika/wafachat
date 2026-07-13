@@ -1,5 +1,6 @@
 import { query, action, mutation, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { requireMember } from "./authz";
+import { requireMember, requireMemberOrg } from "./authz";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { csKey, isInternalTestPhone, normalizeCsName } from "./lib";
 import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
@@ -41,7 +42,7 @@ export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: a
 
 // nowOverride is test-only (Date.now() is unavailable in some runtimes); prod passes nothing.
 // Shared by the guarded panel query AND the identity-less cron sweep (autoFollowUp).
-async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowOverride?: number }) {
+async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowOverride?: number; orgId: any }) {
     const internalPhones = await getInternalPhoneSet(ctx);
     const now = args.nowOverride ?? Date.now();
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
@@ -54,7 +55,7 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
     const recent = (
       await Promise.all(
         (["active", "handover"] as const).map((s) =>
-          ctx.db.query("conversations").withIndex("by_status_updatedAt", (q: any) => q.eq("status", s).gte("updatedAt", since)).collect(),
+          ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", args.orgId).eq("status", s).gte("updatedAt", since)).collect(),
         ),
       )
     ).flat();
@@ -72,7 +73,7 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
 
     // For ghosted only: closed-by-recap, the latest inbound, and the follow-up touches since.
     const recaps = await Promise.all(
-      ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_orderIdBerdu", (q: any) => q.eq("orderIdBerdu", x.c.orderId)).first()),
+      ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q: any) => q.eq("orgId", args.orgId).eq("orderIdBerdu", x.c.orderId)).first()),
     );
     const lastInbounds = await Promise.all(
       ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", x.c._id)).order("desc").filter((q: any) => q.eq(q.field("direction"), "inbound")).first()),
@@ -119,7 +120,7 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
 
     // Product name only for the final candidates.
     const orders = await Promise.all(
-      deduped.map((e) => ctx.db.query("orders").withIndex("by_orderId", (q: any) => q.eq("orderId", e.c.orderId)).first()),
+      deduped.map((e) => ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", args.orgId).eq("orderId", e.c.orderId)).first()),
     );
     const stage1: Candidate[] = [];
     const stage2: Candidate[] = [];
@@ -141,14 +142,14 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
 export const getFollowUpCandidates = query({
   args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "followUp.getFollowUpCandidates");
-    return followUpCandidatesHandler(ctx, args);
+    const { orgId } = await requireMemberOrg(ctx, "followUp.getFollowUpCandidates");
+    return followUpCandidatesHandler(ctx, { ...args, orgId });
   },
 });
 
 // Cron/sweep path (autoFollowUp) — server-side, no user identity, not publicly callable.
 export const getFollowUpCandidatesInternal = internalQuery({
-  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
+  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()), orgId: v.id("organizations") },
   handler: async (ctx, args) => followUpCandidatesHandler(ctx, args),
 });
 
@@ -169,18 +170,18 @@ export const candidacyFor = internalQuery({
     const c = await ctx.db.get(args.conversationId);
     if (!c) return null;
     const now = args.nowOverride ?? Date.now();
-    const recap = await ctx.db.query("shippingRecaps").withIndex("by_orderIdBerdu", (q) => q.eq("orderIdBerdu", c.orderId)).first();
+    const recap = await ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", c.orgId).eq("orderIdBerdu", c.orderId)).first();
     const lastMsg = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first();
     const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first();
-    const order = await ctx.db.query("orders").withIndex("by_orderId", (q) => q.eq("orderId", c.orderId)).first();
+    const order = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", c.orgId).eq("orderId", c.orderId)).first();
     const normName = normalizeCsName(c.assignedCsName);
-    let cfg = await ctx.db.query("csConfigs").withIndex("by_normalizedName", (q) => q.eq("normalizedName", normName)).first();
+    let cfg = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", c.orgId).eq("normalizedName", normName)).first();
     // assignedCsName is inconsistent across the data ("Aisyah" vs "CS Aisyah"), so an exact
     // normalizedName match can miss the WABA number. Fall back to a csKey match (ignores the
     // "CS " prefix) so providerNumberId resolves regardless of how the lead was named.
     if (!cfg || !cfg.providerNumberId) {
       const k = csKey(c.assignedCsName);
-      const all = await ctx.db.query("csConfigs").collect();
+      const all = await ctx.db.query("csConfigs").collect().then((all) => all.filter((x) => String(x.orgId) === String(c.orgId)));
       cfg = all.find((x) => csKey(x.csName) === k && x.providerNumberId) ?? cfg;
     }
     const touch = await touchInfo(ctx, c._id, lastInbound?.createdAt ?? null);
@@ -321,7 +322,7 @@ export const unarchiveFollowUp = mutation({
 export const getArchivedFollowUps = query({
   args: { csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "followUp.getArchivedFollowUps");
+    const { orgId } = await requireMemberOrg(ctx, "followUp.getArchivedFollowUps");
     const internalPhones = await getInternalPhoneSet(ctx);
     const now = Date.now();
     const DAY = 86_400_000;
@@ -333,7 +334,7 @@ export const getArchivedFollowUps = query({
     // ones that were actually archived. Bounds reads to recent closed convs.
     const archived = await ctx.db
       .query("conversations")
-      .withIndex("by_status_updatedAt", (q) => q.eq("status", "closed").gte("updatedAt", since))
+      .withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", orgId).eq("status", "closed").gte("updatedAt", since))
       .collect();
 
     const filtered = archived
@@ -449,9 +450,8 @@ export const getFollowUpEffectivenessLegacy = internalQuery({
 export const getFollowUpEffectiveness = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "followUp.getFollowUpEffectiveness");
-    await requireMember(ctx, "followUp.getAutoFollowUp");
-    return followUpEffectivenessFromRollups(ctx, args);
+    const { orgId } = await requireMemberOrg(ctx, "followUp.getFollowUpEffectiveness");
+    return followUpEffectivenessFromRollups(ctx, orgId, args);
   },
 });
 
@@ -461,7 +461,7 @@ export const getFollowUpEffectiveness = query({
 export const getClosedFollowUps = query({
   args: { csName: v.optional(v.string()), sinceDays: v.optional(v.number()), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "followUp.getClosedFollowUps");
+    const { orgId } = await requireMemberOrg(ctx, "followUp.getClosedFollowUps");
     const internalPhones = await getInternalPhoneSet(ctx);
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
@@ -470,7 +470,7 @@ export const getClosedFollowUps = query({
 
     const recaps = await ctx.db
       .query("shippingRecaps")
-      .withIndex("by_closedAt", (q: any) => q.gte("closedAt", since).lte("closedAt", now))
+      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", since).lte("closedAt", now))
       .collect();
 
     const filtered = recaps

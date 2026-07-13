@@ -1,5 +1,5 @@
 import { query, mutation } from "./_generated/server";
-import { requireAdmin, requireMember, requireAdminOrg } from "./authz";
+import { requireAdmin, requireMember, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import { csKey, normalizeCsName } from "./lib";
 import { DEFAULT_CONFIGS } from "./csConfigs";
@@ -15,11 +15,13 @@ type CsRow = {
 export const listCs = query({
   args: {},
   handler: async (ctx): Promise<CsRow[]> => {
-    await requireMember(ctx, "cs.listCs");
+    const { orgId } = await requireMemberOrg(ctx, "cs.listCs");
     // CS registry comes from csConfigs (~6 rows) + built-in DEFAULT_CONFIGS — NOT from a
     // 90-day scan of the orders table (that read ~18k docs on every render, on every page,
     // and was the single biggest avoidable DB I/O cost). New CS are registered in Settings.
     const stored = await ctx.db.query("csConfigs").collect();
+    // Filter to viewer-org's configs only; built-in DEFAULT_CONFIGS still shown to all (they have no orgId)
+    const filtered = stored.filter((c) => String(c.orgId) === String(orgId));
 
     type Entry = {
       csName: string; isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
@@ -37,8 +39,8 @@ export const listCs = query({
         autoFollowUpEnabled: d.autoFollowUpEnabled, csPhone: d.csPhone,
       });
     }
-    // …then stored configs override.
-    for (const c of stored) {
+    // …then stored configs override (org-filtered).
+    for (const c of filtered) {
       const k = csKey(c.csName);
       if (!k || k === "unknown") continue;
       byKey.set(k, {

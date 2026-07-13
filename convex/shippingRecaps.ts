@@ -705,19 +705,19 @@ export const list = query({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "shippingRecaps.list");
+    const { orgId } = await requireMemberOrg(ctx, "shippingRecaps.list");
     const internalPhones = await getInternalPhoneSet(ctx);
     const rows = args.status
       ? await ctx.db
           .query("shippingRecaps")
-          .withIndex("by_status_closedAt", (q) =>
-            q.eq("status", args.status as RecapStatus).gte("closedAt", args.startAt).lte("closedAt", args.endAt),
+          .withIndex("by_org_status_closedAt", (q) =>
+            q.eq("orgId", orgId).eq("status", args.status as RecapStatus).gte("closedAt", args.startAt).lte("closedAt", args.endAt),
           )
           .order("desc")
           .collect()
       : await ctx.db
           .query("shippingRecaps")
-          .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
+          .withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lte("closedAt", args.endAt))
           .order("desc")
           .collect();
     const search = String(args.search ?? "").trim().toLowerCase();
@@ -750,11 +750,11 @@ export const getCounts = query({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "shippingRecaps.getCounts");
+    const { orgId } = await requireMemberOrg(ctx, "shippingRecaps.getCounts");
     const internalPhones = await getInternalPhoneSet(ctx);
     const rows = await ctx.db
       .query("shippingRecaps")
-      .withIndex("by_closedAt", (q) => q.gte("closedAt", args.startAt).lte("closedAt", args.endAt))
+      .withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lte("closedAt", args.endAt))
       .collect();
 
     const filtered = rows.filter(

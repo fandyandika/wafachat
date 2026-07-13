@@ -10,7 +10,7 @@
 import { action, internalAction, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { requireAdmin } from "./authz";
+import { requireAdminOrg } from "./authz";
 import { messageHasDoneMarker } from "./followUpMath";
 
 // 5 days — same ceiling the follow-up funnel uses (followUpMath). Past this, a silent lead is dead.
@@ -33,7 +33,7 @@ async function hasDoneMarker(ctx: { db: any }, conversationId: any): Promise<boo
 // Paginates the FULL table (default order, unaffected by the status patch) and skips already-closed
 // rows, so the cursor stays stable while we mutate `status`.
 export const resolveBatch = internalMutation({
-  args: { cursor: v.union(v.string(), v.null()), dryRun: v.boolean(), now: v.number() },
+  args: { cursor: v.union(v.string(), v.null()), dryRun: v.boolean(), now: v.number(), orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const page = await ctx.db.query("conversations").paginate({ cursor: args.cursor, numItems: BATCH });
     let closedWon = 0;
@@ -41,6 +41,7 @@ export const resolveBatch = internalMutation({
     let closedStale = 0;
     let considered = 0;
     for (const c of page.page) {
+      if (String(c.orgId) !== String(args.orgId)) continue; // org-filter during pagination
       if (c.status === "closed") continue;
       considered++;
       // WON: a recap for this order. For an order-less "manual:" thread, fall back to ANY recap for
@@ -84,7 +85,7 @@ export const resolveBatch = internalMutation({
 
 type SweepResult = { considered: number; closedWon: number; closedMarker: number; closedStale: number; dryRun: boolean };
 
-async function sweep(ctx: { runMutation: any }, dryRun: boolean): Promise<SweepResult> {
+async function sweep(ctx: { runMutation: any }, orgId: any, dryRun: boolean): Promise<SweepResult> {
   const now = Date.now();
   let cursor: string | null = null;
   let isDone = false;
@@ -94,7 +95,7 @@ async function sweep(ctx: { runMutation: any }, dryRun: boolean): Promise<SweepR
   let closedStale = 0;
   // Hard cap on iterations as a runaway guard (25 * 800 = 20k conversations).
   for (let i = 0; i < 800 && !isDone; i++) {
-    const r: any = await ctx.runMutation(internal.conversationLifecycle.resolveBatch, { cursor, dryRun, now });
+    const r: any = await ctx.runMutation(internal.conversationLifecycle.resolveBatch, { cursor, dryRun, now, orgId });
     cursor = r.continueCursor;
     isDone = r.isDone;
     considered += r.considered;
@@ -110,9 +111,21 @@ async function sweep(ctx: { runMutation: any }, dryRun: boolean): Promise<SweepR
 //   npx convex run conversationLifecycle:cronArchiveSweep '{"dryRun":true}' --prod   (preview, no writes)
 //   npx convex run conversationLifecycle:cronArchiveSweep '{}' --prod                (execute)
 // Kept internal (not a public action) so it can never be triggered by an unauthenticated client.
+// Per-org loop: iterate every org, thread orgId through mutations.
 export const cronArchiveSweep = internalAction({
   args: { dryRun: v.optional(v.boolean()) },
-  handler: async (ctx, args): Promise<SweepResult> => sweep(ctx, args.dryRun ?? false),
+  handler: async (ctx, args): Promise<SweepResult> => {
+    const orgs = await ctx.runQuery(internal.orgs.listOrgsInternal, {});
+    let totalConsidered = 0, totalClosedWon = 0, totalClosedMarker = 0, totalClosedStale = 0;
+    for (const org of orgs) {
+      const result = await sweep(ctx, org._id, args.dryRun ?? false);
+      totalConsidered += result.considered;
+      totalClosedWon += result.closedWon;
+      totalClosedMarker += result.closedMarker;
+      totalClosedStale += result.closedStale;
+    }
+    return { considered: totalConsidered, closedWon: totalClosedWon, closedMarker: totalClosedMarker, closedStale: totalClosedStale, dryRun: args.dryRun ?? false };
+  },
 });
 
 // PUBLIC but READ-ONLY (always dryRun) — counts how many WON/STALE conversations the cron would
@@ -121,7 +134,7 @@ export const cronArchiveSweep = internalAction({
 export const archiveDryRun = action({
   args: {},
   handler: async (ctx): Promise<SweepResult> => {
-    await requireAdmin(ctx, "conversationLifecycle.archiveDryRun");
-    return sweep(ctx, true);
+    const { orgId } = await requireAdminOrg(ctx, "conversationLifecycle.archiveDryRun");
+    return sweep(ctx, orgId, true);
   },
 });
