@@ -23,6 +23,14 @@ async function stampCsKeys(ctx: any) {
     if (r.csKey === undefined) await ctx.db.patch(r._id, { csKey: csKey(r.csName) });
 }
 
+async function getDefaultOrgId(t: ReturnType<typeof convexTest>): Promise<string> {
+  let orgId: string = "";
+  await t.run(async (ctx) => {
+    orgId = String(await requireDefaultOrgId(ctx));
+  });
+  return orgId;
+}
+
 async function seed(t: ReturnType<typeof convexTest>) {
   await t.run(async (ctx) => {
     const orgId = await requireDefaultOrgId(ctx);
@@ -41,7 +49,8 @@ test("computeRollupRow reproduces getDailyReport aggregation rules", async () =>
   const t = convexTest(schema);
   await seedDefaultOrg(t);
   await seed(t);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const defaultOrg = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
     ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
   expect(rows).toHaveLength(1);
@@ -64,7 +73,9 @@ test("computeRollupRow reproduces getDailyReport aggregation rules", async () =>
 
 test("empty window produces no row", async () => {
   const t = convexTest(schema);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: "2026-07-01" });
+  await seedDefaultOrg(t);
+  const defaultOrg = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: "2026-07-01" });
   const rows = await t.run(async (ctx) =>
     ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", "2026-07-01")).collect());
   expect(rows).toHaveLength(0);
@@ -79,7 +90,8 @@ test("orphan recap attributed via order fallback like legacy", async () => {
     await ctx.db.insert("shippingRecaps", { orgId, customerPhone: "6281000000007", customerName: "C", csName: "Lila", orderIdBerdu: "O-7", status: "ready", total: 90000, packageContent: "Buku Sirah", closedAt: t0 + 5, recipientName: "C", recipientPhone: "6281000000007", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
     await stampCsKeys(ctx);
   });
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const defaultOrg = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
     ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
   expect(rows).toHaveLength(1);
@@ -96,7 +108,8 @@ test("upsertOrderFromN8n (new order) creates rollup entry via bump", async () =>
     createdAt: t0,
   });
   // Force recompute to verify order was created
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const defaultOrg = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
     ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
   expect(rows.length).toBeGreaterThan(0);
@@ -126,7 +139,8 @@ test("appendMessageFromN8n with closing creates recap that bumps rollup", async 
     createdAt: t0 + 1000,
   });
   // Force recompute
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const defaultOrg = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
     ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
   const csTest2Row = rows.find((r: any) => r.csName === "CS Test2");
@@ -170,7 +184,8 @@ test("markCancelled bumps rollup with cancelled: 1, closings: 0", async () => {
   });
 
   // Force recompute
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const defaultOrg = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
     ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
 
@@ -220,7 +235,8 @@ test("undoCancelled bumps rollup back to closings: 1, cancelled: 0", async () =>
   });
 
   // Force recompute
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const defaultOrg = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
     ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
 
@@ -260,7 +276,8 @@ test("backfillCsNameByOrderIds bumps old and new csKey rows", async () => {
   });
 
   // Force recompute
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  const defaultOrg = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
   const rows = await t.run(async (ctx) =>
     ctx.db.query("dailyRollups").withIndex("by_windowKey", (q) => q.eq("windowKey", W)).collect());
 
@@ -352,7 +369,8 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
   });
 
   // Force an initial rollup so we have something to corrupt
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: today });
+  const defaultOrg = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: today });
 
   // Corrupt a rollup field
   await t.run(async (ctx) => {
@@ -387,8 +405,8 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
   });
 
   // Run trueUp action - manually do the steps
-  await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey: today });
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: today });
+  await t.mutation(internal.rollups.rebuildSamplesForWindow, { orgId: defaultOrg, windowKey: today });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: today });
 
   // Verify: rollup field is corrected (not 999)
   await t.run(async (ctx) => {
@@ -626,6 +644,7 @@ test("importBerduVerifiedRows: batch import of 3 recaps same CS+window yields si
   const t = convexTest(schema);
   await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+  const defaultOrg = await getDefaultOrgId(t);
 
   const W = "2026-07-08";
   const range = windowRangeForKey(W);
@@ -691,7 +710,7 @@ test("importBerduVerifiedRows: batch import of 3 recaps same CS+window yields si
   });
 
   // Force recompute
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
 
   // Verify rollup is correct and reflects all 3 recaps
   const rows = await t.run(async (ctx) =>
@@ -713,6 +732,7 @@ test("debugRollupParity: detects when rollup data matches fresh computation", as
   const t = convexTest(schema);
   await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+  const defaultOrg = await getDefaultOrgId(t);
 
   const W = "2026-07-08";
   const range = windowRangeForKey(W);
@@ -743,7 +763,7 @@ test("debugRollupParity: detects when rollup data matches fresh computation", as
 
   await t.run(stampCsKeys);
   // Compute rollup
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
 
   // Check parity - should return valid results without crashing
   const result = await t.withIdentity(adminIdentity).query(api.rollups.debugRollupParity, { windowKey: W });
@@ -758,6 +778,7 @@ test("debugRollupParity: detects corrupted rollup field", async () => {
   const t = convexTest(schema);
   await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+  const defaultOrg = await getDefaultOrgId(t);
 
   const W = "2026-07-08";
   const range = windowRangeForKey(W);
@@ -788,7 +809,7 @@ test("debugRollupParity: detects corrupted rollup field", async () => {
 
   await t.run(stampCsKeys);
   // Compute rollup
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
 
   // Corrupt a field
   await t.run(async (ctx) => {
@@ -813,6 +834,7 @@ test("debugRollupParity: detects corrupted csName field", async () => {
   const t = convexTest(schema);
   await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
+  const defaultOrg = await getDefaultOrgId(t);
 
   const W = "2026-07-08";
   const range = windowRangeForKey(W);
@@ -843,7 +865,7 @@ test("debugRollupParity: detects corrupted csName field", async () => {
 
   await t.run(stampCsKeys);
   // Compute rollup
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey: W });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W });
 
   // Corrupt csName field
   await t.run(async (ctx) => {

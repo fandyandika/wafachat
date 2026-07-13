@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { windowRangeForKey, windowKeyFor } from "./lib";
 import { requireDefaultOrgId } from "./orgs";
 
@@ -532,25 +533,30 @@ async function seedRichDataset(t: ReturnType<typeof convexTest>) {
   });
 }
 
-async function runTest(name: string, fn: (t: ReturnType<typeof convexTest>) => Promise<void>) {
+async function runTest(name: string, fn: (t: ReturnType<typeof convexTest>, defaultOrg: string) => Promise<void>) {
   test(name, async () => {
     const t = convexTest(schema);
     const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
     await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
     await seedRichDataset(t);
+    // Get default org ID
+    let defaultOrg: string = "";
+    await t.run(async (ctx) => {
+      defaultOrg = String(await requireDefaultOrgId(ctx));
+    });
     // Backfill rollups for both windows
-    await t.mutation(internal.rollups.recomputeWindow, { windowKey: W1 });
-    await t.mutation(internal.rollups.recomputeWindow, { windowKey: W2 });
+    await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W1 });
+    await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W2 });
     // Backfill response samples for both windows
-    await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey: W1 });
-    await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey: W2 });
-    await fn(t);
+    await t.mutation(internal.rollups.rebuildSamplesForWindow, { orgId: defaultOrg, windowKey: W1 });
+    await t.mutation(internal.rollups.rebuildSamplesForWindow, { orgId: defaultOrg, windowKey: W2 });
+    await fn(t, defaultOrg);
   });
 }
 
 // ── RESPONSE TIMES ──────────────────────────────────────────────────────────
 
-runTest("responseTimesFromSamples matches legacy (full window W1)", async (t) => {
+runTest("responseTimesFromSamples matches legacy (full window W1)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -559,13 +565,13 @@ runTest("responseTimesFromSamples matches legacy (full window W1)", async (t) =>
   }).query(api.responseTime.getResponseTimes, { startAt: w1Start, endAt: w1End });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).responseTimesFromSamples(ctx, { startAt: w1Start, endAt: w1End })
+    (await import("./rollupReaders")).responseTimesFromSamples(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w1End })
   );
 
   expect(rollup).toEqual(legacy);
 });
 
-runTest("responseTimesFromSamples matches legacy (csName-filtered)", async (t) => {
+runTest("responseTimesFromSamples matches legacy (csName-filtered)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -574,7 +580,7 @@ runTest("responseTimesFromSamples matches legacy (csName-filtered)", async (t) =
   }).query(api.responseTime.getResponseTimes, { startAt: w1Start, endAt: w1End, csName: "Azelia" });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).responseTimesFromSamples(ctx, {
+    (await import("./rollupReaders")).responseTimesFromSamples(ctx, defaultOrg as Id<"organizations">, {
       startAt: w1Start,
       endAt: w1End,
       csName: "Azelia",
@@ -584,7 +590,7 @@ runTest("responseTimesFromSamples matches legacy (csName-filtered)", async (t) =
   expect(rollup).toEqual(legacy);
 });
 
-runTest("responseTimesFromSamples matches legacy (multi-window range)", async (t) => {
+runTest("responseTimesFromSamples matches legacy (multi-window range)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -593,7 +599,7 @@ runTest("responseTimesFromSamples matches legacy (multi-window range)", async (t
   }).query(api.responseTime.getResponseTimes, { startAt: w1Start, endAt: w2End });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).responseTimesFromSamples(ctx, { startAt: w1Start, endAt: w2End })
+    (await import("./rollupReaders")).responseTimesFromSamples(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w2End })
   );
 
   expect(rollup).toEqual(legacy);
@@ -601,7 +607,7 @@ runTest("responseTimesFromSamples matches legacy (multi-window range)", async (t
 
 // ── DAILY REPORT ────────────────────────────────────────────────────────────
 
-runTest("dailyReportFromRollups matches legacy (full window W1)", async (t) => {
+runTest("dailyReportFromRollups matches legacy (full window W1)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -610,13 +616,13 @@ runTest("dailyReportFromRollups matches legacy (full window W1)", async (t) => {
   }).query(api.analytics.getDailyReport, { startAt: w1Start, endAt: w1End });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).dailyReportFromRollups(ctx, { startAt: w1Start, endAt: w1End })
+    (await import("./rollupReaders")).dailyReportFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w1End })
   );
 
   expect(rollup).toEqual(legacy);
 });
 
-runTest("dailyReportFromRollups matches legacy (multi-window range)", async (t) => {
+runTest("dailyReportFromRollups matches legacy (multi-window range)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -625,7 +631,7 @@ runTest("dailyReportFromRollups matches legacy (multi-window range)", async (t) 
   }).query(api.analytics.getDailyReport, { startAt: w1Start, endAt: w2End });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).dailyReportFromRollups(ctx, { startAt: w1Start, endAt: w2End })
+    (await import("./rollupReaders")).dailyReportFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w2End })
   );
 
   expect(rollup).toEqual(legacy);
@@ -633,7 +639,7 @@ runTest("dailyReportFromRollups matches legacy (multi-window range)", async (t) 
 
 // ── TREND ───────────────────────────────────────────────────────────────────
 
-runTest("trendFromRollups matches legacy (day bucket, W1)", async (t) => {
+runTest("trendFromRollups matches legacy (day bucket, W1)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -642,13 +648,13 @@ runTest("trendFromRollups matches legacy (day bucket, W1)", async (t) => {
   }).query(api.metrics.getTrend, { startAt: w1Start, endAt: w1End, bucket: "day" });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).trendFromRollups(ctx, { startAt: w1Start, endAt: w1End, bucket: "day" })
+    (await import("./rollupReaders")).trendFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w1End, bucket: "day" })
   );
 
   expect(rollup).toEqual(legacy);
 });
 
-runTest("trendFromRollups matches legacy (day bucket, csName-filtered)", async (t) => {
+runTest("trendFromRollups matches legacy (day bucket, csName-filtered)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -662,7 +668,7 @@ runTest("trendFromRollups matches legacy (day bucket, csName-filtered)", async (
   });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).trendFromRollups(ctx, {
+    (await import("./rollupReaders")).trendFromRollups(ctx, defaultOrg as Id<"organizations">, {
       startAt: w1Start,
       endAt: w1End,
       bucket: "day",
@@ -673,7 +679,7 @@ runTest("trendFromRollups matches legacy (day bucket, csName-filtered)", async (
   expect(rollup).toEqual(legacy);
 });
 
-runTest("trendFromRollups matches legacy (day bucket, multi-window range)", async (t) => {
+runTest("trendFromRollups matches legacy (day bucket, multi-window range)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -682,7 +688,7 @@ runTest("trendFromRollups matches legacy (day bucket, multi-window range)", asyn
   }).query(api.metrics.getTrend, { startAt: w1Start, endAt: w2End, bucket: "day" });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).trendFromRollups(ctx, { startAt: w1Start, endAt: w2End, bucket: "day" })
+    (await import("./rollupReaders")).trendFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w2End, bucket: "day" })
   );
 
   expect(rollup).toEqual(legacy);
@@ -690,7 +696,7 @@ runTest("trendFromRollups matches legacy (day bucket, multi-window range)", asyn
 
 // ── DASHBOARD SUMMARY ───────────────────────────────────────────────────────
 
-runTest("dashboardSummaryFromRollups matches legacy (W1)", async (t) => {
+runTest("dashboardSummaryFromRollups matches legacy (W1)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -699,13 +705,13 @@ runTest("dashboardSummaryFromRollups matches legacy (W1)", async (t) => {
   }).query(api.metrics.getDashboardSummary, { startAt: w1Start, endAt: w1End });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).dashboardSummaryFromRollups(ctx, { startAt: w1Start, endAt: w1End })
+    (await import("./rollupReaders")).dashboardSummaryFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w1End })
   );
 
   expect(rollup).toEqual(legacy);
 });
 
-runTest("dashboardSummaryFromRollups matches legacy (csName-filtered)", async (t) => {
+runTest("dashboardSummaryFromRollups matches legacy (csName-filtered)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -718,7 +724,7 @@ runTest("dashboardSummaryFromRollups matches legacy (csName-filtered)", async (t
   });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).dashboardSummaryFromRollups(ctx, {
+    (await import("./rollupReaders")).dashboardSummaryFromRollups(ctx, defaultOrg as Id<"organizations">, {
       startAt: w1Start,
       endAt: w1End,
       csName: "Azelia",
@@ -730,7 +736,7 @@ runTest("dashboardSummaryFromRollups matches legacy (csName-filtered)", async (t
 
 // ── LEADERBOARD ─────────────────────────────────────────────────────────────
 
-runTest("leaderboardFromRollups matches legacy", async (t) => {
+runTest("leaderboardFromRollups matches legacy", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -739,7 +745,7 @@ runTest("leaderboardFromRollups matches legacy", async (t) => {
   }).query(api.analytics.getCsLeaderboard, { startAt: w1Start, endAt: w1End });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).leaderboardFromRollups(ctx, { startAt: w1Start, endAt: w1End })
+    (await import("./rollupReaders")).leaderboardFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w1End })
   );
 
   expect(rollup).toEqual(legacy);
@@ -747,7 +753,7 @@ runTest("leaderboardFromRollups matches legacy", async (t) => {
 
 // ── PRODUCT DIFFICULTY ──────────────────────────────────────────────────────
 
-runTest("productDifficultyFromRollups matches legacy", async (t) => {
+runTest("productDifficultyFromRollups matches legacy", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -760,7 +766,7 @@ runTest("productDifficultyFromRollups matches legacy", async (t) => {
   });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).productDifficultyFromRollups(ctx, {
+    (await import("./rollupReaders")).productDifficultyFromRollups(ctx, defaultOrg as Id<"organizations">, {
       startAt: w1Start,
       endAt: w1End,
       minLeads: 1,
@@ -772,7 +778,7 @@ runTest("productDifficultyFromRollups matches legacy", async (t) => {
 
 // ── PERIOD REPORT ───────────────────────────────────────────────────────────
 
-runTest("periodReportFromRollups matches legacy (week period)", async (t) => {
+runTest("periodReportFromRollups matches legacy (week period)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -784,7 +790,7 @@ runTest("periodReportFromRollups matches legacy (week period)", async (t) => {
   });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).periodReportFromRollups(ctx, {
+    (await import("./rollupReaders")).periodReportFromRollups(ctx, defaultOrg as Id<"organizations">, {
       period: "week",
       anchor: w1Start,
     })
@@ -795,7 +801,7 @@ runTest("periodReportFromRollups matches legacy (week period)", async (t) => {
 
 // ── PERFORMANCE ─────────────────────────────────────────────────────────────
 
-runTest("performanceFromRollups matches legacy (W1)", async (t) => {
+runTest("performanceFromRollups matches legacy (W1)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -804,13 +810,13 @@ runTest("performanceFromRollups matches legacy (W1)", async (t) => {
   }).query(api.shippingRecaps.getPerformance, { startAt: w1Start, endAt: w1End });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).performanceFromRollups(ctx, { startAt: w1Start, endAt: w1End })
+    (await import("./rollupReaders")).performanceFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w1End })
   );
 
   expect(rollup).toEqual(legacy);
 });
 
-runTest("performanceFromRollups matches legacy (csName-filtered)", async (t) => {
+runTest("performanceFromRollups matches legacy (csName-filtered)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -823,7 +829,7 @@ runTest("performanceFromRollups matches legacy (csName-filtered)", async (t) => 
   });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).performanceFromRollups(ctx, {
+    (await import("./rollupReaders")).performanceFromRollups(ctx, defaultOrg as Id<"organizations">, {
       startAt: w1Start,
       endAt: w1End,
       csName: "Lila",
@@ -835,7 +841,7 @@ runTest("performanceFromRollups matches legacy (csName-filtered)", async (t) => 
 
 // ── FOLLOW-UP EFFECTIVENESS ────────────────────────────────────────────────
 
-runTest("followUpEffectivenessFromRollups matches legacy (W1)", async (t) => {
+runTest("followUpEffectivenessFromRollups matches legacy (W1)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -844,13 +850,13 @@ runTest("followUpEffectivenessFromRollups matches legacy (W1)", async (t) => {
   }).query(api.followUp.getFollowUpEffectiveness, { startAt: w1Start, endAt: w1End });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).followUpEffectivenessFromRollups(ctx, { startAt: w1Start, endAt: w1End })
+    (await import("./rollupReaders")).followUpEffectivenessFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w1End })
   );
 
   expect(rollup).toEqual(legacy);
 });
 
-runTest("followUpEffectivenessFromRollups matches legacy (csName-filtered)", async (t) => {
+runTest("followUpEffectivenessFromRollups matches legacy (csName-filtered)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -863,7 +869,7 @@ runTest("followUpEffectivenessFromRollups matches legacy (csName-filtered)", asy
   });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).followUpEffectivenessFromRollups(ctx, {
+    (await import("./rollupReaders")).followUpEffectivenessFromRollups(ctx, defaultOrg as Id<"organizations">, {
       startAt: w1Start,
       endAt: w1End,
       csName: "Azelia",
@@ -873,7 +879,7 @@ runTest("followUpEffectivenessFromRollups matches legacy (csName-filtered)", asy
   expect(rollup).toEqual(legacy);
 });
 
-runTest("followUpEffectivenessFromRollups matches legacy (multi-window range)", async (t) => {
+runTest("followUpEffectivenessFromRollups matches legacy (multi-window range)", async (t, defaultOrg) => {
   const legacy = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -882,14 +888,14 @@ runTest("followUpEffectivenessFromRollups matches legacy (multi-window range)", 
   }).query(api.followUp.getFollowUpEffectiveness, { startAt: w1Start, endAt: w2End });
 
   const rollup = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).followUpEffectivenessFromRollups(ctx, { startAt: w1Start, endAt: w2End })
+    (await import("./rollupReaders")).followUpEffectivenessFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w2End })
   );
 
   expect(rollup).toEqual(legacy);
 });
 
 // Smoke test: public query delegation to rollup reader
-runTest("public getDailyReport (admin identity) matches rollup reader for seeded window", async (t) => {
+runTest("public getDailyReport (admin identity) matches rollup reader for seeded window", async (t, defaultOrg) => {
   const publicResult = await t.withIdentity({
     subject: "a1",
     role: "admin",
@@ -898,7 +904,7 @@ runTest("public getDailyReport (admin identity) matches rollup reader for seeded
   }).query(api.analytics.getDailyReport, { startAt: w1Start, endAt: w1End });
 
   const readerResult = await t.run(async (ctx) =>
-    (await import("./rollupReaders")).dailyReportFromRollups(ctx, { startAt: w1Start, endAt: w1End })
+    (await import("./rollupReaders")).dailyReportFromRollups(ctx, defaultOrg as Id<"organizations">, { startAt: w1Start, endAt: w1End })
   );
 
   expect(publicResult).toEqual(readerResult);

@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { requireAdmin, requireMember, requireAdminOrg } from "./authz";
+import { requireAdmin, requireMember, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isInternalTestPhone, csKey, canonicalizeProduct as canonicalizeProductLib, normalizeProductName as normalizeProductNameLib, windowKeyFor } from "./lib";
@@ -938,7 +938,7 @@ export const markExported = mutation({
 
     // Single batch rollup computation for all affected cs+window pairs
     for (const { k, w } of pairs.values()) {
-      await computeRollupRow(ctx, k, w);
+      await computeRollupRow(ctx, orgId, k, w);
     }
 
     return { success: true, count: args.recapIds.length, exportBatchId: args.exportBatchId };
@@ -949,6 +949,7 @@ export const markDelivered = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")) },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markDelivered");
+    const orgId = await requireDefaultOrgId(ctx);
     const now = Date.now();
     const pairs = new Map<string, { k: string; w: string }>();
 
@@ -981,7 +982,7 @@ export const markDelivered = mutation({
 
     // Single batch rollup computation for all affected cs+window pairs
     for (const { k, w } of pairs.values()) {
-      await computeRollupRow(ctx, k, w);
+      await computeRollupRow(ctx, orgId, k, w);
     }
 
     return { success: true, count: args.recapIds.length };
@@ -1006,6 +1007,7 @@ export const markReadyBulk = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")) },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markReadyBulk");
+    const orgId = await requireDefaultOrgId(ctx);
     const now = Date.now();
     const pairs = new Map<string, { k: string; w: string }>();
 
@@ -1026,7 +1028,7 @@ export const markReadyBulk = mutation({
 
     // Single batch rollup computation for all affected cs+window pairs
     for (const { k, w } of pairs.values()) {
-      await computeRollupRow(ctx, k, w);
+      await computeRollupRow(ctx, orgId, k, w);
     }
 
     return { success: true, count: args.recapIds.length };
@@ -1037,6 +1039,7 @@ export const markCancelledBulk = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")), reason: v.string() },
   handler: async (ctx, args) => {
     await requireAdmin(ctx, "shippingRecaps.markCancelledBulk");
+    const orgId = await requireDefaultOrgId(ctx);
     const now = Date.now();
     const pairs = new Map<string, { k: string; w: string }>();
 
@@ -1070,7 +1073,7 @@ export const markCancelledBulk = mutation({
 
     // Single batch rollup computation for all affected cs+window pairs
     for (const { k, w } of pairs.values()) {
-      await computeRollupRow(ctx, k, w);
+      await computeRollupRow(ctx, orgId, k, w);
     }
 
     return { success: true, count: args.recapIds.length };
@@ -1237,7 +1240,7 @@ export const importBerduVerifiedRows = internalMutation({
 
     // Single batch rollup computation for all affected cs+window pairs
     for (const { k, w } of pairs.values()) {
-      await computeRollupRow(ctx, k, w);
+      await computeRollupRow(ctx, orgId, k, w);
     }
 
     return {
@@ -1474,8 +1477,8 @@ export const getPerformance = query({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "shippingRecaps.getPerformance");
-    return performanceFromRollups(ctx, args);
+    const { orgId } = await requireMemberOrg(ctx, "shippingRecaps.getPerformance");
+    return performanceFromRollups(ctx, orgId, args);
   },
 });
 
