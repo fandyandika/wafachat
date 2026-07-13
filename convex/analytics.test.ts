@@ -39,7 +39,7 @@ test("getCsLeaderboard: per-CS metrics + delta vs prior window, ranked", async (
   // Populate rollups for windows touched by seeded data
   const windowKeys = new Set([windowKeyFor(curWindow.startAt), windowKeyFor(priorWindow.startAt)]);
   for (const windowKey of windowKeys) {
-    await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+    await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
   }
 
   const rows = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: curWindow.startAt, endAt: curWindow.endAt });
@@ -71,7 +71,7 @@ test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
 
   // Populate rollups for the window
   const windowKey = windowKeyFor(t0);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   const rows = await asAdmin.query(api.analytics.getProductDifficulty, { startAt: t0 - 1, endAt: t0 + DAY });
   expect(rows.length).toBe(2);               // Hard + Easy (Rare filtered)
@@ -116,7 +116,7 @@ test("getPeriodReport: week period, current vs prior week + per-CS", async () =>
 
   // Populate all necessary rollups
   for (const windowKey of allWindowsNeeded) {
-    await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+    await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
   }
 
   const r = await asAdmin.query(api.analytics.getPeriodReport, { period: "week", anchor });
@@ -148,7 +148,7 @@ test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async (
 
   // Populate rollups for the window
   const windowKey = windowKeyFor(t0);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   const r = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
   const a = r.cs.find((c) => c.csName === "CS A")!;
@@ -180,7 +180,7 @@ test("getDailyReport: per-CS totals match getCsLeaderboard (no drift)", async ()
 
   // Populate rollups for the window
   const windowKey = windowKeyFor(t0);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   const report = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
   const board = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: t0, endAt: t0 + DAY });
@@ -207,7 +207,7 @@ test("getDailyReport: cross-window closing canonicalizes product via order (no S
 
   // Populate rollups for the window containing the closing (t0)
   const windowKey = windowKeyFor(t0);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   const r = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0, endAt: t0 + DAY });
   const a = r.cs.find((c) => c.csName === "CS A")!;
@@ -231,7 +231,7 @@ test("getCsLeaderboard honors csName via csKey (CS Aisyah == Aisyah)", async () 
 
   // Populate rollups for the window
   const windowKey = windowKeyFor(t0_new);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   const start = Date.parse("2026-06-22T00:00:00+07:00");
   const end = Date.parse("2026-06-23T00:00:00+07:00");
@@ -256,7 +256,7 @@ test("getDailyReport merges raw name variants of one CS into a single card (no f
 
   // Populate rollups for the window
   const windowKey = windowKeyFor(t0);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   const r = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });
   const aisyah = r.cs.filter((c: { csName: string }) => /aisyah/i.test(c.csName));
@@ -280,7 +280,7 @@ test("getPeriodReport honors csName via csKey (CS Aisyah == Aisyah)", async () =
 
   // Populate rollups for the window
   const windowKey = windowKeyFor(t0_new);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   const anchor = t0_new;
   // Query all CSs
@@ -324,7 +324,7 @@ test("CR uses unique CUSTOMERS: an order-double closing twice does not inflate t
 
   // Populate rollups for the window
   const windowKey = windowKeyFor(t0);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   // Daily report: closings stay order-level (volume: 2), CR is customer-level (1 of 2 leads = 50%).
   const daily = await asAdmin.query(api.analytics.getDailyReport, { startAt: t0 - 1, endAt: t0 + DAY });

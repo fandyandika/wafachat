@@ -51,8 +51,8 @@ test("getResponseTimes: first-reply median/p90 + ongoing, template excluded, per
 
   // Populate rollups and samples for the window
   const windowKey = windowKeyFor(t0);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
-  await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
+  await t.mutation(internal.rollups.rebuildSamplesForWindow, { orgId: orgId, windowKey });
 
   const r = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 200000 });
   expect(r.cs.length).toBe(1);
@@ -85,8 +85,8 @@ test("getResponseTimes: csName filter", async () => {
 
   // Populate rollups and samples for the window
   const windowKey = windowKeyFor(t0);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
-  await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
+  await t.mutation(internal.rollups.rebuildSamplesForWindow, { orgId: orgId, windowKey });
 
   const r = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 200000, csName: "CS B" });
   expect(r.cs.length).toBe(1);
@@ -111,8 +111,8 @@ test("getResponseTimes counts SLA breaches (active-hours)", async () => {
 
   // Populate rollups and samples for the window
   const windowKey = windowKeyFor(wib(10, 0));
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
-  await t.mutation(internal.rollups.rebuildSamplesForWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
+  await t.mutation(internal.rollups.rebuildSamplesForWindow, { orgId: orgId, windowKey });
 
   const res = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: wib(0, 0), endAt: wib(23, 59) });
   expect(res.overall.slaBreaches).toBe(1);

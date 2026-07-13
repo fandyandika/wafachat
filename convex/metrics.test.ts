@@ -66,7 +66,7 @@ test("getDashboardSummary: leads/closings/cr from records, handovers from events
 
   // Populate rollups for the window
   const windowKey = windowKeyFor(t0);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   const s = await asAdmin.query(api.metrics.getDashboardSummary, { startAt: t0 - DAY, endAt: t0 + DAY });
   expect(s.leads).toBe(1);
@@ -94,7 +94,7 @@ test("getTrend: buckets leads by order-date and closings by closing-date", async
   // Populate rollups for windows touched by seeded data
   const windowKeys = new Set([windowKeyFor(t0), windowKeyFor(t0 + DAY)]);
   for (const windowKey of windowKeys) {
-    await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+    await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
   }
 
   const trend = await asAdmin.query(api.metrics.getTrend, { startAt: t0 - DAY, endAt: t0 + 2 * DAY, bucket: "day" });
