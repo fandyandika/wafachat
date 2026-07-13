@@ -608,7 +608,7 @@ export const backfillFromMessages = mutation({
     const limit = Math.min(args.limit ?? 300, 1000);
     const messages = await ctx.db
       .query("messages")
-      .withIndex("by_customerPhone_createdAt")
+      .withIndex("by_org_customerPhone_createdAt", (q: any) => q.eq("orgId", orgId))
       .order("desc")
       .take(limit);
     let scanned = 0;
@@ -646,20 +646,20 @@ export const reparseNeedsReview = mutation({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.reparseNeedsReview");
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.reparseNeedsReview");
     const limit = Math.min(args.limit ?? 1000, 2000);
     const rows =
       args.startAt !== undefined && args.endAt !== undefined
         ? await ctx.db
             .query("shippingRecaps")
-            .withIndex("by_status_closedAt", (q) =>
-              q.eq("status", "needs_review").gte("closedAt", args.startAt!).lte("closedAt", args.endAt!),
+            .withIndex("by_org_status_closedAt", (q) =>
+              q.eq("orgId", orgId).eq("status", "needs_review").gte("closedAt", args.startAt!).lte("closedAt", args.endAt!),
             )
             .order("desc")
             .take(limit)
         : await ctx.db
             .query("shippingRecaps")
-            .withIndex("by_status_closedAt", (q) => q.eq("status", "needs_review"))
+            .withIndex("by_org_status_closedAt", (q) => q.eq("orgId", orgId).eq("status", "needs_review"))
             .order("desc")
             .take(limit);
 
@@ -1544,14 +1544,14 @@ export const backfillCsNameByOrderIds = mutation({
 export const renameCsName = mutation({
   args: { from: v.string(), to: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.renameCsName");
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.renameCsName");
     const now = Date.now();
     // B2a: route the hard rename target through the registry so a bulk merge into a
     // registered agent lands on that agent's canonical name+key (unregistered target
     // = same as before: {to, csKey(to)}). Resolve once — `to` is constant.
     const canonTo = await canonicalizeCs(ctx, args.to);
     let orders = 0;
-    for (const o of await ctx.db.query("orders").collect()) {
+    for (const o of await ctx.db.query("orders").collect().then((all) => all.filter((x) => String(x.orgId) === String(orgId)))) {
       if (o.assignedCsName === args.from) {
         const orderBefore = o;
         await ctx.db.patch(o._id, { assignedCsName: canonTo.csName, csKey: canonTo.key, updatedAt: now });
@@ -1561,7 +1561,7 @@ export const renameCsName = mutation({
       }
     }
     let recaps = 0;
-    for (const r of await ctx.db.query("shippingRecaps").collect()) {
+    for (const r of await ctx.db.query("shippingRecaps").collect().then((all) => all.filter((x) => String(x.orgId) === String(orgId)))) {
       if (r.csName === args.from) {
         const recapBefore = r;
         await ctx.db.patch(r._id, { csName: canonTo.csName, csKey: canonTo.key, updatedAt: now });
@@ -1573,7 +1573,7 @@ export const renameCsName = mutation({
     let conversations = 0;
     for (const c of await ctx.db
       .query("conversations")
-      .withIndex("by_assignedCsName_status", (q) => q.eq("assignedCsName", args.from))
+      .withIndex("by_org_assignedCsName_status", (q) => q.eq("orgId", orgId).eq("assignedCsName", args.from))
       .collect()) {
       await ctx.db.patch(c._id, { assignedCsName: canonTo.csName, updatedAt: now });
       conversations++;

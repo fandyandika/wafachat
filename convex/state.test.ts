@@ -68,7 +68,7 @@ test("listOrderCountersByPrefix returns sorted present counters for the date pre
     await ctx.db.insert("orders", { ...base, orderId: "O-260624000012" }); // gap at 11
     await ctx.db.insert("orders", { ...base, orderId: "O-260623000005" }); // different day -> excluded
   });
-  const res = await t.query(internal.state.listOrderCountersByPrefix, { datePrefix: "260624" });
+  const res = await t.query(internal.state.listOrderCountersByPrefix, { datePrefix: "260624", orgId });
   expect(res.counters).toEqual([9, 10, 12]);
   expect(res.min).toBe(9);
   expect(res.max).toBe(12);

@@ -64,8 +64,11 @@ http.route({
     }
 
     if (action === "list_order_counters") {
+      const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
+      if (!orgId) return jsonResponse({ success: false, error: "no default org" }, 500);
       const result = await ctx.runQuery(internal.state.listOrderCountersByPrefix, {
         datePrefix: String(body.datePrefix || ""),
+        orgId,
       });
       return jsonResponse({ ...result, _action: "list_order_counters" });
     }

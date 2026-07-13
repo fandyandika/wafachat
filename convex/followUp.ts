@@ -376,7 +376,7 @@ export const setAutoFollowUp = mutation({
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", normalizedName))
+      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
 
     if (existing) {
@@ -403,10 +403,11 @@ export const setAutoFollowUp = mutation({
 export const getAutoFollowUp = query({
   args: { csName: v.string() },
   handler: async (ctx, args): Promise<{ enabled: boolean }> => {
+    const { orgId } = await requireMemberOrg(ctx, "followUp.getAutoFollowUp");
     const normalizedName = normalizeCsName(args.csName);
     const config = await ctx.db
       .query("csConfigs")
-      .withIndex("by_normalizedName", (q: any) => q.eq("normalizedName", normalizedName))
+      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
     const enabled = config?.autoFollowUpEnabled ?? false;
     return { enabled };

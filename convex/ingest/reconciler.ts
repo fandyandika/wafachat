@@ -50,11 +50,11 @@ export const runReconcile = internalAction({
     // this 5-min cron does not poll all of today's orders for nothing while the order path
     // still runs on n8n. (~all-today's-orders read * 288 runs/day of pure waste otherwise.)
     if (!process.env.BERDU_APP_ID || !process.env.BERDU_USER_ID || !process.env.BERDU_APP_SECRET || !process.env.BERDU_HMAC_KEY) return;
-    const datePrefix = wibDatePrefix(Date.now());
-    const counters = await ctx.runQuery(internal.state.listOrderCountersByPrefix, { datePrefix });
-    const gaps = computeGaps(counters.counters, counters.min, counters.max);
     const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
     if (!orgId) return;
+    const datePrefix = wibDatePrefix(Date.now());
+    const counters = await ctx.runQuery(internal.state.listOrderCountersByPrefix, { datePrefix, orgId });
+    const gaps = computeGaps(counters.counters, counters.min, counters.max);
     let healed = 0;
     for (const c of gaps.slice(0, 50)) { // bound one run
       const orderId = `O-${datePrefix}${String(c).padStart(6, "0")}`;
