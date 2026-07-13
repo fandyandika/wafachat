@@ -3,6 +3,7 @@ import { mutation, internalQuery, query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { requireAdmin } from "./authz";
 import { loadOrgSettings } from "./orgSettings";
+import { hashPassword } from "./passwordHash";
 
 export const DEFAULT_ORG_SLUG = "pustakaislam";
 
@@ -130,5 +131,65 @@ export const orgIdCoverage = query({
       nextCursor: rows.length > 0 ? rows[rows.length - 1]._creationTime : null,
       done: rows.length < limit,
     };
+  },
+});
+
+// B3: admin-provisioned tenant #2 (spec §2.4). One mutation = one Convex
+// transaction: any THROW rolls back everything (no partial org).
+// ⚠️ PROD GUARD: do not run in prod before the T2 config switch is deployed —
+// a second orgSettings key="default" row breaks the OLD global .unique() readers.
+export const provisionOrg = mutation({
+  args: {
+    slug: v.string(),
+    orgName: v.string(),
+    adminEmail: v.string(),
+    adminPassword: v.string(),
+    adminName: v.optional(v.string()),
+    sources: v.array(v.object({
+      kind: v.union(v.literal("kirimdev"), v.literal("berdu"), v.literal("custom")),
+      name: v.string(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx, "orgs.provisionOrg");
+    const slug = args.slug.trim().toLowerCase();
+    if (!/^[a-z0-9-]{3,40}$/.test(slug)) throw new Error(`slug invalid (a-z 0-9 dash, 3-40): ${args.slug}`);
+    const orgName = args.orgName.trim();
+    if (!orgName) throw new Error("orgName kosong");
+    if (args.adminPassword.length < 8) throw new Error("adminPassword minimal 8 karakter");
+    const dupSlug = await ctx.db.query("organizations")
+      .withIndex("by_slug", (q: any) => q.eq("slug", slug)).unique();
+    if (dupSlug) throw new Error(`slug sudah dipakai: ${slug}`);
+    const email = args.adminEmail.trim().toLowerCase();
+    const dupEmail = await ctx.db.query("users")
+      .withIndex("by_email", (q: any) => q.eq("email", email)).unique();
+    if (dupEmail) throw new Error(`email sudah dipakai: ${email}`);
+
+    const now = Date.now();
+    const orgId = await ctx.db.insert("organizations", { slug, name: orgName, createdAt: now, updatedAt: now });
+    await ctx.db.insert("orgSettings", { orgId, key: "default", orgName, internalPhones: [], updatedAt: now });
+    await ctx.db.insert("users", {
+      orgId, email, name: args.adminName?.trim() || `${orgName} Admin`,
+      passwordHash: await hashPassword(args.adminPassword),
+      role: "admin", isActive: true, createdAt: now, updatedAt: now,
+    });
+    const sourceKeys: { sourceKey: string; secret: string }[] = [];
+    for (const s of args.sources) {
+      const sourceKey = `${s.kind}-${slug}`;
+      const dup = await ctx.db.query("ingestSources")
+        .withIndex("by_sourceKey", (q: any) => q.eq("sourceKey", sourceKey)).unique();
+      if (dup) throw new Error(`sourceKey sudah ada: ${sourceKey}`);
+      const bytes = new Uint8Array(32);
+      crypto.getRandomValues(bytes);
+      const secret = "whsec_" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+      // enforceSignature:false = log-only first (auto-disable lesson, 7 Jul);
+      // flip via ingest.sources.setEnforceSignature after live verification.
+      await ctx.db.insert("ingestSources", {
+        orgId, sourceKey, name: s.name, kind: s.kind, secret,
+        enabled: true, enforceSignature: false, createdAt: now,
+      });
+      sourceKeys.push({ sourceKey, secret });
+    }
+    return { orgId, sourceKeys };
   },
 });

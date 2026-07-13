@@ -307,7 +307,9 @@ export default defineSchema({
     key: v.string(),
     value: v.boolean(),
     updatedAt: v.number(),
-  }).index("by_key", ["key"]),
+  })
+    .index("by_key", ["key"])
+    .index("by_org_key", ["orgId", "key"]),
 
   // Single-doc org config (key "default") — Fase A anchor for multi-tenant.
   // Values here override the in-code DEFAULT_ORG_SETTINGS fallback (empty table
@@ -318,7 +320,9 @@ export default defineSchema({
     orgName: v.string(),
     internalPhones: v.array(v.string()),
     updatedAt: v.number(),
-  }).index("by_key", ["key"]),
+  })
+    .index("by_key", ["key"])
+    .index("by_org_key", ["orgId", "key"]),
 
   // Tenant identity — Fase B1. Single row (slug "pustakaislam") until multi-org.
   organizations: defineTable({
@@ -333,7 +337,9 @@ export default defineSchema({
     phrase: v.string(),
     active: v.boolean(),
     createdAt: v.number(),
-  }).index("by_active", ["active"]),
+  })
+    .index("by_active", ["active"])
+    .index("by_org_active", ["orgId", "active"]),
 
   users: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
