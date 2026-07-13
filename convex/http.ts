@@ -213,8 +213,11 @@ http.route({
     if (rawBody.length > MAX_BODY_BYTES) {
       return jsonResponse({ ok: false, error: "payload too large" }, 400);
     }
+    // B3: sourceKey from URL (?source=...). Old bare URL (tenant #1's registered
+    // webhook) keeps working via the legacy alias — do NOT break that contract.
+    const sourceKeyParam = new URL(request.url).searchParams.get("source");
     const source = await ctx.runQuery(internal.ingest.sources.getBySourceKey, {
-      sourceKey: "kirimdev-pustakaislam",
+      sourceKey: sourceKeyParam || "kirimdev-pustakaislam",
     });
     if (!source || !source.enabled) { console.warn("[ingest] unknown/disabled source; acked 200 to avoid vendor auto-disable"); return jsonResponse({ ok: true, ignored: "unknown or disabled source" }, 200); }
 
@@ -261,7 +264,8 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     const rawBody = await request.text();
     if (rawBody.length > MAX_BODY_BYTES) return jsonResponse({ ok: false, error: "payload too large" }, 400);
-    const source = await ctx.runQuery(internal.ingest.sources.getBySourceKey, { sourceKey: "berdu-pustakaislam" });
+    const sourceKeyParam = new URL(request.url).searchParams.get("source");
+    const source = await ctx.runQuery(internal.ingest.sources.getBySourceKey, { sourceKey: sourceKeyParam || "berdu-pustakaislam" });
     if (!source || !source.enabled) { console.warn("[ingest] unknown/disabled source; acked 200 to avoid vendor auto-disable"); return jsonResponse({ ok: true, ignored: "unknown or disabled source" }, 200); }
     const sig = await verifySignature({
       header: request.headers.get("x-wafachat-signature"),
@@ -273,8 +277,12 @@ http.route({
 
     // Thin payload (order_id only) -> enrich BEFORE capture so the stored
     // rawBody is the full order (replayable without re-fetching).
+    // Berdu ENV creds are tenant #1's (spec §1.3): never enrich another org's
+    // thin payload with tenant #1's Berdu account.
+    const defaultOrgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
     let effectiveBody = rawBody;
-    if (!parsedBody.shipping_address && !parsedBody.order?.shipping_address && parsedBody.order_id) {
+    if (String(source.orgId) === String(defaultOrgId) &&
+        !parsedBody.shipping_address && !parsedBody.order?.shipping_address && parsedBody.order_id) {
       const detail = await fetchBerduOrderDetail(String(parsedBody.order_id));
       if (detail) effectiveBody = JSON.stringify({ order: detail });
     }
