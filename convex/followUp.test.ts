@@ -474,7 +474,7 @@ test("getFollowUpEffectiveness: counts closings with FU touches", async () => {
 
   // Populate rollups for the window containing the closing
   const windowKey = windowKeyFor(now);
-  await t.mutation(internal.rollups.recomputeWindow, { windowKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: orgId, windowKey });
 
   const res = await asAdmin.query(api.followUp.getFollowUpEffectiveness, { startAt: now - 1 * HOUR, endAt: now, csName: "Nabila" });
   expect(res.totalClosings).toBe(1);

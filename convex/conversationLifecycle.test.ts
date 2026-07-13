@@ -54,7 +54,7 @@ test("resolveBatch closes WON (recap) + STALE (>5d), keeps FRESH; counts correct
     await ctx.db.insert("orders", { orgId, ...order("O-FRESH", "62803") });
     await ctx.db.insert("messages", { orgId, ...inbound(fresh, "O-FRESH", "62803", now - 2 * HOUR) }); // recent -> in funnel
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
+  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
   expect(r.closedWon).toBe(1);
   expect(r.closedStale).toBe(1);
   await t.run(async (ctx) => {
@@ -73,7 +73,7 @@ test("resolveBatch dryRun reports counts but mutates nothing", async () => {
     await ctx.db.insert("orders", { orgId, ...order("O-S", "62804") });
     await ctx.db.insert("messages", { orgId, ...inbound(stale, "O-S", "62804", now - 6 * DAY) });
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: true, now });
+  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: true, now, orgId });
   expect(r.closedStale).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(stale))!.status).toBe("active");
@@ -88,7 +88,7 @@ test("resolveBatch keeps a brand-new conversation with no inbound yet (not stale
     cId = await ctx.db.insert("conversations", { orgId, ...conv("O-NEW", "62805", { createdAt: now - 2 * HOUR, updatedAt: now - 2 * HOUR }) });
     await ctx.db.insert("orders", { orgId, ...order("O-NEW", "62805") });
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
+  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
   expect(r.closedWon + r.closedStale).toBe(0);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("active");
@@ -105,7 +105,7 @@ test("resolveBatch: a 'done' marker (shopee) in the chat -> closedMarker + close
     await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-MK", "62820", now - 2 * HOUR) }); // fresh -> not stale
     await ctx.db.insert("messages", { orgId, ...outbound(cId, "O-MK", "62820", now - HOUR, "Silakan checkout di shopee ya kak") });
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
+  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
   expect(r.closedMarker).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("closed");
@@ -121,7 +121,7 @@ test("resolveBatch: order-less 'manual:' thread closed by a recap on the custome
     await ctx.db.insert("messages", { orgId, ...inbound(cId, "manual:62821", "62821", now - 2 * HOUR) }); // fresh
     await ctx.db.insert("shippingRecaps", { orgId, ...recap("O-REALC", "62821") }); // recap under a real order, same phone
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
+  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
   expect(r.closedWon).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("closed");
@@ -138,7 +138,7 @@ test("resolveBatch: real-order lead NOT closed by an OLD recap on the same phone
     await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-NEWD", "62822", now - 2 * HOUR) }); // fresh -> not stale
     await ctx.db.insert("shippingRecaps", { orgId, ...recap("O-OLDD", "62822") }); // OLD recap, different order, same phone
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
+  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
   expect(r.closedWon + r.closedMarker + r.closedStale).toBe(0);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("active");
@@ -155,7 +155,7 @@ test("resolveBatch: outbound 'PESANAN COD DIPROSES' -> closedMarker (COD won lea
     await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-COD", "62823", now - 2 * HOUR) }); // fresh -> not stale
     await ctx.db.insert("messages", { orgId, ...outbound(cId, "O-COD", "62823", now - HOUR, "*PESANAN COD DIPROSES* ya kak 🙏") });
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now });
+  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
   expect(r.closedMarker).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("closed");

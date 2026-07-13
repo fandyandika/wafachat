@@ -32,7 +32,7 @@ test("listConversations: closed bounded to today (Jakarta); active+handover alwa
     await ctx.db.insert("conversations", { ...base, orderId: "CO", customerPhone: "62814", status: "closed", updatedAt: now - 2 * DAY });
   });
 
-  const rows = await t.query(internal.state.listConversations, { includeClosed: true });
+  const rows = await t.query(internal.state.listConversations, { includeClosed: true, orgId });
   const phones = rows.map((r) => r.phone);
   expect(phones).toContain("62811"); // active
   expect(phones).toContain("62812"); // handover
@@ -50,7 +50,7 @@ test("listConversations: includeClosed=false omits closed entirely", async () =>
     await ctx.db.insert("conversations", { ...base, orderId: "A", customerPhone: "62811", status: "active", updatedAt: now });
     await ctx.db.insert("conversations", { ...base, orderId: "CT", customerPhone: "62813", status: "closed", updatedAt: now });
   });
-  const rows = await t.query(internal.state.listConversations, { includeClosed: false });
+  const rows = await t.query(internal.state.listConversations, { includeClosed: false, orgId });
   const phones = rows.map((r) => r.phone);
   expect(phones).toContain("62811");
   expect(phones).not.toContain("62813");

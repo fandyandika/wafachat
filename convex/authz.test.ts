@@ -15,6 +15,14 @@ test("enforcement on: anonymous rejected; admin passes; cs passes member but not
   process.env.AUTH_ENFORCE = "on";
   try {
     const t = convexTest(schema);
+    const orgId = await seedOrg(t); // seed default org for requireMemberOrg/requireAdminOrg
+    // Create users rows for org resolution
+    await t.run(async (ctx: any) => {
+      await ctx.db.insert("users", {
+        orgId, email: "c@w", name: "Lina", passwordHash: "x", role: "cs",
+        csName: "Lina", isActive: true, createdAt: 1, updatedAt: 1,
+      });
+    });
     await expect(t.query(api.cs.listCs, {})).rejects.toThrow(/unauthorized/);
 
     const asAdmin = t.withIdentity({ subject: "a1", role: "admin", name: "Admin", email: "a@w" });

@@ -168,8 +168,11 @@ http.route({
 
 
     if (action === "list_all") {
+      const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
+      if (!orgId) return jsonResponse({ success: false, error: "no default org" }, 500);
       const result = await ctx.runQuery(internal.state.listConversations, {
         includeClosed: body.includeClosed === true || body.includeClosed === "true",
+        orgId,
       });
       return jsonResponse({ success: true, conversations: result, _action: "list_all" });
     }
