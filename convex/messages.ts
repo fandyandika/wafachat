@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { requireAdmin, requireMember } from "./authz";
+import { requireAdmin, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizePhone, csKey } from "./lib";
@@ -43,9 +43,8 @@ export const appendMessage = mutation({
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireMember(ctx, "messages.appendMessage");
+    const { orgId } = await requireMemberOrg(ctx, "messages.appendMessage");
     const createdAt = args.createdAt ?? Date.now();
-    const orgId = await requireDefaultOrgId(ctx);
     const messageId = await ctx.db.insert("messages", { ...args, createdAt, orgId });
 
     await ctx.db.patch(args.conversationId, { lastMessageAt: createdAt, updatedAt: createdAt });
@@ -346,6 +345,7 @@ export const appendMessageFromN8n = internalMutation({
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     return appendMessageCore(ctx, { ...args, orgId });
   },

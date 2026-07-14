@@ -48,6 +48,7 @@ export const getHealthSnapshot = internalQuery({
 export const stampAlertIfCool = internalMutation({
   args: { alertKey: v.string(), nowMs: v.number() },
   handler: async (ctx, args) => {
+    // B3: default-org BY DESIGN — infra health monitoring, internal mutation only
     const orgId = await requireDefaultOrgId(ctx);
     const existing = await ctx.db
       .query("alertState")

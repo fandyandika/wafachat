@@ -31,6 +31,7 @@ export const createUser = mutation({
   handler: async (ctx, args) => {
     checkSecret(args.authSecret);
     const email = normEmail(args.email);
+    // B3: default-org BY DESIGN — authSecret-gated panel-compat fallback, no Convex viewer
     const orgId = args.orgId ?? await requireDefaultOrgId(ctx);
     const existing = await ctx.db.query("users").withIndex("by_email", (q) => q.eq("email", email)).unique();
     if (existing) return { ok: false as const, error: "email already exists" };
@@ -111,6 +112,7 @@ export const seedFirstAdmin = mutation({
     const any = await ctx.db.query("users").take(1);
     if (any.length > 0) return { ok: false as const, error: "users already exist" };
     const now = Date.now();
+    // B3: default-org BY DESIGN — authSecret-gated bootstrap, fresh install only
     const orgId = await requireDefaultOrgId(ctx);
     await ctx.db.insert("users", {
       email: normEmail(args.email), name: args.name, passwordHash: await hashPassword(args.password),

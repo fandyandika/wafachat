@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { requireAdmin } from "./authz";
+import { requireAdmin, requireAdminOrg } from "./authz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -111,10 +111,9 @@ export const createTestConversation = mutation({
     productName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "state.createTestConversation");
+    const { orgId } = await requireAdminOrg(ctx, "state.createTestConversation");
     const now = Date.now();
     const phone = normalizePhone(args.phone);
-    const orgId = await requireDefaultOrgId(ctx);
     const canonTest = await canonicalizeCs(ctx, args.csName ?? "CS Aisyah");
     const productName = args.productName ?? "Test Product";
     const orderId = `TEST-${phone}-${Date.now()}`;
@@ -393,6 +392,7 @@ export const upsertOrderFromN8n = internalMutation({
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     return upsertOrderCore(ctx, { ...args, orgId });
   },
@@ -436,6 +436,7 @@ export const setConversationStatusFromN8n = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
@@ -523,9 +524,8 @@ export const markConversationNotClosing = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "state.markConversationNotClosing");
+    const { orgId } = await requireAdminOrg(ctx, "state.markConversationNotClosing");
     const now = Date.now();
-    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
@@ -594,9 +594,8 @@ export const markConversationCancelled = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "state.markConversationCancelled");
+    const { orgId } = await requireAdminOrg(ctx, "state.markConversationCancelled");
     const now = Date.now();
-    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
@@ -654,9 +653,8 @@ export const undoConversationCancelled = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "state.undoConversationCancelled");
+    const { orgId } = await requireAdminOrg(ctx, "state.undoConversationCancelled");
     const now = Date.now();
-    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
@@ -711,9 +709,8 @@ export const markConversationClosing = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "state.markConversationClosing");
+    const { orgId } = await requireAdminOrg(ctx, "state.markConversationClosing");
     const now = Date.now();
-    const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
@@ -765,8 +762,7 @@ export const deleteConversationOrder = mutation({
     order_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "state.deleteConversationOrder");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "state.deleteConversationOrder");
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
@@ -862,6 +858,7 @@ export const recordStatEventFromN8n = internalMutation({
     source: v.optional(v.union(v.literal("ai"), v.literal("manual"))),
   },
   handler: async (ctx, args) => {
+    // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     if (args.phone && EXCLUDED_PHONES.has(normalizePhone(args.phone))) {
       return { success: true, skipped: true, reason: "excluded_phone", _action: "increment_stat" };
@@ -1069,6 +1066,7 @@ export const getConversationContextForN8n = internalQuery({
   args: { phone: v.string(), messageLimit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const phone = normalizePhone(args.phone);
+    // B3: default-org BY DESIGN — n8n internal query, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getLatestConversationByPhone(ctx, phone, orgId);
     const globalEnabled = await getGlobalEnabled(ctx);

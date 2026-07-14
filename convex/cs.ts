@@ -3,7 +3,6 @@ import { requireAdmin, requireMember, requireAdminOrg, requireMemberOrg } from "
 import { v } from "convex/values";
 import { csKey, normalizeCsName } from "./lib";
 import { DEFAULT_CONFIGS } from "./csConfigs";
-import { requireDefaultOrgId } from "./orgs";
 
 type CsRow = {
   csName: string; normalizedName: string; key: string; avatarUrl: string | null;

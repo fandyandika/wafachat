@@ -1,7 +1,6 @@
 import { mutation } from "./_generated/server";
-import { requireAdmin } from "./authz";
+import { requireAdminOrg } from "./authz";
 import { v } from "convex/values";
-import { requireDefaultOrgId } from "./orgs";
 
 export const appendEvent = mutation({
   args: {
@@ -25,8 +24,7 @@ export const appendEvent = mutation({
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "events.appendEvent");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "events.appendEvent");
     const eventId = await ctx.db.insert("events", {
       ...args,
       createdAt: args.createdAt ?? Date.now(),

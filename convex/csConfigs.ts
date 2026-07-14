@@ -3,7 +3,6 @@ import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizeCsName, csKey } from "./lib";
-import { requireDefaultOrgId } from "./orgs";
 
 export type CsFeatureConfig = {
   csName: string;

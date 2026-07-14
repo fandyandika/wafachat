@@ -7,7 +7,6 @@ import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile, pairResponseEvents, isSlaBreach, type RtMessage } from "./responseTimeMath";
 import { responseTimesFromSamples } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
-import { requireDefaultOrgId } from "./orgs";
 
 export const getResponseTimes = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },

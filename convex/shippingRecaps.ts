@@ -353,6 +353,7 @@ export const upsertFromN8n = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     const closedAt = args.closedAt ?? now;
     const order = await findOrder(ctx, { orderIdBerdu: args.orderIdBerdu, customerPhone: args.customerPhone }, orgId);
@@ -451,9 +452,8 @@ export const createFromPanelClosing = mutation({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.createFromPanelClosing");
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.createFromPanelClosing");
     const now = Date.now();
-    const orgId = await requireDefaultOrgId(ctx);
     const order = await findOrder(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone }, orgId);
     const conversation = await findConversation(ctx, { orderIdBerdu: args.orderId, customerPhone: args.customerPhone }, orgId);
     const existing = await findExistingRecap(ctx, {
@@ -603,8 +603,7 @@ export const backfillFromMessages = mutation({
     force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.backfillFromMessages");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.backfillFromMessages");
     const limit = Math.min(args.limit ?? 300, 1000);
     const messages = await ctx.db
       .query("messages")
@@ -835,8 +834,7 @@ export const markReady = mutation({
 export const markCancelled = mutation({
   args: { recapId: v.id("shippingRecaps"), reason: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.markCancelled");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.markCancelled");
     const row = await ctx.db.get(args.recapId);
     if (!row) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.status === "exported" ? "cancelled_after_export" : "cancelled";
@@ -867,8 +865,7 @@ export const markCancelled = mutation({
 export const undoCancelled = mutation({
   args: { recapId: v.id("shippingRecaps") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.undoCancelled");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.undoCancelled");
     const row = await ctx.db.get(args.recapId);
     if (!row) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.flags.length > 0 ? "needs_review" : "ready";
@@ -899,8 +896,7 @@ export const undoCancelled = mutation({
 export const markExported = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")), exportBatchId: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.markExported");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.markExported");
     const now = Date.now();
     const pairs = new Map<string, { k: string; w: string }>();
 
@@ -948,8 +944,7 @@ export const markExported = mutation({
 export const markDelivered = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")) },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.markDelivered");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.markDelivered");
     const now = Date.now();
     const pairs = new Map<string, { k: string; w: string }>();
 
@@ -1006,8 +1001,7 @@ export const undoDelivered = mutation({
 export const markReadyBulk = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")) },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.markReadyBulk");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.markReadyBulk");
     const now = Date.now();
     const pairs = new Map<string, { k: string; w: string }>();
 
@@ -1038,8 +1032,7 @@ export const markReadyBulk = mutation({
 export const markCancelledBulk = mutation({
   args: { recapIds: v.array(v.id("shippingRecaps")), reason: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.markCancelledBulk");
-    const orgId = await requireDefaultOrgId(ctx);
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.markCancelledBulk");
     const now = Date.now();
     const pairs = new Map<string, { k: string; w: string }>();
 
@@ -1134,6 +1127,7 @@ export const importBerduVerifiedRows = internalMutation({
     importBatchId: v.string(),
   },
   handler: async (ctx, args) => {
+    // B3: default-org BY DESIGN — n8n internal mutation (Berdu import), no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     const now = Date.now();
     const results: Array<{ orderIdBerdu: string; recapId: Id<"shippingRecaps">; action: "inserted" | "updated" }> = [];

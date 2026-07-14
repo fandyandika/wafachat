@@ -200,6 +200,7 @@ export const stampFollowUp = internalMutation({
   args: { conversationId: v.id("conversations"), stage: v.number(), at: v.number(),
           orderId: v.string(), customerPhone: v.string(), content: v.string() },
   handler: async (ctx, a) => {
+    // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     // Feature #8: clear override after send; auto-staging resumes next check.
     await ctx.db.patch(a.conversationId, { followUpStage: a.stage, followUpStageAt: a.at, followUpStageOverride: undefined, updatedAt: a.at });
@@ -372,6 +373,7 @@ export const setAutoFollowUp = mutation({
       return { ok: false, error: "unauthorized" };
     }
     const now = Date.now();
+    // B3: default-org BY DESIGN — authSecret-gated, no Convex viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     const normalizedName = normalizeCsName(args.csName);
     const existing = await ctx.db
