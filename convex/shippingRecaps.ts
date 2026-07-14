@@ -804,9 +804,10 @@ export const updateFields = mutation({
     specialBonus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.updateFields");
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.updateFields");
     const { recapId, ...patch } = args;
     const before = await ctx.db.get(recapId);
+    if (!before || String(before.orgId) !== String(orgId)) return { success: false, error: "recap not found" };
     await ctx.db.patch(recapId, {
       ...patch,
       status: "ready",
@@ -822,8 +823,9 @@ export const updateFields = mutation({
 export const markReady = mutation({
   args: { recapId: v.id("shippingRecaps") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.markReady");
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.markReady");
     const before = await ctx.db.get(args.recapId);
+    if (!before || String(before.orgId) !== String(orgId)) return { success: false, error: "recap not found" };
     await ctx.db.patch(args.recapId, { status: "ready", flags: [], updatedAt: Date.now() });
     const after = await ctx.db.get(args.recapId);
     await bumpForRecapDoc(ctx, before, after);
@@ -836,7 +838,7 @@ export const markCancelled = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.markCancelled");
     const row = await ctx.db.get(args.recapId);
-    if (!row) return { success: false, error: "recap not found" };
+    if (!row || String(row.orgId) !== String(orgId)) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.status === "exported" ? "cancelled_after_export" : "cancelled";
     const now = Date.now();
     const before = row;
@@ -867,7 +869,7 @@ export const undoCancelled = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.undoCancelled");
     const row = await ctx.db.get(args.recapId);
-    if (!row) return { success: false, error: "recap not found" };
+    if (!row || String(row.orgId) !== String(orgId)) return { success: false, error: "recap not found" };
     const status: RecapStatus = row.flags.length > 0 ? "needs_review" : "ready";
     const now = Date.now();
     const before = row;
@@ -902,7 +904,7 @@ export const markExported = mutation({
 
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
-      if (!row) continue;
+      if (!row || String(row.orgId) !== String(orgId)) continue;
       const before = row;
       await ctx.db.patch(recapId, {
         status: "exported",
@@ -950,7 +952,7 @@ export const markDelivered = mutation({
 
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
-      if (!row) continue;
+      if (!row || String(row.orgId) !== String(orgId)) continue;
       const before = row;
       await ctx.db.patch(recapId, { status: "delivered", deliveredAt: now, updatedAt: now });
       const after = await ctx.db.get(recapId);
@@ -987,9 +989,9 @@ export const markDelivered = mutation({
 export const undoDelivered = mutation({
   args: { recapId: v.id("shippingRecaps") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "shippingRecaps.undoDelivered");
+    const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.undoDelivered");
     const row = await ctx.db.get(args.recapId);
-    if (!row) return { success: false, error: "recap not found" };
+    if (!row || String(row.orgId) !== String(orgId)) return { success: false, error: "recap not found" };
     const before = row;
     await ctx.db.patch(args.recapId, { status: "exported", deliveredAt: undefined, updatedAt: Date.now() });
     const after = await ctx.db.get(args.recapId);
@@ -1007,7 +1009,7 @@ export const markReadyBulk = mutation({
 
     for (const recapId of args.recapIds) {
       const before = await ctx.db.get(recapId);
-      if (!before) continue;
+      if (!before || String(before.orgId) !== String(orgId)) continue;
       await ctx.db.patch(recapId, { status: "ready", flags: [], updatedAt: now });
       const after = await ctx.db.get(recapId);
 
@@ -1038,7 +1040,7 @@ export const markCancelledBulk = mutation({
 
     for (const recapId of args.recapIds) {
       const row = await ctx.db.get(recapId);
-      if (!row) continue;
+      if (!row || String(row.orgId) !== String(orgId)) continue;
       const status: RecapStatus = row.status === "exported" || row.status === "delivered" ? "cancelled_after_export" : "cancelled";
       const before = row;
       await ctx.db.patch(recapId, { status, cancelReason: args.reason, cancelledAt: now, updatedAt: now });

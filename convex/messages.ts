@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { requireAdmin, requireMemberOrg } from "./authz";
+import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizePhone, csKey } from "./lib";
@@ -89,9 +89,9 @@ export const listMessages = query({
 export const deleteMessage = mutation({
   args: { messageId: v.id("messages") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx, "messages.deleteMessage");
+    const { orgId } = await requireAdminOrg(ctx, "messages.deleteMessage");
     const message = await ctx.db.get(args.messageId);
-    if (!message) return { success: false, error: "message not found" };
+    if (!message || String(message.orgId) !== String(orgId)) return { success: false, error: "message not found" };
 
     await ctx.db.delete(args.messageId);
     await ctx.db.insert("events", {
