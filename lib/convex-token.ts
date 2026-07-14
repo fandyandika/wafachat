@@ -23,7 +23,7 @@ async function privateKey() {
 }
 
 export async function signConvexToken(s: Session): Promise<string> {
-  return new SignJWT({ role: s.role, name: s.name, email: s.email, csName: s.csName })
+  return new SignJWT({ role: s.role, name: s.name, email: s.email, csName: s.csName, orgId: s.orgId })
     .setProtectedHeader({ alg: "RS256", kid: CONVEX_JWT_KID })
     .setSubject(s.userId)
     .setIssuer(CONVEX_JWT_ISSUER)

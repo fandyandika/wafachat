@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ConvexHttpClient } from 'convex/browser';
 import { api } from '@/convex/_generated/api';
 import { verifySession } from '@/lib/auth-jwt';
+import type { Id } from '@/convex/_generated/dataModel';
 
 const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
 const secret = () => process.env.PANEL_AUTH_SECRET!;
@@ -18,11 +19,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await requireAdmin(req))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  const session = await requireAdmin(req);
+  if (!session) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   const body = await req.json();
   const s = secret();
   if (body.action === 'create') {
-    const r = await convex.mutation(api.auth.createUser, { authSecret: s, email: String(body.email), name: String(body.name), role: body.role === 'admin' ? 'admin' : 'cs', password: String(body.password), csName: body.csName ? String(body.csName) : undefined });
+    const r = await convex.mutation(api.auth.createUser, { authSecret: s, email: String(body.email), name: String(body.name), role: body.role === 'admin' ? 'admin' : 'cs', password: String(body.password), csName: body.csName ? String(body.csName) : undefined, orgId: session.orgId as Id<"organizations"> | undefined });
     return NextResponse.json(r, { status: r.ok ? 200 : 400 });
   }
   if (body.action === 'update') {

@@ -22,16 +22,16 @@ export const verifyCredentials = mutation({
     if (!user || !user.isActive) return { ok: false as const };
     if (!(await verifyPassword(args.password, user.passwordHash))) return { ok: false as const };
     await ctx.db.patch(user._id, { lastLoginAt: Date.now() });
-    return { ok: true as const, userId: user._id, role: user.role, name: user.name, email: user.email, csName: user.csName };
+    return { ok: true as const, userId: user._id, role: user.role, name: user.name, email: user.email, csName: user.csName, orgId: String(user.orgId) };
   },
 });
 
 export const createUser = mutation({
-  args: { authSecret: v.string(), email: v.string(), name: v.string(), role: roleValidator, password: v.string(), csName: v.optional(v.string()) },
+  args: { authSecret: v.string(), email: v.string(), name: v.string(), role: roleValidator, password: v.string(), csName: v.optional(v.string()), orgId: v.optional(v.id("organizations")) },
   handler: async (ctx, args) => {
     checkSecret(args.authSecret);
     const email = normEmail(args.email);
-    const orgId = await requireDefaultOrgId(ctx);
+    const orgId = args.orgId ?? await requireDefaultOrgId(ctx);
     const existing = await ctx.db.query("users").withIndex("by_email", (q) => q.eq("email", email)).unique();
     if (existing) return { ok: false as const, error: "email already exists" };
     const now = Date.now();

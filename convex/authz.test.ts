@@ -81,3 +81,17 @@ test("requireMemberOrg: admin fallback with NO org seeded throws clearly", async
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await expect(asAdmin.query(api.authz.probeOrg, {})).rejects.toThrow(/org not seeded/);
 });
+
+test("resolveViewerOrg: orgId claim must match users row; mismatch THROWs; matching claim resolves", async () => {
+  const t = convexTest(schema);
+  const orgA = await t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "PI", createdAt: 1, updatedAt: 1 }));
+  const orgB = await t.run((ctx: any) => ctx.db.insert("organizations", { slug: "org-b", name: "B", createdAt: 1, updatedAt: 1 }));
+  await t.run((ctx: any) => ctx.db.insert("users", { orgId: orgA, email: "a@t.co", name: "A", passwordHash: "x", role: "admin", isActive: true, createdAt: 1, updatedAt: 1 }));
+  const ok = await t.withIdentity({ subject: "u", role: "admin", name: "A", email: "a@t.co", orgId: String(orgA) } as any)
+    .query(api.authz.probeOrg, {});
+  expect(String(ok.orgId)).toBe(String(orgA));
+  await expect(
+    t.withIdentity({ subject: "u", role: "admin", name: "A", email: "a@t.co", orgId: String(orgB) } as any)
+      .query(api.authz.probeOrg, {}),
+  ).rejects.toThrow(/org/);
+});

@@ -20,6 +20,7 @@ export type Viewer = {
   name: string;
   email: string;
   csName?: string;
+  orgIdClaim?: string;
 };
 
 // FLIPPED 2026-07-07 after verification: identity chain proven end-to-end (prod token ->
@@ -45,6 +46,7 @@ export async function getViewer(ctx: { auth: { getUserIdentity: () => Promise<Re
     name: typeof id.name === "string" ? id.name : "",
     email: typeof id.email === "string" ? id.email : "",
     csName: typeof id.csName === "string" ? id.csName : undefined,
+    orgIdClaim: typeof id.orgId === "string" ? id.orgId : undefined,
   };
 }
 
@@ -83,12 +85,19 @@ export async function requireAdmin(ctx: Parameters<typeof getViewer>[0], fn: str
 export type ViewerOrg = { viewer: Viewer; orgId: Id<"organizations"> };
 
 async function resolveViewerOrg(ctx: any, viewer: Viewer, fn: string): Promise<Id<"organizations">> {
-  const userRow = await ctx.db
-    .query("users")
-    .withIndex("by_email", (q: any) => q.eq("email", viewer.email))
-    .unique();
+  const userRow = await ctx.db.query("users")
+    .withIndex("by_email", (q: any) => q.eq("email", viewer.email)).unique();
+  // B3: a token orgId claim is a HINT, never an authority — it must match the
+  // users row (defense vs stale/forged claims after an org move).
+  if (viewer.orgIdClaim) {
+    if (!userRow) throw new Error(`unauthorized: ${fn} — org claim but no user record for ${viewer.email}`);
+    if (String(userRow.orgId) !== viewer.orgIdClaim) throw new Error(`unauthorized: ${fn} — org claim mismatch`);
+    return userRow.orgId;
+  }
   if (userRow) return userRow.orgId;
   if (viewer.role === "admin") {
+    // _admin.mjs platform-operator token (no users row, no claim): default org.
+    // PERMANENT single-operator semantics (spec §2.3), not a temporary shim.
     const fallback = await getDefaultOrgId(ctx);
     if (fallback) return fallback;
     throw new Error(`unauthorized: ${fn} — org not seeded`);
