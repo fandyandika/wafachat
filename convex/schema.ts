@@ -308,7 +308,6 @@ export default defineSchema({
     value: v.boolean(),
     updatedAt: v.number(),
   })
-    .index("by_key", ["key"])
     .index("by_org_key", ["orgId", "key"]),
 
   // Single-doc org config (key "default") — Fase A anchor for multi-tenant.
@@ -321,7 +320,6 @@ export default defineSchema({
     internalPhones: v.array(v.string()),
     updatedAt: v.number(),
   })
-    .index("by_key", ["key"])
     .index("by_org_key", ["orgId", "key"]),
 
   // Tenant identity — Fase B1. Single row (slug "pustakaislam") until multi-org.
@@ -338,7 +336,6 @@ export default defineSchema({
     active: v.boolean(),
     createdAt: v.number(),
   })
-    .index("by_active", ["active"])
     .index("by_org_active", ["orgId", "active"]),
 
   users: defineTable({

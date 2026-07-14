@@ -21,10 +21,10 @@ const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.li
 
 const EXCLUDED_PHONES = new Set(["6285715682110", "6285774076061", "628211900201"]);
 
-async function getGlobalEnabled(ctx: { db: any }): Promise<boolean> {
+async function getGlobalEnabled(ctx: { db: any }, orgId: Id<"organizations">): Promise<boolean> {
   const setting = await ctx.db
     .query("settings")
-    .withIndex("by_key", (q: any) => q.eq("key", "global_ai_enabled"))
+    .withIndex("by_org_key", (q: any) => q.eq("orgId", orgId).eq("key", "global_ai_enabled"))
     .unique();
 
   return setting?.value !== false;
@@ -1044,7 +1044,9 @@ export const getDailyStats = internalQuery({
 export const health = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const globalEnabled = await getGlobalEnabled(ctx);
+    // B3: default-org BY DESIGN — infra health check, no viewer identity
+    const orgId = await requireDefaultOrgId(ctx);
+    const globalEnabled = await getGlobalEnabled(ctx, orgId);
     const date = getJakartaDate();
     await ctx.db
       .query("dailyStats")
@@ -1069,7 +1071,7 @@ export const getConversationContextForN8n = internalQuery({
     // B3: default-org BY DESIGN — n8n internal query, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     const conversation = await getLatestConversationByPhone(ctx, phone, orgId);
-    const globalEnabled = await getGlobalEnabled(ctx);
+    const globalEnabled = await getGlobalEnabled(ctx, orgId);
 
     if (!conversation) {
       return {
