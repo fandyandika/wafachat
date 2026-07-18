@@ -18,3 +18,13 @@ WaFaChat is the WhatsApp CS automation and reporting workspace for Pustaka Islam
 ## Source Of Truth
 
 Keep project-owned files inside this `wafachat/` repository. The parent folder can contain local machine config such as `.mcp.json`, but app code, n8n workflow exports, product knowledge, prompts, plans, and rollback backups should live here so they can be reviewed and committed together.
+
+## Brand Assets
+
+Install the pinned image-tool dependency, then validate or regenerate the committed brand assets:
+
+```powershell
+python -m pip install -r requirements-brand.txt
+npm run test:brand-assets
+npm run prepare:brand-assets
+```
