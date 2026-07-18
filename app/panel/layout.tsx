@@ -3,7 +3,7 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Bot, LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings, LogOut } from 'lucide-react';
+import { LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings, LogOut } from 'lucide-react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { cn } from '@/lib/utils';
@@ -63,15 +63,12 @@ function PanelShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-screen">
         <aside className={cn('hidden w-64 shrink-0 border-r border-border bg-card/60 md:flex md:flex-col', navHidden && 'md:hidden')}>
           <div className="px-6 py-6">
-            <div className="flex items-center gap-3">
-              <div className="flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
-                <Bot className="size-5" />
-              </div>
-              <div>
-                <div className="text-sm font-semibold leading-none text-foreground">WaFaChat</div>
-                <div className="mt-1 text-xs text-muted-foreground">CS Automation</div>
-              </div>
-            </div>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/brand/wafachat-wordmark.png"
+              alt="WaFaChat"
+              className="h-10 w-auto max-w-full object-contain object-left"
+            />
           </div>
           <nav className="flex-1 space-y-1 px-4">
             {navItems.map((item) => {
@@ -120,8 +117,11 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
                 <span className="hidden h-6 w-px bg-border sm:block" />
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/logo.png" alt="Pustaka Islam" className="hidden h-6 w-auto sm:block" />
-                <span className="text-xs text-muted-foreground">via WaFaChat</span>
+                <img
+                  src="/brand/wafachat-wordmark.png"
+                  alt="WaFaChat"
+                  className="hidden h-6 w-auto max-w-[140px] object-contain sm:block"
+                />
               </div>
               {!isFollowUp && (
               <div className="flex flex-wrap items-center gap-3">

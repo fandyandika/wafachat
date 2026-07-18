@@ -10,6 +10,13 @@ const sans = Plus_Jakarta_Sans({ subsets: ['latin'], variable: '--font-sans', di
 export const metadata: Metadata = {
   title: 'WaFaChat',
   description: 'WaFaChat CS Control Panel',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/icon.png', type: 'image/png', sizes: '512x512' },
+    ],
+    apple: [{ url: '/apple-icon.png', type: 'image/png', sizes: '180x180' }],
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

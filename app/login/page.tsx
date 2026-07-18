@@ -1,7 +1,6 @@
 'use client';
 import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { Bot } from 'lucide-react';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -31,13 +30,13 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm">
-            <Bot className="size-6" />
-          </div>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
-            Pustaka<span className="text-primary">Islam</span>
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">CS AI Panel</p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/brand/wafachat-wordmark.png"
+            alt="WaFaChat"
+            className="mx-auto h-16 w-auto max-w-[260px] object-contain"
+          />
+          <p className="mt-2 text-sm text-muted-foreground">CS AI Panel</p>
         </div>
         <form
           onSubmit={handleSubmit}
