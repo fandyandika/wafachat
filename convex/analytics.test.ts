@@ -88,9 +88,8 @@ test("getPeriodReport: week period, current vs prior week + per-CS", async () =>
   const anchor = Date.parse("2026-06-21T16:01:00+07:00"); // Just after 16:00 WIB on Monday
   const curWeekStart = windowRangeForKey(windowKeyFor(anchor));
 
-  // Go back exactly 14 days (2 weeks) to ensure completely separate windows
-  // Then go forward 7 days to get the start of the prior week
-  const priorWeekStart = windowRangeForKey(windowKeyFor(anchor - 14 * DAY));
+  // Place the comparison row inside the immediately preceding calendar week.
+  const priorWeekStart = windowRangeForKey(windowKeyFor(anchor - 7 * DAY));
 
   // Populate ALL windows that might be queried
   const allWindowsNeeded = new Set<string>();
@@ -110,7 +109,7 @@ test("getPeriodReport: week period, current vs prior week + per-CS", async () =>
     await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "C1", customerPhone: "62811", assignedCsName: "CS A", productName: "Q", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
     await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "C2", customerPhone: "62812", assignedCsName: "CS A", productName: "Q", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
     await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "C1", customerPhone: "62811", customerName: "A", csName: "CS A", closedAt: curWeekStart.startAt + 100, total: 50000, status: "ready", createdAt: curWeekStart.startAt + 100, updatedAt: curWeekStart.startAt + 100 });
-    // prior week: 1 lead (14 days back)
+    // prior week: 1 lead
     await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "P1", customerPhone: "62820", assignedCsName: "CS A", productName: "Q", createdAt: priorWeekStart.startAt + 100, updatedAt: priorWeekStart.startAt + 100 });
   });
 

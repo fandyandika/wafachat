@@ -4,7 +4,7 @@ import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct, startOfJakartaDayMs, isWindowAlignedRange } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
-import { dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRollups, periodReportFromRollups } from "./rollupReaders";
+import { areRollupWindowsComplete, dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRollups, periodReportFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
 
 // leads/closedCust are keyed by customer PHONE (unique customers); closings by ORDER
@@ -17,10 +17,10 @@ async function computeCsAgg(ctx: any, orgId: Id<"organizations">, startAt: numbe
   const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = csName ? csKey(csName) : null;
   const orders = (
-    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)).collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
   const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)).collect()
   ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKey(r.csName) === key));
 
   // Group by csKey so a CS's raw name-forms ("Aisyah"/"CS Aisyah") merge into one row.
@@ -80,7 +80,12 @@ export const getCsLeaderboard = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getCsLeaderboard");
-    return args.raw || !isWindowAlignedRange(args.startAt, args.endAt) ? computeCsLeaderboardRaw(ctx, orgId, args) : leaderboardFromRollups(ctx, orgId, args);
+    const length = args.endAt - args.startAt;
+    const complete = await areRollupWindowsComplete(ctx, orgId, args.startAt, args.endAt)
+      && await areRollupWindowsComplete(ctx, orgId, args.startAt - length, args.startAt);
+    return args.raw || !isWindowAlignedRange(args.startAt, args.endAt) || !complete
+      ? computeCsLeaderboardRaw(ctx, orgId, args)
+      : leaderboardFromRollups(ctx, orgId, args);
   },
 });
 
@@ -88,10 +93,10 @@ async function computeProductAgg(ctx: any, orgId: Id<"organizations">, startAt: 
   const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = csName ? csKey(csName) : null;
   const orders = (
-    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)).collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
   const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)).collect()
   ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKey(r.csName) === key));
 
   const leads = new Map<string, number>();
@@ -266,10 +271,10 @@ export const getCsDetail = query({
 export async function computeDailyReportRaw(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number) {
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const orders = (
-      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
     const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)).collect()
     ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones));
 
     // Resolve a closing's product to the matched in-window order's name (anti-fragmentation),
@@ -411,7 +416,7 @@ export const getDailyReport = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getDailyReport");
-    return isWindowAlignedRange(args.startAt, args.endAt)
+    return isWindowAlignedRange(args.startAt, args.endAt) && await areRollupWindowsComplete(ctx, orgId, args.startAt, args.endAt)
       ? dailyReportFromRollups(ctx, orgId, args)
       : computeDailyReportRaw(ctx, orgId, args.startAt, args.endAt);
   },

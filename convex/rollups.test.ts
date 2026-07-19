@@ -84,6 +84,20 @@ test("empty window produces no row", async () => {
   expect(rows).toHaveLength(0);
 });
 
+test("cancelled payment methods remain in top-level COD and transfer facts", async () => {
+  const t = convexTest(schema);
+  await seedDefaultOrg(t);
+  await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    await ctx.db.insert("shippingRecaps", { orgId, csKey: "azelia", customerPhone: "6281000000091", customerName: "C", csName: "Azelia", orderIdBerdu: "PAY-COD", status: "cancelled", total: 10, packageContent: "Buku", closedAt: t0 + 10, recipientName: "C", recipientPhone: "6281000000091", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "cod", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
+    await ctx.db.insert("shippingRecaps", { orgId, csKey: "azelia", customerPhone: "6281000000092", customerName: "T", csName: "Azelia", orderIdBerdu: "PAY-TRANSFER", status: "cancelled_after_export", total: 20, packageContent: "Buku", closedAt: t0 + 20, recipientName: "T", recipientPhone: "6281000000092", recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "transfer", sourceMessageText: "", flags: [], createdAt: t0, updatedAt: t0, version: 1 } as any);
+  });
+  const orgId = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+  const row = await t.run(async (ctx) => (ctx.db.query("dailyRollups") as any).withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", W)).first());
+  expect(row).toMatchObject({ closings: 0, cancelled: 2, cod: 1, transfer: 1 });
+});
+
 test("orphan recap attributed via order fallback like legacy", async () => {
   const t = convexTest(schema);
   await seedDefaultOrg(t);

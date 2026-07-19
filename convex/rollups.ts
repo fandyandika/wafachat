@@ -7,6 +7,7 @@ import { csKey as csKeyOf, isInternalTestPhone, normalizePhone, windowKeyFor, wi
 import { canonicalizeProduct } from "./shippingRecaps";
 import { pairResponsePairs, isSlaBreach, type RtMessage } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
+import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
 
 const PRODUCT_CAP = 50;
 // Production showed 40 windows exceeded Convex mutation limits.
@@ -44,14 +45,14 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
   // whole window (kills the O(window^2) write-amplification). Exclude internal test phones.
   const orders = (
     await ctx.db.query("orders")
-      .withIndex("by_org_csKey_createdAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("createdAt", startAt).lte("createdAt", endAt))
+      .withIndex("by_org_csKey_createdAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("createdAt", startAt).lt("createdAt", endAt))
       .collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
 
   // Fetch THIS CS's recaps in the window in ONE read; split active vs cancelled in memory.
   const recapsAll = (
     await ctx.db.query("shippingRecaps")
-      .withIndex("by_org_csKey_closedAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("closedAt", startAt).lte("closedAt", endAt))
+      .withIndex("by_org_csKey_closedAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("closedAt", startAt).lt("closedAt", endAt))
       .collect()
   ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
   const recaps = recapsAll.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export");
@@ -109,8 +110,8 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
   const closedCust = new Set<string>();
   let revenue = 0;
   let discount = 0;
-  let cod = 0;
-  let transfer = 0;
+  const cod = recapsAll.filter((r: any) => r.paymentMethod === "cod").length;
+  const transfer = recapsAll.filter((r: any) => r.paymentMethod === "transfer").length;
   let manualClosings = 0;
   let delivered = 0;
   let fuClosings = 0;
@@ -122,8 +123,6 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
     closedCust.add(normalizePhone(r.customerPhone));
     revenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
     discount += r.discount ?? 0;
-    if (r.paymentMethod === "cod") cod += 1;
-    if (r.paymentMethod === "transfer") transfer += 1;
     if (!r.sourceMessageId) manualClosings += 1;
     if (r.status === "delivered") delivered += 1;
     const touchCount = r.followUpTouchesAtClose ?? 0;
@@ -296,7 +295,7 @@ export async function recomputeWindowImpl(ctx: any, orgId: Id<"organizations">, 
 
   // Collect csKeys from orders in the window
   const orders = (
-    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)).collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
   for (const o of orders) {
     // Self-heal: stamp csKey if a doc predates the field or a write site missed it.
@@ -308,7 +307,7 @@ export async function recomputeWindowImpl(ctx: any, orgId: Id<"organizations">, 
 
   // Collect csKeys from recaps in the window (including orphan attribution)
   const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)).collect()
   ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
   for (const r of recaps) {
     if (r.csKey === undefined) await ctx.db.patch(r._id, { csKey: csKeyOf(r.csName) });
@@ -328,6 +327,13 @@ export async function recomputeWindowImpl(ctx: any, orgId: Id<"organizations">, 
     await computeRollupRow(ctx, orgId, k, windowKey);
   }
 
+  const marker = await ctx.db.query("rollupWindows")
+    .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey))
+    .unique();
+  const markerValue = { schemaVersion: ROLLUP_SCHEMA_VERSION, completedAt: Date.now() };
+  if (marker) await ctx.db.patch(marker._id, markerValue);
+  else await ctx.db.insert("rollupWindows", { orgId, windowKey, ...markerValue });
+
   return keys.size;
 }
 
@@ -345,7 +351,7 @@ export async function rebuildSamplesForWindowImpl(ctx: any, orgId: Id<"organizat
 
   // Delete all responseSamples in this window for this org
   const existingSamples = (
-    await ctx.db.query("responseSamples").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    await ctx.db.query("responseSamples").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)).collect()
   );
   for (const sample of existingSamples) {
     await ctx.db.delete(sample._id);
@@ -355,7 +361,7 @@ export async function rebuildSamplesForWindowImpl(ctx: any, orgId: Id<"organizat
   const msgs = (
     await ctx.db
       .query("messages")
-      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt))
+      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt))
       .collect()
   ).filter((m: any) => !isInternalTestPhone(m.customerPhone, internalPhones));
 

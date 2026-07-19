@@ -3,6 +3,7 @@ import { windowKeyFor, windowRangeForKey, isWindowAlignedRange, csKey as csKeyOf
 import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
+import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
 
 /**
  * Rollup Reader Module
@@ -453,11 +454,11 @@ export async function productDifficultyFromRaw(
   // Helper to aggregate products from raw tables (counts raw orders for leads, not distinct customers)
   const aggregateFromRawTables = async (startAt: number, endAt: number) => {
     const orders = (
-      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKeyOf(o.assignedCsName) === key));
 
     const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)).collect()
     ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKeyOf(r.csName) === key));
 
     const leads = new Map<string, number>();
@@ -503,58 +504,23 @@ export async function productDifficultyFromRaw(
   return rows;
 }
 
+export async function areRollupWindowsComplete(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number): Promise<boolean> {
+  if (!isWindowAlignedRange(startAt, endAt)) return false;
+  const keys = windowKeysForRange(startAt, endAt);
+  const markers = await Promise.all(keys.map((windowKey) => ctx.db.query("rollupWindows")
+    .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey))
+    .unique()));
+  return markers.every((marker: any) => marker?.schemaVersion === ROLLUP_SCHEMA_VERSION);
+}
+
 export async function productDifficultyFromRollups(
   ctx: any,
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; minLeads?: number; csName?: string }
 ) {
-  const key = args.csName ? csKeyOf(args.csName) : null;
-  const minLeads = args.minLeads ?? 3;
-  const len = args.endAt - args.startAt;
-  const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-  const load = async (startAt: number, endAt: number) => {
-    const rollups = (await Promise.all(windowKeysForRange(startAt, endAt).map((windowKey) =>
-      ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey)).collect()
-    ))).flat().filter((row: any) => !key || csKeyOf(row.csKey) === key);
-    return rollups;
-  };
-
-  if (!isWindowAlignedRange(args.startAt, args.endAt)) {
-    return productDifficultyFromRaw(ctx, orgId, args);
-  }
-
-  const [curRollups, prevRollups] = await Promise.all([
-    load(args.startAt, args.endAt),
-    load(args.startAt - len, args.startAt - 1),
-  ]);
-  const hasFacts = [...curRollups, ...prevRollups].every((row: any) =>
-    !row.byProduct.some((product: any) => product.product === "lainnya")
-      && row.byProduct.every((product: any) => product.leadOrders !== undefined)
-  );
-  if (!hasFacts) return productDifficultyFromRaw(ctx, orgId, args);
-
-  const aggregate = (rollups: any[]) => {
-    const values = new Map<string, { leads: number; closings: number }>();
-    for (const row of rollups) for (const product of row.byProduct) {
-      const value = values.get(product.product) ?? { leads: 0, closings: 0 };
-      value.leads += product.leadOrders;
-      value.closings += product.closings;
-      values.set(product.product, value);
-    }
-    return values;
-  };
-  const cur = aggregate(curRollups);
-  const prev = aggregate(prevRollups);
-  const rows = Array.from(cur.entries())
-    .filter(([, value]) => value.leads >= minLeads)
-    .map(([productName, value]) => {
-      const previous = prev.get(productName) ?? { leads: 0, closings: 0 };
-      const currentCr = cr(value.closings, value.leads);
-      const prevCr = cr(previous.closings, previous.leads);
-      return { productName, leads: value.leads, closings: value.closings, cr: currentCr, prevCr, deltaCr: Math.round((currentCr - prevCr) * 10) / 10 };
-    });
-  rows.sort((a, b) => a.cr - b.cr || b.leads - a.leads);
-  return rows;
+  // Product lead/closing identities cannot be composed across windows, and a
+  // row exactly on the boundary must never leak into the previous window.
+  return productDifficultyFromRaw(ctx, orgId, args);
 }
 
 // ── 7. Period Report from Rollups ───────────────────────────────────────────
@@ -587,11 +553,69 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
   return { start, end, prevStart, prevEnd: start - 1, label };
 }
 
+async function periodReportFromRaw(
+  ctx: any,
+  orgId: Id<"organizations">,
+  args: { period: "week" | "month"; anchor?: number; csName?: string }
+) {
+  const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
+  const filterKey = args.csName ? csKeyOf(args.csName) : null;
+  const cr = (closed: number, leads: number) => leads > 0 ? Math.round((closed / leads) * 1000) / 10 : 0;
+  const aggregate = async (rangeStart: number, rangeEnd: number) => {
+    const endExclusive = rangeEnd + 1;
+    const [orders, recapsAll] = await Promise.all([
+      ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", rangeStart).lt("createdAt", endExclusive)).collect(),
+      ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", rangeStart).lt("closedAt", endExclusive)).collect(),
+    ]);
+    const visibleOrders = orders.filter((row: any) => !isInternalTestPhone(row.customerPhone, internalPhones) && (!filterKey || csKeyOf(row.assignedCsName) === filterKey));
+    const visibleRecaps = recapsAll.filter((row: any) => !isInternalTestPhone(row.customerPhone, internalPhones) && (!filterKey || csKeyOf(row.csName) === filterKey));
+    const activeRecaps = visibleRecaps.filter((row: any) => row.status !== "cancelled" && row.status !== "cancelled_after_export");
+    const map = new Map<string, { csName: string; leads: Set<string>; closings: Set<string>; closed: Set<string>; revenue: number }>();
+    const get = (name: string) => {
+      const key = csKeyOf(name);
+      const value = map.get(key) ?? { csName: name, leads: new Set<string>(), closings: new Set<string>(), closed: new Set<string>(), revenue: 0 };
+      map.set(key, value);
+      return value;
+    };
+    for (const order of visibleOrders) get(order.assignedCsName).leads.add(normalizePhone(order.customerPhone));
+    for (const recap of activeRecaps) {
+      const value = get(recap.csName);
+      value.closings.add(recap.orderIdBerdu || normalizePhone(recap.customerPhone));
+      value.closed.add(normalizePhone(recap.customerPhone));
+      value.revenue += recap.total ?? recap.codValue ?? recap.nonCodItemPrice ?? 0;
+    }
+    const perCs = Array.from(map.values()).map((value) => ({
+      csName: value.csName, leads: value.leads.size, closings: value.closings.size,
+      cr: cr(value.closed.size, value.leads.size), revenue: value.revenue,
+    })).sort((a, b) => b.closings - a.closings);
+    return {
+      leads: perCs.reduce((sum, row) => sum + row.leads, 0),
+      closings: perCs.reduce((sum, row) => sum + row.closings, 0),
+      closed: Array.from(map.values()).reduce((sum, row) => sum + row.closed.size, 0),
+      revenue: perCs.reduce((sum, row) => sum + row.revenue, 0),
+      cancelled: visibleRecaps.filter((row: any) => row.status === "cancelled" || row.status === "cancelled_after_export").length,
+      perCs,
+    };
+  };
+  const [current, previous] = await Promise.all([aggregate(start, end), aggregate(prevStart, prevEnd)]);
+  return {
+    label, rangeStart: start, rangeEnd: end,
+    leads: current.leads, closings: current.closings, cr: cr(current.closed, current.leads), revenue: current.revenue, cancelled: current.cancelled,
+    prevLeads: previous.leads, prevClosings: previous.closings, prevCr: cr(previous.closed, previous.leads), prevRevenue: previous.revenue,
+    perCs: current.perCs,
+  };
+}
+
 export async function periodReportFromRollups(
   ctx: any,
   orgId: Id<"organizations">,
   args: { period: "week" | "month"; anchor?: number; csName?: string }
 ) {
+  // Calendar week/month bounds are not 16:00-WIB aligned; exact raw reads avoid
+  // importing the preceding/following business-window fragments.
+  return periodReportFromRaw(ctx, orgId, args);
+  /* istanbul ignore next -- legacy rollup implementation retained for migration */
   const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
   const key = args.csName ? csKeyOf(args.csName) : null;
 
@@ -687,16 +711,17 @@ export async function performanceFromRaw(
   // Read raw recaps for detailed product breakdown and closed customer count (rollups don't have per-product revenue)
   const recaps = await ctx.db
     .query("shippingRecaps")
-    .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lte("closedAt", args.endAt))
+    .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lt("closedAt", args.endAt))
     .collect();
 
   const orders = await ctx.db
     .query("orders")
-    .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
+    .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt))
     .collect();
 
   const realOrders = orders.filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKeyOf(o.assignedCsName) === key));
-  const validCandidateRows = recaps.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && (!key || csKeyOf(r.csName) === key) && !isInternalTestPhone(r.customerPhone, internalPhones));
+  const visibleRecaps = recaps.filter((r: any) => (!key || csKeyOf(r.csName) === key) && !isInternalTestPhone(r.customerPhone, internalPhones));
+  const validCandidateRows = visibleRecaps.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export");
 
   // Deduplicate recaps by (orderIdBerdu || phone), keeping latest by closedAt
   const latestClosingByKey = new Map<string, any>();
@@ -783,10 +808,10 @@ export async function performanceFromRaw(
     totalDiscount += discount;
   }
 
-  const delivered = recaps.filter((r: any) => r.status === "delivered" && (!key || csKeyOf(r.csName) === key)).length;
-  const cancelled = recaps.filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && (!key || csKeyOf(r.csName) === key)).length;
-  const totalCod = recaps.filter((r: any) => r.paymentMethod === "cod" && (!key || csKeyOf(r.csName) === key)).length;
-  const totalTransfer = recaps.filter((r: any) => r.paymentMethod === "transfer" && (!key || csKeyOf(r.csName) === key)).length;
+  const delivered = visibleRecaps.filter((r: any) => r.status === "delivered").length;
+  const cancelled = visibleRecaps.filter((r: any) => r.status === "cancelled" || r.status === "cancelled_after_export").length;
+  const totalCod = visibleRecaps.filter((r: any) => r.paymentMethod === "cod").length;
+  const totalTransfer = visibleRecaps.filter((r: any) => r.paymentMethod === "transfer").length;
 
   return {
     totalLeads: uniqueOrders.length,
@@ -818,7 +843,9 @@ export async function performanceFromRollups(
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; includeInferredDiscount?: boolean; csName?: string }
 ) {
-  if (!isWindowAlignedRange(args.startAt, args.endAt)) return performanceFromRaw(ctx, orgId, args);
+  const requestedKeys = windowKeysForRange(args.startAt, args.endAt);
+  if (!isWindowAlignedRange(args.startAt, args.endAt) || args.includeInferredDiscount || requestedKeys.length !== 1
+    || !(await areRollupWindowsComplete(ctx, orgId, args.startAt, args.endAt))) return performanceFromRaw(ctx, orgId, args);
 
   const key = args.csName ? csKeyOf(args.csName) : null;
   const rollups = (await Promise.all(windowKeysForRange(args.startAt, args.endAt).map((windowKey) =>

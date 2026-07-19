@@ -197,6 +197,15 @@ export default defineSchema({
     .index("by_org_window_cs", ["orgId", "windowKey", "csKey"])
     .index("by_org_windowKey", ["orgId", "windowKey"]),
 
+  // Written only after a bounded recompute has reconciled every CS row. Empty
+  // windows get a marker too, so "no rows" is distinguishable from incomplete.
+  rollupWindows: defineTable({
+    orgId: v.id("organizations"),
+    windowKey: v.string(),
+    schemaVersion: v.number(),
+    completedAt: v.number(),
+  }).index("by_org_windowKey", ["orgId", "windowKey"]),
+
   // Tiny fact row per detected reply pair. NO first/ongoing tag: "first" is
   // window-dependent (earliest pair per conversation WITHIN the queried window),
   // so readers derive it — exactly reproducing pairResponseEvents semantics.

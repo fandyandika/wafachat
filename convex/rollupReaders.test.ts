@@ -554,6 +554,46 @@ async function runTest(name: string, fn: (t: ReturnType<typeof convexTest>, defa
   });
 }
 
+test("missing completeness marker makes an aligned daily report wholly raw", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "marker-admin", role: "admin", name: "Admin", email: "marker@w" });
+  const seeded = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  await t.run(async (ctx) => ctx.db.insert("orders", {
+    orgId: seeded.orgId, orderId: "NO-MARKER", customerPhone: "6281555000001", customerName: "No Marker", assignedCsName: "Azelia", csKey: "azelia",
+    productName: "Buku", products: "Buku", productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "",
+    source: "berdu", aiEligible: false, createdAt: w1Start + 1, updatedAt: w1Start + 1,
+  } as any));
+  const result = await asAdmin.query(api.analytics.getDailyReport, { startAt: w1Start, endAt: w1End });
+  expect(result.totals.leads).toBe(1);
+});
+
+test("partial completeness across requested keys makes the entire daily report raw", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "partial-admin", role: "admin", name: "Admin", email: "partial@w" });
+  const seeded = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  await t.run(async (ctx) => {
+    for (const [orderId, phone, createdAt] of [["PARTIAL-1", "6281444000001", w1Start + 1], ["PARTIAL-2", "6281444000002", w2Start + 1]] as const) {
+      await ctx.db.insert("orders", {
+        orgId: seeded.orgId, orderId, customerPhone: phone, customerName: orderId, assignedCsName: "Azelia", csKey: "azelia",
+        productName: "Buku", products: "Buku", productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "",
+        source: "berdu", aiEligible: false, createdAt, updatedAt: createdAt,
+      } as any);
+    }
+  });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: String(seeded.orgId), windowKey: W1 });
+  const result = await asAdmin.query(api.analytics.getDailyReport, { startAt: w1Start, endAt: w2End });
+  expect(result.totals.leads).toBe(2);
+});
+
+test("bounded recompute records completeness for an empty window", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "empty-admin", role: "admin", name: "Admin", email: "empty@w" });
+  const seeded = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: String(seeded.orgId), windowKey: W1 });
+  const markers = await t.run(async (ctx) => (ctx.db.query("rollupWindows" as any) as any).collect());
+  expect(markers).toEqual([expect.objectContaining({ orgId: seeded.orgId, windowKey: W1, schemaVersion: expect.any(Number) })]);
+});
+
 // ── RESPONSE TIMES ──────────────────────────────────────────────────────────
 
 runTest("responseTimesFromSamples matches legacy (full window W1)", async (t, defaultOrg) => {
@@ -839,7 +879,7 @@ runTest("performanceFromRollups matches legacy (csName-filtered)", async (t, def
   expect(rollup).toEqual(legacy);
 });
 
-runTest("sealed product and performance readers ignore raw rows written after their rollups", async (t, defaultOrg) => {
+runTest("single sealed performance ignores post-recompute raw rows while product difficulty stays exact raw", async (t, defaultOrg) => {
   await t.run(async (ctx) => {
     const late = w1Start + 12 * 3_600_000;
     await ctx.db.insert("orders", {
@@ -863,7 +903,7 @@ runTest("sealed product and performance readers ignore raw rows written after th
     startAt: w1Start, endAt: w1End,
   }));
 
-  expect(products.map((row) => row.productName)).not.toContain("Late Raw Only");
+  expect(products.map((row) => row.productName)).toContain("Late Raw Only");
   expect(performance.products.map((row) => row.product)).not.toContain("Late Raw Only");
   expect(performance.totalCod).toBe(1);
 });
@@ -941,6 +981,76 @@ runTest("overflow product rollups fall back to raw detail instead of exposing th
   const raw = await t.run(async (ctx) => readers.productDifficultyFromRaw(ctx, defaultOrg as Id<"organizations">, args));
   const actual = await t.run(async (ctx) => readers.productDifficultyFromRollups(ctx, defaultOrg as Id<"organizations">, args));
   expect(actual).toEqual(raw);
+});
+
+runTest("includeInferredDiscount uses a wholly raw performance response", async (t, defaultOrg) => {
+  await t.run(async (ctx) => {
+    const at = w1Start + 5 * 3_600_000;
+    await ctx.db.insert("shippingRecaps", {
+      orgId: defaultOrg as Id<"organizations">, customerPhone: "6281777000001", customerName: "Inferred", csName: "Azelia", csKey: "azelia",
+      orderIdBerdu: "INF-1", status: "ready", total: 70000, inferredDiscount: 12345, packageContent: "Buku Sirah", paymentMethod: "transfer",
+      sourceMessageText: "", flags: [], recipientName: "Inferred", recipientPhone: "6281777000001", recipientAddress: "", recipientDistrict: "", recipientCity: "",
+      version: 1, closedAt: at, createdAt: at, updatedAt: at,
+    } as any);
+  });
+  const readers = await import("./rollupReaders");
+  const args = { startAt: w1Start, endAt: w1End, includeInferredDiscount: true };
+  const raw = await t.run(async (ctx) => readers.performanceFromRaw(ctx, defaultOrg as Id<"organizations">, args));
+  const actual = await t.run(async (ctx) => readers.performanceFromRollups(ctx, defaultOrg as Id<"organizations">, args));
+  expect(actual).toEqual(raw);
+});
+
+runTest("multi-window performance falls back to raw for repeat-customer uniqueness", async (t, defaultOrg) => {
+  await t.run(async (ctx) => {
+    for (const [orderId, createdAt] of [["REPEAT-1", w1Start + 6_000], ["REPEAT-2", w2Start + 6_000]] as const) {
+      await ctx.db.insert("orders", {
+        orgId: defaultOrg as Id<"organizations">, orderId, customerPhone: "6281888000001", customerName: "Repeat", assignedCsName: "Azelia", csKey: "azelia",
+        productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "100000", shippingCost: "0", total: "100000",
+        shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt, updatedAt: createdAt,
+      } as any);
+    }
+  });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W1 });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W2 });
+  const readers = await import("./rollupReaders");
+  const args = { startAt: w1Start, endAt: w2End };
+  const raw = await t.run(async (ctx) => readers.performanceFromRaw(ctx, defaultOrg as Id<"organizations">, args));
+  const actual = await t.run(async (ctx) => readers.performanceFromRollups(ctx, defaultOrg as Id<"organizations">, args));
+  expect(actual).toEqual(raw);
+  expect(actual.totalLeads).toBe(raw.totalLeads);
+});
+
+runTest("an exact 16:00 boundary row is excluded from the previous product window", async (t, defaultOrg) => {
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", {
+      orgId: defaultOrg as Id<"organizations">, orderId: "BOUNDARY-1", customerPhone: "6281999000001", customerName: "Boundary", assignedCsName: "Azelia", csKey: "azelia",
+      productName: "Boundary Product", products: "Boundary Product", productsSubtotal: "1", shippingCost: "0", total: "1",
+      shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: w1End, updatedAt: w1End,
+    } as any);
+  });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W1 });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W2 });
+  const rows = await t.run(async (ctx) => (await import("./rollupReaders")).productDifficultyFromRollups(ctx, defaultOrg as Id<"organizations">, {
+    startAt: w1Start, endAt: w1End, minLeads: 1,
+  }));
+  expect(rows.map((row) => row.productName)).not.toContain("Boundary Product");
+});
+
+runTest("calendar period cancellation excludes the preceding pre-midnight row", async (t, defaultOrg) => {
+  const readers = await import("./rollupReaders");
+  const before = await t.run(async (ctx) => readers.periodReportFromRollups(ctx, defaultOrg as Id<"organizations">, { period: "week", anchor: w1Start }));
+  const at = before.rangeStart - 3_600_000;
+  await t.run(async (ctx) => {
+    await ctx.db.insert("shippingRecaps", {
+      orgId: defaultOrg as Id<"organizations">, customerPhone: "6281666000001", customerName: "Outside", csName: "Azelia", csKey: "azelia",
+      orderIdBerdu: "OUTSIDE-CANCEL", status: "cancelled", total: 1, packageContent: "Buku Sirah", paymentMethod: "cod", sourceMessageText: "", flags: [],
+      recipientName: "Outside", recipientPhone: "6281666000001", recipientAddress: "", recipientDistrict: "", recipientCity: "", version: 1,
+      closedAt: at, createdAt: at, updatedAt: at,
+    } as any);
+  });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: windowKeyFor(at) });
+  const actual = await t.run(async (ctx) => readers.periodReportFromRollups(ctx, defaultOrg as Id<"organizations">, { period: "week", anchor: w1Start }));
+  expect(actual.cancelled).toBe(before.cancelled);
 });
 
 // ── FOLLOW-UP EFFECTIVENESS ────────────────────────────────────────────────
