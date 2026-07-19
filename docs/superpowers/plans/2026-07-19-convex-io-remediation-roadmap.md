@@ -470,12 +470,14 @@ Expected: all commands exit zero.
 - [ ] **Step 2: Deploy schema/code in migration-safe order**
 
 1. Deploy additive indexes, optional `probeCursor`/v2 rollup facts, and code that remains compatible with absent migration facts.
-2. Run `agents:seedKeysForAllOrganizations` until it reports `complete: true`, `organizationEnumerationComplete: true`, and no failed organizations. The public `seedKeys` wrapper remains tenant-derived; the internal driver is the only platform-wide path.
-3. Recompute/true-up every retained 16:00-WIB rollup window. Require v2 completeness markers and zero `debugRollupParity` mismatches before treating the rollup set as healthy.
-4. Keep identity-sensitive distinct metrics on exact raw `[startAt,endAt)` readers with the documented 35-day/900-row/100-fallback caps. This release has no additive distinct reader cutover and no required-field flip.
-5. After deploy, verify scheduled lifecycle continuations drain and reconciliation cursors rotate. Then collect the 24-hour I/O comparison.
+2. Start `agents:seedKeysForAllOrganizations`. Its durable platform run enumerates organizations in 20-row pages and persists one audit row per tenant. Let scheduled continuations drain. Global completion is proven only when `complete: true`, `organizationEnumerationComplete: true`, `completedOrganizations === enumeratedOrganizations`, and both the failed count/list and continuing count are zero. A failed tenant remains recorded; fix its data and invoke the driver again to retry failures without losing earlier-page state.
+3. Call `rollups:oldestWindowKey` for each tenant, then loop `rollups:backfillRange({ fromKey, toKey })` using the returned `nextFromKey`. A call advances at most one organization/window and at most 64 source/staging documents; when `done: false`, repeat the same key. Empty intervening windows are intentionally marked too. Scheduled repair uses `rollups:trueUp`, which pages organizations and launches isolated `runRollupWindow` workers.
+4. A rollup marker is publish-ready only when it contains schema v2 and `sampleRunId`. Response-time readers select only that staged generation; an incomplete run is invisible. For parity, page `debugRollupParity` through the `expected` phase, then use `nextSource: "stored"` and its cursor until `done: true`. Require zero mismatches on every page.
+5. `rollups:backfillCsKey` and `rollups:csKeyCoverage` are tenant-local cursor APIs. Thread their per-table cursors until `done: true`; never reuse a cursor for another tenant.
+6. Keep identity-sensitive distinct metrics on exact raw `[startAt,endAt)` readers with the documented 35-day/900-row/100-fallback caps. This release has no additive distinct reader cutover and no required-field flip.
+7. After deploy, verify scheduled lifecycle continuations drain and reconciliation cursors rotate. Then collect the 24-hour I/O comparison.
 
-Rollback is code-first: revert the application/functions while leaving additive indexes, optional fields, provider claims, markers, and durable cursors in place. Those records are backward-compatible and preserve retry progress. Never roll back to the cross-tenant response-time principal/cache behavior or remove fail-closed tenant/registry checks.
+Rollback is code-first: stop `trueUp`, `runRollupWindow`, and provider-driver scheduling, then revert application/functions while leaving additive indexes, staging rows, provider audits, markers, and durable cursors in place. Incomplete rollup generations are not reader-visible; readers remain on the last marker-selected generation. Do not delete a published marker unless the application has first been rolled back to the legacy sample reader. Never roll back to the cross-tenant response-time principal/cache behavior or remove fail-closed tenant/registry checks.
 
 - [ ] **Step 3: Record 24-hour production results**
 

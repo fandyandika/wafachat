@@ -1,5 +1,5 @@
 import type { Id } from "./_generated/dataModel";
-import { windowKeyFor, isWindowAlignedRange, csKey as csKeyOf, normalizePhone, isInternalTestPhone, canonicalizeProduct } from "./lib";
+import { windowKeyFor, windowRangeForKey, isWindowAlignedRange, csKey as csKeyOf, normalizePhone, isInternalTestPhone, canonicalizeProduct } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
@@ -48,23 +48,38 @@ export async function responseTimesFromSamples(
   // the payload tenant/member scoped, this prevents another CS's samples from
   // consuming the exact-result budget for a CS-only request.
   const requestedCsKey = args.csName ? csKeyOf(args.csName) : undefined;
-  const samples = (
-    await (requestedCsKey
-      ? ctx.db
-        .query("responseSamples")
-        .withIndex("by_org_cs_createdAt", (q: any) => q
-          .eq("orgId", orgId)
-          .eq("csKey", requestedCsKey)
-          .gte("createdAt", args.startAt)
-          .lt("createdAt", args.endAt))
-      : ctx.db
-        .query("responseSamples")
-        .withIndex("by_org_createdAt", (q: any) => q
-          .eq("orgId", orgId)
-          .gte("createdAt", args.startAt)
-          .lt("createdAt", args.endAt)))
-      .take(MAX_RESPONSE_SAMPLES + 1)
-  ).sort((a: any, b: any) => a.createdAt - b.createdAt);
+  const samples: any[] = [];
+  for (const windowKey of windowKeysForRange(args.startAt, args.endAt)) {
+    const marker = await ctx.db.query("rollupWindows")
+      .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey))
+      .unique();
+    const window = windowRangeForKey(windowKey);
+    const startAt = Math.max(args.startAt, window.startAt);
+    const endAt = Math.min(args.endAt, window.endAt);
+    const remaining = MAX_RESPONSE_SAMPLES + 1 - samples.length;
+    if (remaining <= 0) break;
+    const rows = marker?.sampleRunId
+      ? await (requestedCsKey
+        ? ctx.db.query("rollupMigrationSamples")
+          .withIndex("by_run_cs_createdAt", (q: any) => q
+            .eq("runId", marker.sampleRunId).eq("csKey", requestedCsKey)
+            .gte("createdAt", startAt).lt("createdAt", endAt))
+        : ctx.db.query("rollupMigrationSamples")
+          .withIndex("by_run_createdAt", (q: any) => q
+            .eq("runId", marker.sampleRunId).gte("createdAt", startAt).lt("createdAt", endAt)))
+        .take(remaining)
+      : await (requestedCsKey
+        ? ctx.db.query("responseSamples")
+          .withIndex("by_org_cs_createdAt", (q: any) => q
+            .eq("orgId", orgId).eq("csKey", requestedCsKey)
+            .gte("createdAt", startAt).lt("createdAt", endAt))
+        : ctx.db.query("responseSamples")
+          .withIndex("by_org_createdAt", (q: any) => q
+            .eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)))
+        .take(remaining);
+    samples.push(...rows);
+  }
+  samples.sort((a: any, b: any) => a.createdAt - b.createdAt);
   if (samples.length > MAX_RESPONSE_SAMPLES) {
     throw new Error(`responseTime.getResponseTimes samples: exact row cap ${MAX_RESPONSE_SAMPLES} exceeded; narrow the requested range`);
   }

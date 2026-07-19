@@ -40,6 +40,7 @@ import type * as orgs from "../orgs.js";
 import type * as passwordHash from "../passwordHash.js";
 import type * as responseTime from "../responseTime.js";
 import type * as responseTimeMath from "../responseTimeMath.js";
+import type * as rollupMigration from "../rollupMigration.js";
 import type * as rollupReaders from "../rollupReaders.js";
 import type * as rollupVersion from "../rollupVersion.js";
 import type * as rollups from "../rollups.js";
@@ -86,6 +87,7 @@ declare const fullApi: ApiFromModules<{
   passwordHash: typeof passwordHash;
   responseTime: typeof responseTime;
   responseTimeMath: typeof responseTimeMath;
+  rollupMigration: typeof rollupMigration;
   rollupReaders: typeof rollupReaders;
   rollupVersion: typeof rollupVersion;
   rollups: typeof rollups;

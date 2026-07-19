@@ -2,7 +2,7 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { normalizePhone, csKey } from "./lib";
+import { normalizePhone, csKey, windowKeyFor } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 import { messageMatchesPhrase, upsertRecapFromMessage } from "./shippingRecaps";
 import { canContainClosingSignal, getActiveClosingPhrases } from "./closingRules";
@@ -226,7 +226,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     // If sampling fails, true-up/live retry can still pair; we log the error and continue.
     // On failure, we CLEAR rtPendingInboundAt anyway so we don't leave the conversation in pending state forever.
     try {
-      await ctx.db.insert("responseSamples", {
+      const sample = {
         csKey: csKeyValue,
         csName,
         conversationId: conversation._id,
@@ -235,7 +235,35 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
         slaBreach: isSlaBreach(conversation.rtPendingInboundAt, createdAt),
         createdAt,
         orgId: args.orgId,
-      });
+      };
+      const windowKey = windowKeyFor(createdAt);
+      const marker = await ctx.db.query("rollupWindows")
+        .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", args.orgId).eq("windowKey", windowKey))
+        .unique();
+      const latestMigration = await ctx.db.query("rollupMigrationRuns")
+        .withIndex("by_org_window", (q: any) => q.eq("orgId", args.orgId).eq("windowKey", windowKey))
+        .order("desc").first();
+      const targetRunIds = new Set<string>();
+      if (marker?.sampleRunId) targetRunIds.add(String(marker.sampleRunId));
+      if (latestMigration && latestMigration.phase !== "complete") targetRunIds.add(String(latestMigration._id));
+      if (targetRunIds.size === 0) {
+        await ctx.db.insert("responseSamples", sample);
+      } else {
+        for (const rawRunId of targetRunIds) {
+          const runId = rawRunId as Id<"rollupMigrationRuns">;
+          const existing = await ctx.db.query("rollupMigrationSamples")
+            .withIndex("by_run_sourceMessage", (q: any) => q
+              .eq("runId", runId).eq("sourceMessageId", messageId))
+            .unique();
+          if (!existing) {
+            await ctx.db.insert("rollupMigrationSamples", {
+              ...sample,
+              runId,
+              sourceMessageId: messageId,
+            });
+          }
+        }
+      }
     } catch (e) {
       console.warn("[rt-sample] extraction failed; true-up will heal", (e as Error).message);
     }

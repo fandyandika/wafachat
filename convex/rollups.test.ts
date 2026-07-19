@@ -484,10 +484,16 @@ test("rebuildSamplesForWindow + trueUp: corrupt rollup field → fixed; bogus sa
     expect(rollup!.leadOrders).toBe(1); // One order in window
   });
 
-  // Verify: bogus sample is gone, correct sample is present
+  // Verify: the newly published generation hides the bogus legacy sample and
+  // exposes only the correctly rebuilt pair.
   await t.run(async (ctx) => {
-    const samples = await ctx.db.query("responseSamples").collect();
-    expect(samples.length).toBe(1); // only the correct one from the message pair
+    const orgId = await requireDefaultOrgId(ctx);
+    const marker = await ctx.db.query("rollupWindows")
+      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", today)).unique();
+    expect(marker?.sampleRunId).toBeDefined();
+    const samples = await ctx.db.query("rollupMigrationSamples")
+      .withIndex("by_run_createdAt", (q) => q.eq("runId", marker!.sampleRunId!)).collect();
+    expect(samples.length).toBe(1);
     expect(samples[0].inboundAt).toBe(msgTime);
     expect(samples[0].createdAt).toBe(msgTime + 10 * 60 * 1000);
   });
@@ -565,13 +571,13 @@ test("oldestWindowKey: rejects non-admin", async () => {
   ).rejects.toThrow(/unauthorized|admin/);
 });
 
-test("backfillRange: processes 2 seeded windows with nextFromKey null", async () => {
+test("backfillRange: resumes one bounded window at a time, including empty intervening windows", async () => {
   const t = convexTest(schema);
   await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
 
   const windowA = "2026-07-05";
-  const windowB = "2026-07-06";
+  const windowB = "2026-07-07";
   const rangeA = windowRangeForKey(windowA);
   const rangeB = windowRangeForKey(windowB);
 
@@ -618,25 +624,34 @@ test("backfillRange: processes 2 seeded windows with nextFromKey null", async ()
   });
 
   await t.run(stampCsKeys);
-  // Backfill from A to B
-  const result = await t.withIdentity(adminIdentity).mutation(api.rollups.backfillRange, {
-    fromKey: windowA,
-    toKey: windowB,
-  });
+  const processed: string[] = [];
+  let nextFromKey: string | null = windowA;
+  for (let call = 0; call < 10 && nextFromKey; call++) {
+    const result: any = await t.withIdentity(adminIdentity).mutation(api.rollups.backfillRange, {
+      fromKey: nextFromKey, toKey: windowB,
+    });
+    processed.push(...result.processed);
+    nextFromKey = result.nextFromKey;
+  }
 
-  expect(result.processed).toContain(windowA);
-  expect(result.processed).toContain(windowB);
-  expect(result.processed.length).toBe(2);
-  expect(result.nextFromKey).toBeNull();
+  expect(processed).toEqual(["2026-07-05", "2026-07-06", "2026-07-07"]);
+  expect(nextFromKey).toBeNull();
 
   // Verify rollups were created
   const rollups = await t.run(async (ctx) =>
     (await ctx.db.query("dailyRollups").collect()).filter((r: any) => r.windowKey === windowA)
   );
   expect(rollups.length).toBeGreaterThan(0);
+  await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    const emptyMarker = await ctx.db.query("rollupWindows")
+      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", "2026-07-06"))
+      .unique();
+    expect(emptyMarker?.schemaVersion).toBe(2);
+  });
 });
 
-test("backfillRange: honors 10-window cap and returns nextFromKey", async () => {
+test("backfillRange bounds each call to one tenant window", async () => {
   const t = convexTest(schema);
   await seedDefaultOrg(t);
   const adminIdentity = { subject: "a1", role: "admin" as const, name: "Admin", email: "a@w" };
@@ -684,15 +699,14 @@ test("backfillRange: honors 10-window cap and returns nextFromKey", async () => 
     }
   });
 
-  // Backfill all 50 windows - should cap at 10 and return nextFromKey
+  // A call advances exactly one window; the returned key is the durable range cursor.
   const result = await t.withIdentity(adminIdentity).mutation(api.rollups.backfillRange, {
     fromKey: firstWindow,
     toKey: lastWindow,
   });
 
-  expect(result.processed.length).toBe(10);
-  expect(result.nextFromKey).not.toBeNull();
-  expect(result.nextFromKey).toBe(windowsToUse[10]);
+  expect(result.processed).toEqual([firstWindow]);
+  expect(result.nextFromKey).toBe(windowsToUse[1]);
 });
 
 test("backfillRange: rejects non-admin", async () => {
@@ -953,6 +967,62 @@ test("debugRollupParity: detects corrupted csName field", async () => {
   expect(csNameMismatch!.fresh).toBe("OriginalCS");
 });
 
+test("debugRollupParity paginates every expected and stored row", async () => {
+  const t = convexTest(schema);
+  await seedDefaultOrg(t);
+  const orgId = await getDefaultOrgId(t);
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 30; index++) {
+      const suffix = `${String.fromCharCode(65 + Math.floor(index / 26))}${String.fromCharCode(65 + (index % 26))}`;
+      await ctx.db.insert("orders", {
+        orgId, orderId: `PARITY-PAGE-${index}`, customerPhone: `6281998${String(index).padStart(6, "0")}`,
+        customerName: `Parity ${index}`, assignedCsName: `Parity Agent ${suffix}`,
+        productName: "Book", products: "Book", productsSubtotal: "1", shippingCost: "0", total: "1",
+        shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false,
+        createdAt: t0 + index, updatedAt: t0 + index,
+      } as any);
+    }
+  });
+  let migration: any;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    migration = await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+    if (migration.done) break;
+  }
+  expect(migration.done).toBe(true);
+  await t.run(async (ctx) => {
+    const row = await ctx.db.query("dailyRollups")
+      .withIndex("by_org_window_cs", (q) => q
+        .eq("orgId", orgId as any).eq("windowKey", W).eq("csKey", "parityagentaa"))
+      .first();
+    // Add a stored-only row to exercise the second audit phase.
+    await ctx.db.insert("dailyRollups", {
+      orgId: orgId as any, windowKey: W, csKey: "storedextra", csName: "Stored Extra",
+      leadOrders: 1, leadsCust: 1, closings: 0, closedCust: 0, cancelled: 0,
+      manualClosings: 0, delivered: 0, revenue: 0, discount: 0, cod: 0, transfer: 0,
+      fuClosings: 0, fuH1: 0, fuH2: 0, fuH3: 0, byProduct: [], updatedAt: Date.now(),
+    });
+    expect(row).toBeDefined();
+  });
+
+  const admin = t.withIdentity({ subject: "paged-parity", role: "admin", name: "Admin", email: "paged@w" });
+  let source: "expected" | "stored" = "expected";
+  let cursor: string | undefined;
+  let expectedPages = 0;
+  let done = false;
+  const mismatches: Array<{ csKey: string }> = [];
+  for (let pageNumber = 0; pageNumber < 10 && !done; pageNumber++) {
+    const page: any = await admin.query(api.rollups.debugRollupParity, { windowKey: W, source, cursor });
+    if (source === "expected") expectedPages++;
+    mismatches.push(...page.mismatches);
+    done = page.done;
+    source = page.nextSource ?? source;
+    cursor = page.nextCursor;
+  }
+  expect(expectedPages).toBeGreaterThan(1);
+  expect(done).toBe(true);
+  expect(mismatches.some((row) => row.csKey === "storedextra")).toBe(true);
+});
+
 test("debugRollupParity: rejects non-admin", async () => {
   const t = convexTest(schema);
   const csIdentity = { subject: "u1", role: "cs" as const, name: "CS", email: "cs@w", csName: "Azelia" };
@@ -960,6 +1030,199 @@ test("debugRollupParity: rejects non-admin", async () => {
   await expect(
     t.withIdentity(csIdentity).query(api.rollups.debugRollupParity, { windowKey: "2026-07-08" })
   ).rejects.toThrow(/unauthorized|admin/);
+});
+
+test("oldestWindowKey includes recap-only history", async () => {
+  const t = convexTest(schema);
+  await seedDefaultOrg(t);
+  const recapWindow = "2026-06-15";
+  const closedAt = windowRangeForKey(recapWindow).startAt + 1;
+  await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    await ctx.db.insert("shippingRecaps", {
+      orgId, customerPhone: "6281888000001", customerName: "Recap Only", csName: "Azelia",
+      orderIdBerdu: "RECAP-ONLY", status: "exported", total: 1, packageContent: "Book",
+      closedAt, recipientName: "Recap Only", recipientPhone: "6281888000001", recipientAddress: "",
+      recipientDistrict: "", recipientCity: "", paymentMethod: "unknown", sourceMessageText: "",
+      flags: [], createdAt: closedAt, updatedAt: closedAt, version: 1,
+    } as any);
+  });
+
+  const result = await t.withIdentity({ subject: "oldest-admin", role: "admin", name: "Admin", email: "oldest@w" })
+    .query(api.rollups.oldestWindowKey, {});
+  expect(result).toBe(recapWindow);
+});
+
+test("rollup migration resumes high-cardinality windows without publishing a partial marker", async () => {
+  const t = convexTest(schema);
+  await seedDefaultOrg(t);
+  const orgId = await getDefaultOrgId(t);
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 80; index++) {
+      await ctx.db.insert("orders", {
+        orgId, orderId: `BOUNDED-${index}`, customerPhone: `6281777${String(index).padStart(6, "0")}`,
+        customerName: `Bounded ${index}`, assignedCsName: "Bounded Agent", productName: `Product ${index % 3}`,
+        products: `Product ${index % 3}`, productsSubtotal: "1", shippingCost: "0", total: "1",
+        shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false,
+        createdAt: t0 + index, updatedAt: t0 + index,
+      } as any);
+    }
+  });
+
+  let result: any = await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+  expect(result.done).toBe(false);
+  expect(result.documentsProcessed).toBeLessThanOrEqual(64);
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("rollupWindows")
+      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId as any).eq("windowKey", W)).unique()).toBeNull();
+  });
+  for (let attempt = 0; attempt < 20 && !result.done; attempt++) {
+    result = await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+    expect(result.documentsProcessed).toBeLessThanOrEqual(64);
+  }
+  expect(result.done).toBe(true);
+  await t.run(async (ctx) => {
+    const marker = await ctx.db.query("rollupWindows")
+      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId as any).eq("windowKey", W)).unique();
+    expect(marker?.sampleRunId).toBeDefined();
+    const row = await ctx.db.query("dailyRollups")
+      .withIndex("by_org_window_cs", (q) => q.eq("orgId", orgId as any).eq("windowKey", W).eq("csKey", "boundedagent"))
+      .unique();
+    expect(row?.leadOrders).toBe(80);
+  });
+});
+
+test("rollup migration retry keeps its cursor and tenant boundary", async () => {
+  const t = convexTest(schema);
+  const seededA = await seedDefaultOrg(t);
+  const orgA = seededA.orgId;
+  const orgB = await t.run((ctx) => ctx.db.insert("organizations", {
+    slug: "rollup-tenant-b", name: "Rollup Tenant B", createdAt: 2, updatedAt: 2,
+  }));
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 70; index++) {
+      await ctx.db.insert("orders", {
+        orgId: orgA, orderId: `RETRY-${index}`, customerPhone: `6281666${String(index).padStart(6, "0")}`,
+        customerName: "Retry", assignedCsName: "Retry Agent", productName: "Book", products: "Book",
+        productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "",
+        shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0 + index, updatedAt: t0 + index,
+      } as any);
+    }
+    await ctx.db.insert("orders", {
+      orgId: orgB, orderId: "TENANT-B", customerPhone: "6281999000009", customerName: "Tenant B",
+      assignedCsName: "Tenant B", productName: "Book", products: "Book", productsSubtotal: "1",
+      shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "",
+      source: "berdu", aiEligible: false, createdAt: t0, updatedAt: t0,
+    } as any);
+  });
+
+  const first: any = await t.mutation(internal.rollups.recomputeWindow, {
+    orgId: String(orgA), windowKey: W,
+  });
+  expect(first.done).toBe(false);
+  const second: any = await t.mutation(internal.rollups.recomputeWindow, {
+    orgId: String(orgA), windowKey: W,
+  });
+  expect(second.runId).toBe(first.runId);
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("rollupMigrationRuns")
+      .withIndex("by_org_window", (q) => q.eq("orgId", orgB).eq("windowKey", W)).first()).toBeNull();
+    expect(await ctx.db.query("dailyRollups")
+      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgB).eq("windowKey", W)).first()).toBeNull();
+  });
+});
+
+test("rollup migration failure retries from the last committed page", async () => {
+  const t = convexTest(schema);
+  await seedDefaultOrg(t);
+  const orgId = await getDefaultOrgId(t);
+  let duplicateToDelete: any;
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 70; index++) {
+      await ctx.db.insert("orders", {
+        orgId, orderId: `PAGE-${index}`, customerPhone: `6281444${String(index).padStart(6, "0")}`,
+        customerName: "Page", assignedCsName: "Page Agent", productName: "Book", products: "Book",
+        productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "",
+        shippingCity: "", source: "berdu", aiEligible: false, createdAt: t0 + index, updatedAt: t0 + index,
+      } as any);
+    }
+    await ctx.db.insert("orders", {
+      orgId, orderId: "AMBIGUOUS", customerPhone: "6281333000001", customerName: "One",
+      assignedCsName: "Other", productName: "One", products: "One", productsSubtotal: "1",
+      shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "",
+      source: "berdu", aiEligible: false, createdAt: t0 + 71, updatedAt: t0 + 71,
+    } as any);
+    duplicateToDelete = await ctx.db.insert("orders", {
+      orgId, orderId: "AMBIGUOUS", customerPhone: "6281333000002", customerName: "Two",
+      assignedCsName: "Other", productName: "Two", products: "Two", productsSubtotal: "1",
+      shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "",
+      source: "berdu", aiEligible: false, createdAt: t0 + 72, updatedAt: t0 + 72,
+    } as any);
+    await ctx.db.insert("shippingRecaps", {
+      orgId, customerPhone: "6281333999999", customerName: "Retry", csName: "Page Agent",
+      orderIdBerdu: "AMBIGUOUS", status: "exported", total: 1, packageContent: "",
+      closedAt: t0 + 100, recipientName: "Retry", recipientPhone: "6281333999999",
+      recipientAddress: "", recipientDistrict: "", recipientCity: "", paymentMethod: "unknown",
+      sourceMessageText: "", flags: [], createdAt: t0 + 100, updatedAt: t0 + 100, version: 1,
+    } as any);
+  });
+
+  const first: any = await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+  expect(first.done).toBe(false);
+  const beforeFailure: any = await t.run((ctx) => ctx.db.get(first.runId as any));
+  await expect(t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W }))
+    .rejects.toThrow(/unique/i);
+  const afterFailure: any = await t.run((ctx) => ctx.db.get(first.runId as any));
+  expect(afterFailure?.cursor).toBe(beforeFailure?.cursor);
+  expect(afterFailure?.documentsProcessed).toBe(beforeFailure?.documentsProcessed);
+
+  await t.run((ctx) => ctx.db.delete(duplicateToDelete));
+  let result: any = first;
+  for (let attempt = 0; attempt < 20 && !result.done; attempt++) {
+    result = await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+  }
+  expect(result.done).toBe(true);
+});
+
+test("response samples publish only after a multi-page generation is complete", async () => {
+  const t = convexTest(schema);
+  await seedDefaultOrg(t);
+  const orgId = await getDefaultOrgId(t);
+  await t.run(async (ctx) => {
+    const conversationId = await ctx.db.insert("conversations", {
+      orgId: orgId as any, orderId: "SAMPLE-PAGES", customerPhone: "6281222000001", customerName: "Samples",
+      assignedCsName: "Sample Agent", status: "active", aiEnabled: false, note: "",
+      createdAt: t0, updatedAt: t0,
+    });
+    for (let index = 0; index < 40; index++) {
+      const inboundAt = t0 + index * 2_000;
+      await ctx.db.insert("messages", {
+        orgId: orgId as any, conversationId, orderId: "SAMPLE-PAGES", customerPhone: "6281222000001",
+        direction: "inbound", role: "customer", content: "in", messageType: "text", source: "n8n",
+        createdAt: inboundAt,
+      });
+      await ctx.db.insert("messages", {
+        orgId: orgId as any, conversationId, orderId: "SAMPLE-PAGES", customerPhone: "6281222000001",
+        direction: "outbound", role: "cs", content: "out", messageType: "text", source: "n8n",
+        createdAt: inboundAt + 1_000,
+      });
+    }
+  });
+
+  let result: any = await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+  expect(result.done).toBe(false);
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("rollupWindows")
+      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId as any).eq("windowKey", W)).unique()).toBeNull();
+  });
+  for (let attempt = 0; attempt < 10 && !result.done; attempt++) {
+    result = await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+  }
+  expect(result.done).toBe(true);
+  const response = await t.withIdentity({ subject: "sample-admin", role: "admin", name: "Admin", email: "sample@w" })
+    .query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 100_000 });
+  expect(response.overall.firstReplyCount).toBe(1);
+  expect(response.cs[0].ongoingCount).toBe(40);
 });
 
 async function parityFixture() {

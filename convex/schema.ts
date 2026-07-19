@@ -1,6 +1,17 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+const rollupProduct = v.object({
+  product: v.string(),
+  leads: v.number(),
+  closings: v.number(),
+  leadOrders: v.number(),
+  revenue: v.number(),
+  discount: v.number(),
+  cod: v.number(),
+  transfer: v.number(),
+});
+
 export default defineSchema({
   customers: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -34,6 +45,7 @@ export default defineSchema({
   })
     .index("by_org_orderId", ["orgId", "orderId"])
     .index("by_org_customerPhone", ["orgId", "customerPhone"])
+    .index("by_org_customerPhone_createdAt", ["orgId", "customerPhone", "createdAt"])
     .index("by_org_createdAt", ["orgId", "createdAt"])
     .index("by_org_csKey_createdAt", ["orgId", "csKey", "createdAt"]),
 
@@ -251,7 +263,92 @@ export default defineSchema({
     windowKey: v.string(),
     schemaVersion: v.number(),
     completedAt: v.number(),
+    sampleRunId: v.optional(v.id("rollupMigrationRuns")),
   }).index("by_org_windowKey", ["orgId", "windowKey"]),
+
+  rollupMigrationRuns: defineTable({
+    orgId: v.id("organizations"),
+    windowKey: v.string(),
+    phase: v.union(
+      v.literal("existing"), v.literal("orders"), v.literal("recaps"),
+      v.literal("messages"), v.literal("products"), v.literal("publish"),
+      v.literal("complete"),
+    ),
+    dirty: v.optional(v.boolean()),
+    cursor: v.optional(v.string()),
+    documentsProcessed: v.number(),
+    sampleCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_window", ["orgId", "windowKey"])
+    .index("by_org_window_phase", ["orgId", "windowKey", "phase"]),
+
+  rollupMigrationAgents: defineTable({
+    runId: v.id("rollupMigrationRuns"),
+    orgId: v.id("organizations"),
+    windowKey: v.string(),
+    csKey: v.string(),
+    csName: v.string(),
+    csNameCount: v.number(),
+    leadOrders: v.number(), leadsCust: v.number(), closings: v.number(), closedCust: v.number(),
+    cancelled: v.number(), manualClosings: v.number(), delivered: v.number(),
+    revenue: v.number(), discount: v.number(), fuClosings: v.number(), fuH1: v.number(),
+    fuH2: v.number(), fuH3: v.number(), cod: v.number(), transfer: v.number(),
+    productLeads: v.number(), productClosings: v.number(), productLeadOrders: v.number(),
+    productRevenue: v.number(), productDiscount: v.number(), productCod: v.number(),
+    productTransfer: v.number(),
+    productsFinalized: v.boolean(),
+    productCursor: v.optional(v.string()),
+    topProducts: v.optional(v.array(rollupProduct)),
+    updatedAt: v.number(),
+  })
+    .index("by_run_cs", ["runId", "csKey"])
+    .index("by_run_productsFinalized", ["runId", "productsFinalized"])
+    .index("by_run", ["runId"]),
+
+  rollupMigrationNameCounts: defineTable({
+    runId: v.id("rollupMigrationRuns"), csKey: v.string(), rawName: v.string(), count: v.number(),
+  }).index("by_run_cs_name", ["runId", "csKey", "rawName"]),
+
+  rollupMigrationProducts: defineTable({
+    runId: v.id("rollupMigrationRuns"), csKey: v.string(), product: v.string(),
+    leads: v.number(), closings: v.number(), leadOrders: v.number(), revenue: v.number(),
+    discount: v.number(), cod: v.number(), transfer: v.number(),
+  })
+    .index("by_run_cs_product", ["runId", "csKey", "product"])
+    .index("by_run_cs", ["runId", "csKey"]),
+
+  rollupMigrationDistinctClaims: defineTable({
+    runId: v.id("rollupMigrationRuns"), claimKey: v.string(), count: v.number(),
+  }).index("by_run_claim", ["runId", "claimKey"]),
+
+  rollupMigrationLatestOrders: defineTable({
+    runId: v.id("rollupMigrationRuns"), csKey: v.string(), phone: v.string(),
+    createdAt: v.number(), product: v.string(),
+  }).index("by_run_cs_phone", ["runId", "csKey", "phone"]),
+
+  rollupMigrationClosingClaims: defineTable({
+    runId: v.id("rollupMigrationRuns"), csKey: v.string(), identity: v.string(), closedAt: v.number(),
+    phone: v.string(), product: v.string(), revenue: v.number(), discount: v.number(),
+    manual: v.boolean(), delivered: v.boolean(), touchCount: v.number(),
+    paymentMethod: v.string(),
+  }).index("by_run_cs_identity", ["runId", "csKey", "identity"]),
+
+  rollupMigrationConversationStates: defineTable({
+    runId: v.id("rollupMigrationRuns"), conversationId: v.id("conversations"),
+    csKey: v.string(), csName: v.string(), pendingInboundAt: v.optional(v.number()),
+  }).index("by_run_conversation", ["runId", "conversationId"]),
+
+  rollupMigrationSamples: defineTable({
+    runId: v.id("rollupMigrationRuns"), orgId: v.id("organizations"),
+    csKey: v.string(), csName: v.string(), conversationId: v.id("conversations"),
+    sourceMessageId: v.optional(v.id("messages")),
+    deltaMs: v.number(), inboundAt: v.number(), slaBreach: v.boolean(), createdAt: v.number(),
+  })
+    .index("by_run_createdAt", ["runId", "createdAt"])
+    .index("by_run_cs_createdAt", ["runId", "csKey", "createdAt"])
+    .index("by_run_sourceMessage", ["runId", "sourceMessageId"]),
 
   // Tiny fact row per detected reply pair. NO first/ongoing tag: "first" is
   // window-dependent (earliest pair per conversation WITHIN the queried window),
