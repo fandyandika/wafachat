@@ -245,13 +245,46 @@ test("ingestion reads tenant closing phrases only for outbound text while retain
       content: "CUSTOM CLOSED", externalMessageId: "template-close",
     }));
     expect(closingRuleQueries).toBe(0);
+    const template = await ctx.db.query("messages")
+      .withIndex("by_org_externalMessageId", (q: any) => q.eq("orgId", orgId).eq("externalMessageId", "template-close"))
+      .unique();
+    expect(template?.messageType).toBe("text");
 
     await processCapturedEvent(tracedCtx, event({
       phone: "6281234567003", direction: "outbound", role: "cs", messageType: "text",
       content: "CUSTOM CLOSED", externalMessageId: "text-close",
     }));
     expect(closingRuleQueries).toBe(1);
-    expect(await ctx.db.query("shippingRecaps").collect()).toHaveLength(1);
+    expect(await ctx.db.query("shippingRecaps")
+      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId))
+      .collect()).toHaveLength(1);
+  });
+});
+
+test("generic template ingest retains the established response-sample path", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const inboundEventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}",
+    rawBody: JSON.stringify({
+      phone: "6281234567100", direction: "inbound", role: "customer",
+      content: "halo", externalMessageId: "template-inbound", timestamp: 1_000,
+    }), signatureOk: true, orgId,
+  });
+  const templateEventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}",
+    rawBody: JSON.stringify({
+      phone: "6281234567100", direction: "outbound", role: "cs", messageType: "template",
+      content: "PEMESANAN BERHASIL", externalMessageId: "template-outbound", timestamp: 2_000,
+    }), signatureOk: true, orgId,
+  });
+
+  await t.mutation(internal.ingest.core.processEvent, { eventId: inboundEventId });
+  await t.mutation(internal.ingest.core.processEvent, { eventId: templateEventId });
+
+  await t.run(async (ctx: any) => {
+    expect(await ctx.db.query("responseSamples").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId)).collect()).toHaveLength(1);
+    expect(await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
   });
 });
 

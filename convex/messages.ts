@@ -125,6 +125,7 @@ export type AppendMessageCoreArgs = {
   direction: "inbound" | "outbound";
   content: string;
   messageType?: "text" | "image" | "template" | "button";
+  closingSignalEligible?: boolean;
   externalMessageId?: string;
   createdAt?: number;
   source?: string; // "n8n" (default) | "ingest"
@@ -275,7 +276,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   });
 
   let closingRecapId: Id<"shippingRecaps"> | undefined;
-  if (canContainClosingSignal(args.direction, args.messageType ?? "text")) {
+  if (args.closingSignalEligible ?? canContainClosingSignal(args.direction, args.messageType ?? "text")) {
     const phrases = await getActiveClosingPhrases(ctx, args.orgId);
     if (messageMatchesPhrase(args.content, phrases)) {
       const result = await upsertRecapFromMessage(ctx, {

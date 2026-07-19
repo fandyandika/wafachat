@@ -14,6 +14,27 @@ import { csKey, normalizeCsName } from "./lib";
 export type ResolvedAgent = { key: string; csName: string; agentId: Id<"csConfigs"> };
 
 const normName = (s: string) => s.trim().toLowerCase();
+export const PROVIDER_NUMBER_ID_REGISTRY_LIMIT = 50;
+
+function configClaimsProviderNumberId(config: any, providerNumberId: string): boolean {
+  return config.providerNumberId === providerNumberId || (config.providerNumberIds ?? []).includes(providerNumberId);
+}
+
+async function getBoundedOrgProviderRegistry(ctx: { db: any }, orgId: Id<"organizations">): Promise<any[] | null> {
+  const rows = await ctx.db
+    .query("csConfigs")
+    .withIndex("by_org_active", (q: any) => q.eq("orgId", orgId))
+    .take(PROVIDER_NUMBER_ID_REGISTRY_LIMIT + 1);
+  return rows.length > PROVIDER_NUMBER_ID_REGISTRY_LIMIT ? null : rows;
+}
+
+/** A scalar write is safe only when the bounded tenant registry proves no other row claims it. */
+export async function canAssignProviderNumberId(
+  ctx: { db: any }, orgId: Id<"organizations">, providerNumberId: string, exceptId?: Id<"csConfigs">,
+): Promise<boolean> {
+  const rows = await getBoundedOrgProviderRegistry(ctx, orgId);
+  return rows !== null && !rows.some((row: any) => row._id !== exceptId && configClaimsProviderNumberId(row, providerNumberId));
+}
 
 export async function resolveAgent(
   ctx: { db: any },
@@ -31,13 +52,21 @@ export async function resolveAgent(
   const keyOf = (r: any): string => r.key ?? csKey(r.csName); // pre-seed fallback
   // 1) provider phone_number_id (KirimDev message attribution)
   if (q.phoneNumberId) {
-    const scalar = await ctx.db
+    const scalarMatches = await ctx.db
       .query("csConfigs")
       .withIndex("by_org_providerNumberId", (ix: any) => ix.eq("orgId", orgId).eq("providerNumberId", q.phoneNumberId))
-      .first();
-    if (scalar?.isActive) return { key: keyOf(scalar), csName: scalar.csName, agentId: scalar._id };
-    const hit = (await getActiveRows()).find((r: any) => (r.providerNumberIds ?? []).includes(q.phoneNumberId));
-    if (hit) return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
+      .take(2);
+    if (scalarMatches.length > 1) return null;
+    const registry = await getBoundedOrgProviderRegistry(ctx, orgId);
+    if (!registry) return null;
+    const matches = new Map<string, any>();
+    for (const row of scalarMatches) matches.set(String(row._id), row);
+    for (const row of registry) {
+      if (configClaimsProviderNumberId(row, q.phoneNumberId)) matches.set(String(row._id), row);
+    }
+    if (matches.size !== 1) return null;
+    const [hit] = matches.values();
+    if (hit.isActive) return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
   }
   // 2) Berdu staff id (order attribution)
   if (q.berduStaffId) {
@@ -84,14 +113,31 @@ export const seedKeys = mutation({
     const rows = await ctx.db
       .query("csConfigs")
       .withIndex("by_org_active", (q) => q.eq("orgId", orgId))
-      .collect();
+      .take(PROVIDER_NUMBER_ID_REGISTRY_LIMIT + 1);
+    const registryComplete = rows.length <= PROVIDER_NUMBER_ID_REGISTRY_LIMIT;
+    const ownersByProviderNumberId = new Map<string, Set<string>>();
+    for (const row of rows) {
+      for (const candidate of new Set([row.providerNumberId, ...(row.providerNumberIds ?? [])])) {
+        if (!candidate) continue;
+        const providerNumberId = candidate;
+        const owners = ownersByProviderNumberId.get(providerNumberId) ?? new Set<string>();
+        owners.add(String(row._id));
+        ownersByProviderNumberId.set(providerNumberId, owners);
+      }
+    }
     let seeded = 0;
     for (const r of rows) {
       const patch: Record<string, unknown> = {};
       if (r.key === undefined) patch.key = csKey(r.csName);
       if (r.nameAliases === undefined) patch.nameAliases = [];
-      if (r.providerNumberId === undefined && r.providerNumberIds?.length === 1) {
-        patch.providerNumberId = r.providerNumberIds[0];
+      const legacyProviderNumberId = r.providerNumberIds?.length === 1 ? r.providerNumberIds[0] : undefined;
+      if (
+        r.providerNumberId === undefined &&
+        legacyProviderNumberId &&
+        registryComplete &&
+        ownersByProviderNumberId.get(legacyProviderNumberId)?.size === 1
+      ) {
+        patch.providerNumberId = legacyProviderNumberId;
       }
       if (Object.keys(patch).length > 0) {
         await ctx.db.patch(r._id, { ...patch, updatedAt: Date.now() });

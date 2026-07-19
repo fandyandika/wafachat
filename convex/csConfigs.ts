@@ -3,6 +3,7 @@ import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizeCsName, csKey } from "./lib";
+import { canAssignProviderNumberId } from "./agents";
 
 export type CsFeatureConfig = {
   csName: string;
@@ -143,6 +144,12 @@ export const upsert = mutation({
       .query("csConfigs")
       .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
+    if (
+      args.providerNumberId &&
+      !await canAssignProviderNumberId(ctx, orgId, args.providerNumberId, existing?._id)
+    ) {
+      throw new Error(`providerNumberId is already assigned or cannot be proven unique: ${args.providerNumberId}`);
+    }
     const payload = { ...args, normalizedName, updatedAt: now };
 
     if (existing) {
@@ -157,7 +164,7 @@ export const upsert = mutation({
 
 // Map a CS to one or more WABA phone_number_ids so the Ingestion API can attribute
 // messages/closings to the right CS without n8n (replaces the hardcoded n8n map).
-// Patches only providerNumberIds — preserves all other config fields.
+// Synchronizes the indexed scalar only when the replacement array has one provably unique ID.
 export const setProviderNumberIds = mutation({
   args: { csName: v.string(), providerNumberIds: v.array(v.string()) },
   handler: async (ctx, args) => {
@@ -168,7 +175,11 @@ export const setProviderNumberIds = mutation({
       .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
     if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
-    await ctx.db.patch(existing._id, { providerNumberIds: args.providerNumberIds, updatedAt: Date.now() });
+    const candidate = args.providerNumberIds.length === 1 ? args.providerNumberIds[0] : undefined;
+    const providerNumberId = candidate && await canAssignProviderNumberId(ctx, orgId, candidate, existing._id)
+      ? candidate
+      : undefined;
+    await ctx.db.patch(existing._id, { providerNumberIds: args.providerNumberIds, providerNumberId, updatedAt: Date.now() });
     return { success: true, csName: args.csName, providerNumberIds: args.providerNumberIds };
   },
 });

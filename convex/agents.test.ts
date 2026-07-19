@@ -112,6 +112,47 @@ test("resolveAgent: scalar provider IDs stay tenant-scoped and legacy arrays sti
   });
 });
 
+test("resolveAgent: same-org scalar provider ID collisions remain unresolved", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedAgent(t, orgId, { csName: "Alfa", normalizedName: "alfa", key: "alfa", providerNumberId: "PHONE-DUPLICATE", providerNumberIds: [] });
+  await seedAgent(t, orgId, { csName: "Beta", normalizedName: "beta", key: "beta", providerNumberId: "PHONE-DUPLICATE", providerNumberIds: [], berduStaffIds: [] });
+
+  await t.run(async (ctx: any) => {
+    expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-DUPLICATE" })).toBeNull();
+  });
+});
+
+test("resolveAgent: duplicate legacy provider IDs remain unresolved", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedAgent(t, orgId, { csName: "Alfa", normalizedName: "alfa", key: "alfa", providerNumberId: undefined, providerNumberIds: ["PHONE-DUPLICATE"] });
+  await seedAgent(t, orgId, { csName: "Beta", normalizedName: "beta", key: "beta", providerNumberId: undefined, providerNumberIds: ["PHONE-DUPLICATE"], berduStaffIds: [] });
+
+  await t.run(async (ctx: any) => {
+    expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-DUPLICATE" })).toBeNull();
+  });
+});
+
+test("resolveAgent: bounded legacy provider lookup refuses an oversized org registry", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    for (let i = 0; i < 51; i++) {
+      await ctx.db.insert("csConfigs", {
+        orgId, normalizedName: `cs-${i}`, csName: `CS ${i}`, key: `cs-${i}`,
+        nameAliases: [], berduStaffIds: [], providerNumberIds: i === 0 ? ["PHONE-CAPPED"] : [],
+        orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+        isActive: true, createdAt: 1, updatedAt: 1,
+      });
+    }
+  });
+
+  await t.run(async (ctx: any) => {
+    expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-CAPPED" })).toBeNull();
+  });
+});
+
 test("resolveAgent: legacy no-key fallback returns only the requested org's matching row", async () => {
   const t = convexTest(schema);
   const orgA = await seedOrg(t);
@@ -135,6 +176,7 @@ test("seedKeys: idempotently backfills scalar provider IDs only from unambiguous
   await seedAgent(t, orgId, { key: undefined, nameAliases: undefined });
   await seedAgent(t, orgId, { csName: "Risma", normalizedName: "risma", key: "risma", nameAliases: [], berduStaffIds: ["B-1CxSmL"], providerNumberIds: ["433364286526515"] });
   await seedAgent(t, orgId, { csName: "Multi", normalizedName: "multi", key: "multi", nameAliases: [], berduStaffIds: [], providerNumberIds: ["PHONE-ONE", "PHONE-TWO"] });
+  await seedAgent(t, orgId, { csName: "Duplicate", normalizedName: "duplicate", key: "duplicate", nameAliases: [], berduStaffIds: [], providerNumberIds: ["1197250776802755"] });
   const asAdmin = t.withIdentity(ADMIN);
   const r1 = await asAdmin.mutation(api.agents.seedKeys, {});
   expect(r1.seeded).toBe(2);
@@ -143,9 +185,10 @@ test("seedKeys: idempotently backfills scalar provider IDs only from unambiguous
   await t.run(async (ctx: any) => {
     const rows = await ctx.db.query("csConfigs").collect();
     for (const row of rows) { expect(row.key).toBeDefined(); expect(row.nameAliases).toBeDefined(); }
-    expect(rows.find((row: any) => row.csName === "Aisyah")?.providerNumberId).toBe("1197250776802755");
+    expect(rows.find((row: any) => row.csName === "Aisyah")?.providerNumberId).toBeUndefined();
     expect(rows.find((row: any) => row.csName === "Risma")?.providerNumberId).toBe("433364286526515");
     expect(rows.find((row: any) => row.csName === "Multi")?.providerNumberId).toBeUndefined();
+    expect(rows.find((row: any) => row.csName === "Duplicate")?.providerNumberId).toBeUndefined();
   });
 });
 
