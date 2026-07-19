@@ -63,23 +63,69 @@ async function closeReason(
   return now - ref > ARCHIVE_AFTER_MS ? "stale" : null;
 }
 
-// Phase 1 is read-only: cursors remain valid because indexed status rows are not patched while scanning.
+// Phase 1 uses an immutable creation-time keyset; processed rows may leave the status index safely.
 export const scanOpenBatch = internalQuery({
   args: {
-    cursor: v.union(v.string(), v.null()),
+    afterCreationTime: v.optional(v.number()),
     status: v.union(v.literal("active"), v.literal("handover")),
     orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
-    const page = await ctx.db
+    const rows = await ctx.db
       .query("conversations")
-      .withIndex("by_org_status", (q: any) => q.eq("orgId", args.orgId).eq("status", args.status))
-      .paginate({ cursor: args.cursor, numItems: BATCH });
+      .withIndex("by_org_status", (q: any) => {
+        const statusRange = q.eq("orgId", args.orgId).eq("status", args.status);
+        return args.afterCreationTime === undefined
+          ? statusRange
+          : statusRange.gt("_creationTime", args.afterCreationTime);
+      })
+      .take(BATCH);
     return {
-      ids: page.page.map((conversation) => conversation._id),
-      continueCursor: String(page.continueCursor),
-      isDone: page.isDone,
+      ids: rows.map((conversation) => conversation._id),
+      nextAfterCreationTime: rows.at(-1)?._creationTime ?? args.afterCreationTime,
+      isDone: rows.length < BATCH,
     };
+  },
+});
+
+export const getSweepState = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: (ctx, args) => ctx.db
+    .query("lifecycleSweepStates")
+    .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+    .unique(),
+});
+
+export const commitSweepState = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    reset: v.boolean(),
+    activeAfterCreationTime: v.optional(v.number()),
+    handoverAfterCreationTime: v.optional(v.number()),
+    activeDone: v.boolean(),
+    handoverDone: v.boolean(),
+    nextStatus: v.union(v.literal("active"), v.literal("handover")),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("lifecycleSweepStates")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (args.reset) {
+      if (existing) await ctx.db.delete(existing._id);
+      return;
+    }
+    const value = {
+      orgId: args.orgId,
+      activeAfterCreationTime: args.activeAfterCreationTime,
+      handoverAfterCreationTime: args.handoverAfterCreationTime,
+      activeDone: args.activeDone,
+      handoverDone: args.handoverDone,
+      nextStatus: args.nextStatus,
+      updatedAt: Date.now(),
+    };
+    if (existing) await ctx.db.replace(existing._id, value);
+    else await ctx.db.insert("lifecycleSweepStates", value);
   },
 });
 
@@ -128,52 +174,62 @@ export async function sweep(
   pageBudget = SWEEP_MAX_PAGES,
 ): Promise<SweepResult> {
   const now = Date.now();
-  const cursors: Record<"active" | "handover", string | null> = { active: null, handover: null };
-  const done: Record<"active" | "handover", boolean> = { active: false, handover: false };
-  const ids: any[] = [];
-  const seen = new Set<string>();
-  let nextStatus: "active" | "handover" = "active";
+  const saved: any = dryRun
+    ? null
+    : await ctx.runQuery(internal.conversationLifecycle.getSweepState, { orgId });
+  const after: Record<"active" | "handover", number | undefined> = {
+    active: saved?.activeAfterCreationTime,
+    handover: saved?.handoverAfterCreationTime,
+  };
+  const done: Record<"active" | "handover", boolean> = {
+    active: saved?.activeDone ?? false,
+    handover: saved?.handoverDone ?? false,
+  };
+  let nextStatus: "active" | "handover" = saved?.nextStatus ?? "active";
   let pages = 0;
+  let considered = 0;
+  let closedWon = 0;
+  let closedMarker = 0;
+  let closedStale = 0;
 
-  // The budget is TOTAL pages across both statuses. Alternation is fair while both have work; after
-  // one finishes, the other consumes the remaining budget. BATCH=25 caps selection at 20k rows.
-  // Status pages are separate transactions: a handover↔active transition can move behind one cursor
-  // after the other status was scanned. That row is intentionally picked up by the next scheduled
-  // sweep. A durable transition queue/snapshot would provide same-run capture but is outside this
-  // bounded I/O remediation; a status-independent historical scan would double growing-table reads.
+  // The budget is TOTAL pages across both statuses. Each page is applied before its immutable
+  // creation-time boundary can advance. Durable progress is committed only after every selected
+  // page succeeds, so action retries are idempotent and never skip unapplied rows.
+  // A status transition that lands behind a saved boundary remains open until both streams reach
+  // terminal and the state resets; the following cycle catches it without an unbounded extra scan.
   const totalPageBudget = Math.max(0, Math.floor(pageBudget));
   while (pages < totalPageBudget && !(done.active && done.handover)) {
     const status: "active" | "handover" = done[nextStatus]
       ? (nextStatus === "active" ? "handover" : "active")
       : nextStatus;
     const page: any = await ctx.runQuery(internal.conversationLifecycle.scanOpenBatch, {
-      cursor: cursors[status], status, orgId,
+      afterCreationTime: after[status], status, orgId,
+    });
+    const result: any = await ctx.runMutation(internal.conversationLifecycle.processConversationIds, {
+      ids: page.ids, dryRun, now, orgId,
     });
     pages++;
-    cursors[status] = page.continueCursor;
-    done[status] = page.isDone;
-    for (const id of page.ids) {
-      const key = String(id);
-      if (!seen.has(key)) {
-        seen.add(key);
-        ids.push(id);
-      }
-    }
-    nextStatus = status === "active" ? "handover" : "active";
-  }
-
-  let closedWon = 0;
-  let closedMarker = 0;
-  let closedStale = 0;
-  for (let offset = 0; offset < ids.length; offset += BATCH) {
-    const result: any = await ctx.runMutation(internal.conversationLifecycle.processConversationIds, {
-      ids: ids.slice(offset, offset + BATCH), dryRun, now, orgId,
-    });
+    considered += page.ids.length;
     closedWon += result.closedWon;
     closedMarker += result.closedMarker;
     closedStale += result.closedStale;
+    after[status] = page.nextAfterCreationTime;
+    done[status] = page.isDone;
+    nextStatus = status === "active" ? "handover" : "active";
   }
-  return { considered: ids.length, closedWon, closedMarker, closedStale, dryRun };
+
+  if (!dryRun) {
+    await ctx.runMutation(internal.conversationLifecycle.commitSweepState, {
+      orgId,
+      reset: done.active && done.handover,
+      activeAfterCreationTime: after.active,
+      handoverAfterCreationTime: after.handover,
+      activeDone: done.active,
+      handoverDone: done.handover,
+      nextStatus,
+    });
+  }
+  return { considered, closedWon, closedMarker, closedStale, dryRun };
 }
 
 // Internal entry point. The daily cron calls it with no args (executes). For the one-time backfill /

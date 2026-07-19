@@ -1,4 +1,5 @@
 import { convexTest } from "convex-test";
+import { getFunctionName } from "convex/server";
 import { expect, test } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
@@ -43,14 +44,14 @@ async function scanAndProcessStatus(
   options: { dryRun: boolean; now: number; status?: "active" | "handover" },
 ) {
   const ids: Id<"conversations">[] = [];
-  let cursor: string | null = null;
+  let afterCreationTime: number | undefined;
   let isDone = false;
   while (!isDone) {
     const page: any = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-      cursor, status: options.status ?? "active", orgId,
+      afterCreationTime, status: options.status ?? "active", orgId,
     });
     ids.push(...page.ids);
-    cursor = page.continueCursor;
+    afterCreationTime = page.nextAfterCreationTime;
     isDone = page.isDone;
   }
   const totals = { closedWon: 0, closedMarker: 0, closedStale: 0 };
@@ -295,7 +296,7 @@ test("two-phase apply re-reads fresh activity before deciding whether to close",
     orgId, ...conv("O-RACE", "628403"),
   }));
   const scanned = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-    cursor: null, status: "active", orgId,
+    status: "active", orgId,
   });
   expect(scanned.ids).toEqual([conversationId]);
   await t.run((ctx) => ctx.db.insert("messages", {
@@ -359,7 +360,7 @@ test("processConversationIds accepts and closes a normal 25-ID batch", async () 
   });
 });
 
-test("scanOpenBatch cursor is stable when an unscanned row's updatedAt changes", async () => {
+test("scanOpenBatch keyset is stable when an unscanned row's updatedAt changes", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
   const ids = await t.run(async (ctx) => {
@@ -372,12 +373,12 @@ test("scanOpenBatch cursor is stable when an unscanned row's updatedAt changes",
     return inserted;
   });
   const first = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-    cursor: null, status: "active", orgId,
+    status: "active", orgId,
   });
   expect(first.ids).toHaveLength(25);
   await t.run((ctx) => ctx.db.patch(ids[29], { updatedAt: now - 20 * DAY }));
   const second = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-    cursor: first.continueCursor, status: "active", orgId,
+    afterCreationTime: first.nextAfterCreationTime, status: "active", orgId,
   });
 
   const scanned = [...first.ids, ...second.ids];
@@ -399,21 +400,21 @@ test("a handover-to-active transition missed between status scans is closed by t
   });
 
   const firstActive = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-    cursor: null, status: "active", orgId,
+    status: "active", orgId,
   });
   await t.run((ctx) => ctx.db.patch(transitionedId, { status: "active", updatedAt: Date.now() }));
   const handover = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-    cursor: null, status: "handover", orgId,
+    status: "handover", orgId,
   });
   const scannedIds = [...firstActive.ids];
-  let cursor = firstActive.continueCursor;
+  let afterCreationTime = firstActive.nextAfterCreationTime;
   let isDone = firstActive.isDone;
   while (!isDone) {
     const page = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-      cursor, status: "active", orgId,
+      afterCreationTime, status: "active", orgId,
     });
     scannedIds.push(...page.ids);
-    cursor = page.continueCursor;
+    afterCreationTime = page.nextAfterCreationTime;
     isDone = page.isDone;
   }
   expect(handover.ids).not.toContain(transitionedId);
@@ -432,6 +433,113 @@ test("a handover-to-active transition missed between status scans is closed by t
   expect(nextSweep.closedStale).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(transitionedId))?.status).toBe("closed");
+  });
+});
+
+test("persisted keyset progress resumes past a retained prefix and resets after cycle completion", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  let behindCheckpointId!: Id<"conversations">;
+  let trailingTransitionId!: Id<"conversations">;
+  await t.run(async (ctx) => {
+    behindCheckpointId = await ctx.db.insert("conversations", {
+      orgId, ...conv("O-BEHIND", "628750", { status: "closed" as const }),
+    });
+    for (let i = 0; i < 25; i++) {
+      const id = await ctx.db.insert("conversations", {
+        orgId, ...conv(`O-RETAIN-${i}`, `62875${i + 1}`),
+      });
+      await ctx.db.insert("messages", {
+        orgId, ...inbound(id, `O-RETAIN-${i}`, `62875${i + 1}`, Date.now()),
+      });
+    }
+    trailingTransitionId = await ctx.db.insert("conversations", {
+      orgId, ...conv("O-TRAILING", "628759", { status: "handover" as const }),
+    });
+    await ctx.db.patch(trailingTransitionId, { status: "active", updatedAt: Date.now() });
+  });
+  const productionCtx = {
+    runQuery: (ref: any, args: any) => t.query(ref, args),
+    runMutation: (ref: any, args: any) => t.mutation(ref, args),
+  };
+
+  const first = await conversationLifecycle.sweep(productionCtx, orgId, false, 1);
+  const preview = await conversationLifecycle.sweep(productionCtx, orgId, true, 1);
+  const second = await conversationLifecycle.sweep(productionCtx, orgId, false, 1);
+  const third = await conversationLifecycle.sweep(productionCtx, orgId, false, 1);
+
+  expect(first).toMatchObject({ considered: 25, closedStale: 0 });
+  expect(preview).toMatchObject({ considered: 25, closedStale: 0, dryRun: true });
+  expect(second).toMatchObject({ considered: 0, closedStale: 0 });
+  expect(third).toMatchObject({ considered: 1, closedStale: 1 });
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(trailingTransitionId))?.status).toBe("closed");
+    await ctx.db.patch(behindCheckpointId, { status: "active", updatedAt: Date.now() });
+  });
+
+  const nextCycle = await conversationLifecycle.sweep(productionCtx, orgId, false, 1);
+  expect(nextCycle.closedStale).toBe(1);
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(behindCheckpointId))?.status).toBe("closed");
+  });
+});
+
+test("a failed page apply does not advance durable sweep progress", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 26; i++) {
+      await ctx.db.insert("conversations", { orgId, ...conv(`O-FAIL-${i}`, `62876${i}`) });
+    }
+  });
+  const failingCtx = {
+    runQuery: (ref: any, args: any) => t.query(ref, args),
+    runMutation: (ref: any, args: any) => {
+      if (getFunctionName(ref) === "conversationLifecycle:processConversationIds") {
+        throw new Error("simulated apply failure");
+      }
+      return t.mutation(ref, args);
+    },
+  };
+  await expect(conversationLifecycle.sweep(failingCtx, orgId, false, 1))
+    .rejects.toThrow("simulated apply failure");
+
+  const retry = await conversationLifecycle.sweep({
+    runQuery: (ref: any, args: any) => t.query(ref, args),
+    runMutation: (ref: any, args: any) => t.mutation(ref, args),
+  }, orgId, false, 1);
+  expect(retry).toMatchObject({ considered: 25, closedStale: 25 });
+});
+
+test("retry is idempotent when apply succeeds but checkpoint persistence fails", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const ids = await t.run(async (ctx) => {
+    const inserted: Id<"conversations">[] = [];
+    for (let i = 0; i < 26; i++) {
+      inserted.push(await ctx.db.insert("conversations", { orgId, ...conv(`O-RETRY-${i}`, `62877${i}`) }));
+    }
+    return inserted;
+  });
+  const commitFailingCtx = {
+    runQuery: (ref: any, args: any) => t.query(ref, args),
+    runMutation: (ref: any, args: any) => {
+      if (getFunctionName(ref) === "conversationLifecycle:commitSweepState") {
+        throw new Error("simulated checkpoint failure");
+      }
+      return t.mutation(ref, args);
+    },
+  };
+  await expect(conversationLifecycle.sweep(commitFailingCtx, orgId, false, 1))
+    .rejects.toThrow("simulated checkpoint failure");
+
+  const retry = await conversationLifecycle.sweep({
+    runQuery: (ref: any, args: any) => t.query(ref, args),
+    runMutation: (ref: any, args: any) => t.mutation(ref, args),
+  }, orgId, false, 1);
+  expect(retry).toMatchObject({ considered: 1, closedStale: 1 });
+  await t.run(async (ctx) => {
+    expect((await Promise.all(ids.map((id) => ctx.db.get(id)))).every((row) => row?.status === "closed")).toBe(true);
   });
 });
 

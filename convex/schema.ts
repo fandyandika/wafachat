@@ -71,6 +71,16 @@ export default defineSchema({
     .index("by_org_customerPhone_updatedAt", ["orgId", "customerPhone", "updatedAt"])
     .index("by_org_assignedCsName_status", ["orgId", "assignedCsName", "status"]),
 
+  lifecycleSweepStates: defineTable({
+    orgId: v.id("organizations"),
+    activeAfterCreationTime: v.optional(v.number()),
+    handoverAfterCreationTime: v.optional(v.number()),
+    activeDone: v.boolean(),
+    handoverDone: v.boolean(),
+    nextStatus: v.union(v.literal("active"), v.literal("handover")),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
   csConfigs: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     normalizedName: v.string(),
