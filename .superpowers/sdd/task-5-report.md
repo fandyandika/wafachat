@@ -82,11 +82,19 @@
 - Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 82 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
 - Commit: `b62f215` — `fix: keep agent resolution active-only`.
 
-## Sustained-backlog P1 — durable immutable keysets
+## Sustained-backlog P1 — initial durable immutable keysets
 
 - Strict TDD red used a one-page budget with 25 retained active rows and one trailing stale row transitioned from handover to active. The second invocation reconsidered the same retained prefix (25 rows instead of zero), proving stateless scans could starve trailing work indefinitely under a sustained cap.
-- Replaced opaque pagination cursors with `conversations.by_org_status` keysets: equality on org/status, `gt("_creationTime", afterCreationTime)`, and bounded `.take(25)`. Convex's implicit immutable `_creationTime` field remains valid when applied rows leave the status index.
+- The initial implementation replaced opaque pagination cursors with `conversations.by_org_status` timestamp keysets: equality on org/status, `gt("_creationTime", afterCreationTime)`, and bounded `.take(25)`. This was later superseded by the full unique manual index-key cursor below to handle creation-time ties formally.
 - Added org-indexed `lifecycleSweepStates` with independent active/handover boundaries, terminal flags, and persisted next-status fairness. A page boundary advances in memory only after its 25-or-fewer IDs apply successfully; durable state commits only after all pages selected for that invocation succeed. Both-terminal completion deletes state so transitions and rows behind prior boundaries are caught by the following cycle.
 - Dry-run and manual preview always start from an ephemeral state and never read or mutate production progress. Tests prove retained-prefix resume, active/handover fairness, trailing closure, terminal reset, behind-boundary next-cycle capture, failure-before-apply checkpoint safety, and idempotent retry when apply succeeds but checkpoint persistence fails.
 - `rtk npx convex codegen` accepted the `_creationTime` index range at schema/runtime binding generation and produced no generated-file diff. Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 85 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
 - Commit: `5d0c29f` — `fix: persist lifecycle keyset progress`.
+
+## Tie-safe P1 — maintained full-index-key paginator
+
+- Installed `convex-helpers@0.1.120` and replaced the timestamp-only scanner with its maintained manual paginator over `conversations.by_org_status`, still bounded to 25 rows. The sweep-state table now persists independent active/handover manual cursor strings rather than timestamps.
+- Strict TDD red asserted the persisted active cursor contract and found it absent under the timestamp state. Green coverage decodes the helper cursor and verifies four index-key components: org ID, status, `_creationTime`, and `_id`; `_id` is the unique tie-breaker when creation times match.
+- The helper cursor remains usable after earlier applied rows leave the status index. Existing regressions exercise both all-closable multi-page mutation and retained-prefix resume, while durable fairness, terminal reset, dry-run isolation, and failure/retry semantics are unchanged.
+- `rtk npx convex codegen` completed schema bundling and generated TypeScript with no generated-file diff. Verification: focused Task 5 suites — 85 passed; Convex TypeScript — no errors; `rtk npm run build` — optimized Next.js production build succeeded; `rtk git diff --check` — clean.
+- Commit: `4da802c` — `fix: use tie-safe lifecycle cursors`.
