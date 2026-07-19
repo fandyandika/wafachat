@@ -71,6 +71,33 @@ test("canonicalizeCs: hit returns registry canonical form; miss falls back to ra
   });
 });
 
+test("resolveAgent applies one active-only policy to phone, staff, name, alias, key, and legacy paths", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedAgent(t, orgId, {
+    csName: "Retired", normalizedName: "retired", key: "disabled", isActive: false,
+    nameAliases: ["Former Alias"], providerNumberIds: ["PHONE-DISABLED"], berduStaffIds: ["STAFF-DISABLED"],
+  });
+  await seedAgent(t, orgId, {
+    csName: "Legacy Retired", normalizedName: "legacy retired", key: undefined, isActive: false,
+    nameAliases: [], providerNumberIds: [], berduStaffIds: [],
+  });
+  const activeId = await seedAgent(t, orgId, {
+    csName: "Current", normalizedName: "current", key: "enabled",
+    nameAliases: [], providerNumberIds: [], berduStaffIds: [],
+  });
+
+  await t.run(async (ctx: any) => {
+    expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-DISABLED" })).toBeNull();
+    expect(await resolveAgent(ctx, orgId, { berduStaffId: "STAFF-DISABLED" })).toBeNull();
+    expect(await resolveAgent(ctx, orgId, { name: "Retired" })).toBeNull();
+    expect(await resolveAgent(ctx, orgId, { name: "Former Alias" })).toBeNull();
+    expect(await resolveAgent(ctx, orgId, { name: "CS Disabled" })).toBeNull();
+    expect(await resolveAgent(ctx, orgId, { name: "CS Legacy Retired" })).toBeNull();
+    expect((await resolveAgent(ctx, orgId, { name: "CS Enabled" }))?.agentId).toEqual(activeId);
+  });
+});
+
 test("resolveAgent: canonical-key and legacy fallbacks stay inside the requested org", async () => {
   const t = convexTest(schema);
   const orgA = await seedOrg(t);

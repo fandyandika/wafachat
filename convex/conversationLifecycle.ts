@@ -137,6 +137,10 @@ export async function sweep(
 
   // The budget is TOTAL pages across both statuses. Alternation is fair while both have work; after
   // one finishes, the other consumes the remaining budget. BATCH=25 caps selection at 20k rows.
+  // Status pages are separate transactions: a handover↔active transition can move behind one cursor
+  // after the other status was scanned. That row is intentionally picked up by the next scheduled
+  // sweep. A durable transition queue/snapshot would provide same-run capture but is outside this
+  // bounded I/O remediation; a status-independent historical scan would double growing-table reads.
   const totalPageBudget = Math.max(0, Math.floor(pageBudget));
   while (pages < totalPageBudget && !(done.active && done.handover)) {
     const status: "active" | "handover" = done[nextStatus]

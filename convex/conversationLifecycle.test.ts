@@ -385,6 +385,56 @@ test("scanOpenBatch cursor is stable when an unscanned row's updatedAt changes",
   expect(new Set(scanned)).toEqual(new Set(ids));
 });
 
+test("a handover-to-active transition missed between status scans is closed by the next production sweep", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  let transitionedId!: Id<"conversations">;
+  await t.run(async (ctx) => {
+    transitionedId = await ctx.db.insert("conversations", {
+      orgId, ...conv("O-TRANSITION", "628740", { status: "handover" as const }),
+    });
+    for (let i = 0; i < 26; i++) {
+      await ctx.db.insert("conversations", { orgId, ...conv(`O-EXISTING-${i}`, `62874${i + 1}`) });
+    }
+  });
+
+  const firstActive = await t.query(internal.conversationLifecycle.scanOpenBatch, {
+    cursor: null, status: "active", orgId,
+  });
+  await t.run((ctx) => ctx.db.patch(transitionedId, { status: "active", updatedAt: Date.now() }));
+  const handover = await t.query(internal.conversationLifecycle.scanOpenBatch, {
+    cursor: null, status: "handover", orgId,
+  });
+  const scannedIds = [...firstActive.ids];
+  let cursor = firstActive.continueCursor;
+  let isDone = firstActive.isDone;
+  while (!isDone) {
+    const page = await t.query(internal.conversationLifecycle.scanOpenBatch, {
+      cursor, status: "active", orgId,
+    });
+    scannedIds.push(...page.ids);
+    cursor = page.continueCursor;
+    isDone = page.isDone;
+  }
+  expect(handover.ids).not.toContain(transitionedId);
+  expect(scannedIds).not.toContain(transitionedId);
+  for (let offset = 0; offset < scannedIds.length; offset += 25) {
+    await t.mutation(internal.conversationLifecycle.processConversationIds, {
+      ids: scannedIds.slice(offset, offset + 25), dryRun: false, now: Date.now(), orgId,
+    });
+  }
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(transitionedId))?.status).toBe("active");
+  });
+
+  const nextSweep = await t.action(internal.conversationLifecycle.cronArchiveSweep, {});
+  expect(nextSweep.considered).toBe(1);
+  expect(nextSweep.closedStale).toBe(1);
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(transitionedId))?.status).toBe("closed");
+  });
+});
+
 test("sweep's total page cap alternates statuses and processes at most 25 rows per page", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);

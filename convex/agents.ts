@@ -21,6 +21,8 @@ export async function resolveAgent(
   q: { name?: string; berduStaffId?: string; phoneNumberId?: string },
 ): Promise<ResolvedAgent | null> {
   if (!q.name && !q.berduStaffId && !q.phoneNumberId) return null;
+  // Every resolution path is active-only. The org-scoped rows below cover phone, staff, current
+  // name, alias, and legacy no-key matching; the exact canonical-key query repeats that policy.
   const rows = await ctx.db
     .query("csConfigs")
     .withIndex("by_org_active", (q: any) => q.eq("orgId", orgId).eq("isActive", true))
@@ -44,7 +46,11 @@ export async function resolveAgent(
       const hit =
         rows.find((r: any) => normName(r.csName) === n) ??
         rows.find((r: any) => (r.nameAliases ?? []).some((a: string) => normName(a) === n)) ??
-        await ctx.db.query("csConfigs").withIndex("by_org_key", (ix: any) => ix.eq("orgId", orgId).eq("key", csKey(q.name!))).first() ??
+        await ctx.db
+          .query("csConfigs")
+          .withIndex("by_org_key", (ix: any) => ix.eq("orgId", orgId).eq("key", csKey(q.name!)))
+          .filter((filter: any) => filter.eq(filter.field("isActive"), true))
+          .first() ??
         rows.find((r: any) => r.key == null && csKey(q.name!) === csKey(r.csName));
       if (hit) return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
     }
