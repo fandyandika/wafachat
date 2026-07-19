@@ -321,11 +321,11 @@ export const unarchiveFollowUp = mutation({
 });
 
 export const getArchivedFollowUps = query({
-  args: { csName: v.optional(v.string()) },
+  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "followUp.getArchivedFollowUps");
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
-    const now = Date.now();
+    const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
     const since = now - 14 * DAY;
     const csKeyMemo = args.csName ? csKey(args.csName) : null;

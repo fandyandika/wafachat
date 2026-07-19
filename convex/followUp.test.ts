@@ -398,7 +398,7 @@ test("getArchivedFollowUps: lists recent manual archives, scoped by CS", async (
       status: "closed", followUpArchivedAt: now - 2 * HOUR
     });
   });
-  const res = await asAdmin.query(api.followUp.getArchivedFollowUps, { csName: "Nabila" });
+  const res = await asAdmin.query(api.followUp.getArchivedFollowUps, { csName: "Nabila", nowOverride: now });
   expect(res.find((r) => r.orderId === "O-19")).toBeDefined();
   expect(res.find((r) => r.orderId === "O-20")).toBeUndefined();
   expect(res[0].followUpArchivedAt).toBeGreaterThan(res[1]?.followUpArchivedAt ?? 0);
