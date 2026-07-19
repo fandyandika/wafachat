@@ -185,3 +185,39 @@ test("commit retains an unparseable fetched gap until its order is actually pres
   });
   expect(retry).toEqual({ gaps: [3], nextCounter: 4 });
 });
+
+test("stale commits do not resurrect resolved gaps or skip the first over-capacity gap", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const initial = Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 1);
+  await seedState(t, orgId, MAX_UNRESOLVED_COUNTERS + 1, initial);
+  const stale = { orgId, datePrefix: "260719", nextCounter: MAX_UNRESOLVED_COUNTERS + 1, unresolvedCounters: initial };
+
+  // A newer run sees 1 arrive, fills the released slot with 501, and advances.
+  await insertOrder(t, orgId, 1);
+  const fresh = await t.mutation(internal.ingest.reconcileState.commitReconcileRun, {
+    orgId,
+    datePrefix: "260719",
+    nextCounter: MAX_UNRESOLVED_COUNTERS + 2,
+    unresolvedCounters: Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 2),
+  });
+  expect(fresh.nextCounter).toBe(MAX_UNRESOLVED_COUNTERS + 2);
+  expect(fresh.unresolvedCounters).toEqual(Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 2));
+
+  const retryAfterFresh = await t.mutation(internal.ingest.reconcileState.commitReconcileRun, stale);
+  expect(retryAfterFresh.nextCounter).toBe(MAX_UNRESOLVED_COUNTERS + 2);
+  expect(retryAfterFresh.unresolvedCounters).toEqual(Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 2));
+
+  // If that resolved row is later deleted, the stale retry must clamp at the
+  // first non-durable gap instead of advancing past 501.
+  await t.run(async (ctx: any) => {
+    const order = await ctx.db
+      .query("orders")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "O-260719000001"))
+      .unique();
+    await ctx.db.delete(order._id);
+  });
+  const safeAfterDelete = await t.mutation(internal.ingest.reconcileState.commitReconcileRun, stale);
+  expect(safeAfterDelete.nextCounter).toBe(MAX_UNRESOLVED_COUNTERS + 1);
+  expect(safeAfterDelete.unresolvedCounters).toEqual(initial);
+});

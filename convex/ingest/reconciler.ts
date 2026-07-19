@@ -19,10 +19,37 @@ export function computeGaps(counters: number[], min: number | null, max: number 
   return gaps;
 }
 
-// Processing can return `{ status: "skipped" }` without throwing. Only the
-// commit mutation's exact `(orgId, orderId)` lookup may clear a requested gap.
-export function gapsPendingDatabaseVerification(gaps: Iterable<number>): number[] {
-  return [...new Set(gaps)].sort((a, b) => a - b);
+type PreparedReconcileRun = { gaps: number[]; nextCounter: number };
+type ReconcileCommit = { nextCounter: number; unresolvedCounters: number[] };
+
+// Processing can return `{ status: "skipped" }` without throwing. Keep every
+// requested counter through the commit; only its exact DB lookup may clear it.
+export async function reconcilePreparedGaps(
+  run: PreparedReconcileRun,
+  deps: {
+    fetchDetail: (counter: number) => Promise<unknown | null>;
+    processDetail: (counter: number, detail: unknown) => Promise<unknown>;
+    commit: (args: { nextCounter: number; unresolvedCounters: number[] }) => Promise<ReconcileCommit>;
+    onFailure: (counter: number, error: unknown) => Promise<void>;
+  },
+) {
+  const requestedCounters = [...new Set(run.gaps)].sort((a, b) => a - b);
+  for (const counter of requestedCounters.slice(0, 50)) {
+    try {
+      const detail = await deps.fetchDetail(counter);
+      if (detail) await deps.processDetail(counter, detail);
+    } catch (error) {
+      await deps.onFailure(counter, error);
+    }
+  }
+  const committed = await deps.commit({
+    nextCounter: run.nextCounter,
+    unresolvedCounters: requestedCounters,
+  });
+  return {
+    ...committed,
+    healed: requestedCounters.filter((counter) => !committed.unresolvedCounters.includes(counter)).length,
+  };
 }
 
 export async function buildBerduAuth(appId: string, appSecret: string, hmacKey: string, nowSec: number) {
@@ -63,38 +90,33 @@ export const runReconcile = internalAction({
     if (!orgId) return;
     const datePrefix = wibDatePrefix(Date.now());
     const run = await ctx.runQuery(internal.ingest.reconcileState.prepareReconcileRun, { datePrefix, orgId });
-    const unresolvedCounters = gapsPendingDatabaseVerification(run.gaps);
-    for (const c of run.gaps.slice(0, 50)) { // external detail-fetch cap per cron run
-      let eventId: Id<"ingestEvents"> | undefined;
-      try {
-        const orderId = `O-${datePrefix}${String(c).padStart(6, "0")}`;
-        const detail = await fetchBerduOrderDetail(orderId);
-        if (!detail) continue;
-        eventId = await ctx.runMutation(internal.ingest.events.captureEvent, {
-          sourceKey: "berdu-reconciler", kind: "lead.created",
-          rawHeaders: "{}", rawBody: JSON.stringify({ order: detail }), signatureOk: true,
-          orgId,
-        });
-        await ctx.runMutation(internal.ingest.core.processEvent, { eventId });
-      } catch (e) {
-        // An individual fetch/process failure must not prevent the state commit:
-        // the counter remains unresolved and is retried by a later cron run.
-        if (eventId) {
-          await ctx.runMutation(internal.ingest.events.markFailed, {
-            eventId,
-            error: (e as Error).message,
+    const result = await reconcilePreparedGaps(run, {
+      fetchDetail: (counter) => fetchBerduOrderDetail(`O-${datePrefix}${String(counter).padStart(6, "0")}`),
+      processDetail: async (_counter, detail) => {
+        let eventId: Id<"ingestEvents"> | undefined;
+        try {
+          eventId = await ctx.runMutation(internal.ingest.events.captureEvent, {
+            sourceKey: "berdu-reconciler", kind: "lead.created",
+            rawHeaders: "{}", rawBody: JSON.stringify({ order: detail }), signatureOk: true,
+            orgId,
           });
+          return await ctx.runMutation(internal.ingest.core.processEvent, { eventId });
+        } catch (error) {
+          // Preserve capture-first replay semantics when processing fails.
+          if (eventId) {
+            await ctx.runMutation(internal.ingest.events.markFailed, {
+              eventId,
+              error: (error as Error).message,
+            });
+          }
+          throw error;
         }
-        console.warn(`[reconciler] ${datePrefix}/${c} failed: ${(e as Error).message}`);
-      }
-    }
-    const committed = await ctx.runMutation(internal.ingest.reconcileState.commitReconcileRun, {
-      orgId,
-      datePrefix,
-      nextCounter: run.nextCounter,
-      unresolvedCounters,
+      },
+      commit: (args) => ctx.runMutation(internal.ingest.reconcileState.commitReconcileRun, { orgId, datePrefix, ...args }),
+      onFailure: async (counter, error) => {
+        console.warn(`[reconciler] ${datePrefix}/${counter} failed: ${(error as Error).message}`);
+      },
     });
-    const healed = run.gaps.filter((counter) => !committed.unresolvedCounters.includes(counter)).length;
-    if (run.gaps.length > 0) console.log(`[reconciler] ${datePrefix}: ${run.gaps.length} gaps, ${healed} healed`);
+    if (run.gaps.length > 0) console.log(`[reconciler] ${datePrefix}: ${run.gaps.length} gaps, ${result.healed} healed`);
   },
 });

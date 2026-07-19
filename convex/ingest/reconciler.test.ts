@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { buildBerduAuth, computeGaps, gapsPendingDatabaseVerification, wibDatePrefix } from "./reconciler";
+import { convexTest } from "convex-test";
+import schema from "../schema";
+import { internal } from "../_generated/api";
+import { buildBerduAuth, computeGaps, reconcilePreparedGaps, wibDatePrefix } from "./reconciler";
 import { hmacBase64 } from "./signature";
 
 describe("computeGaps", () => {
@@ -27,11 +30,35 @@ describe("buildBerduAuth", () => {
   });
 });
 
-describe("gapsPendingDatabaseVerification", () => {
-  test("keeps a non-throwing skipped process result pending for the commit lookup", () => {
-    const processOutcome = { status: "skipped", reason: "unparseable order detail" };
+describe("reconcilePreparedGaps", () => {
+  test("commits a non-throwing skipped detail as unresolved until the exact order exists", async () => {
+    const t = convexTest(schema);
+    const orgId: any = await t.run((ctx: any) =>
+      ctx.db.insert("organizations", { slug: "orchestration", name: "Orchestration", createdAt: 1, updatedAt: 1 }),
+    );
+    const processed: unknown[] = [];
 
-    expect(processOutcome.status).toBe("skipped");
-    expect(gapsPendingDatabaseVerification([3])).toEqual([3]);
+    const result = await reconcilePreparedGaps(
+      { gaps: [3], nextCounter: 4 },
+      {
+        fetchDetail: async () => ({ order_id: "O-260719000999" }), // mismatched detail
+        processDetail: async (_counter, detail) => {
+          processed.push(detail);
+          return { status: "skipped", reason: "unparseable order detail" };
+        },
+        commit: (args) => t.mutation(internal.ingest.reconcileState.commitReconcileRun, {
+          orgId,
+          datePrefix: "260719",
+          ...args,
+        }),
+        onFailure: async () => {},
+      },
+    );
+
+    expect(processed).toHaveLength(1);
+    expect(result.healed).toBe(0);
+    expect(result.unresolvedCounters).toEqual([3]);
+    const retry = await t.query(internal.ingest.reconcileState.prepareReconcileRun, { orgId, datePrefix: "260719" });
+    expect(retry).toEqual({ gaps: [3], nextCounter: 4 });
   });
 });
