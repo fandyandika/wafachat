@@ -38,3 +38,11 @@
 - Production internal flow remains direct: `processCapturedEvent` passes `event.orgId` into the resolver, with no global/unindexed growing-table scan.
 - Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 72 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
 - Commit: `9a335e6` — `fix: scope Berdu fallback to default org`.
+
+## P2 rereview — production sweep and legacy no-key isolation
+
+- Replaced the direct `resolveBatch` starvation check with a production `cronArchiveSweep` regression containing 26 active rows and one handover row. It asserts the exact 27-row totals and verifies every stored row closes, covering the point where handover is terminal while active needs another iteration.
+- The production-boundary regression exposed an index-cursor invalidation bug: closing the first 25 active rows removed them from the paginated status index and skipped row 26. The sweep now tracks terminal status streams independently and resets only a mutated stream's cursor, so terminal streams are not rerun and remaining indexed rows are not skipped.
+- Added a true legacy fallback isolation regression with identical canonical names and absent `key` fields in two organizations. It asserts the requested organization resolves its own document ID, which fails under a plausible global-row fallback.
+- Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 73 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
+- Commit: `e35594c` — `fix: prevent lifecycle sweep cursor skips`.
