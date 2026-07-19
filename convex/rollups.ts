@@ -79,8 +79,10 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
         order = await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", orderIdBerdu)).unique();
       }
       if (!order) {
-        const all = await ctx.db.query("orders").withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone)).collect();
-        order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
+        order = await ctx.db.query("orders")
+          .withIndex("by_org_customerPhone_createdAt", (q: any) => q
+            .eq("orgId", orgId).eq("customerPhone", phone))
+          .order("desc").first();
       }
       return { phone, order };
     }),
