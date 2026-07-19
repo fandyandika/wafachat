@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import { processCapturedEvent } from "./core";
+import { processCapturedEvent, resolveBerduStaffMap } from "./core";
 
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
@@ -20,6 +20,24 @@ const RECEIVED_RAW = JSON.stringify({
   } }] }],
 });
 const RECEIVED_HEADERS = JSON.stringify({ "x-kirim-event": "message.received" });
+
+test("resolveBerduStaffMap fails closed above the active registry cap", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 51; i++) {
+      await ctx.db.insert("csConfigs", {
+        orgId, normalizedName: `agent-${i}`, csName: `Agent ${i}`, key: `agent-${i}`,
+        nameAliases: [], berduStaffIds: [`STAFF-${i}`], providerNumberIds: [],
+        orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+        isActive: true, createdAt: i + 1, updatedAt: 1,
+      });
+    }
+  });
+  await t.run(async (ctx) => {
+    expect(await resolveBerduStaffMap(ctx, orgId)).toEqual({});
+  });
+});
 
 async function captureKirimdev(t: ReturnType<typeof convexTest>, orgId: any, rawBody: string, rawHeaders = RECEIVED_HEADERS) {
   return t.mutation(internal.ingest.events.captureEvent, {

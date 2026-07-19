@@ -6,7 +6,7 @@ import { appendMessageCore } from "../messages";
 import { parseKirimdevWebhook } from "./kirimdevAdapter";
 import { parseBerduOrderDetail, DEFAULT_BERDU_STAFF_MAP } from "./berduAdapter";
 import { upsertOrderCore } from "../state";
-import { resolveAgent } from "../agents";
+import { getBoundedActiveAgentRegistry, resolveAgent } from "../agents";
 import { getDefaultOrgId } from "../orgs";
 
 /** @deprecated B2a — use resolveAgent({ phoneNumberId }) from ../agents. */
@@ -19,7 +19,8 @@ export async function resolveCsByPhoneNumberId(ctx: any, orgId: Id<"organization
 // pre-seed map belongs only to tenant #1; other unconfigured orgs stay neutral so
 // the adapter surfaces `Staff <id>` instead of leaking tenant-1 staff names.
 export async function resolveBerduStaffMap(ctx: any, orgId: Id<"organizations">): Promise<Record<string, string>> {
-  const configs = await ctx.db.query("csConfigs").withIndex("by_org_active", (q: any) => q.eq("orgId", orgId).eq("isActive", true)).collect();
+  const configs = await getBoundedActiveAgentRegistry(ctx, orgId);
+  if (!configs) return {};
   const map: Record<string, string> = {};
   for (const c of configs) for (const id of c.berduStaffIds ?? []) map[id] = c.csName;
   if (Object.keys(map).length > 0) return map;

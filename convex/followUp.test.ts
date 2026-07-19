@@ -600,3 +600,37 @@ test("candidacyFor: resolves providerNumberId by csKey even when assignedCsName 
   const d = await t.query(internal.followUp.candidacyFor, { conversationId: convId, nowOverride: now });
   expect(d?.phoneNumberId).toBe("PHONE_X");
 });
+
+test("candidacyFor fails closed when a legacy no-key claim exceeds the active registry cap", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", {
+      orgId, ...convBase, orderId: "O-capped", customerPhone: "62871", assignedCsName: "Target",
+    });
+    await ctx.db.insert("orders", {
+      orgId, ...orderBase, orderId: "O-capped", customerPhone: "62871", assignedCsName: "Target",
+    });
+    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-capped", "62871", "inbound", now - 30 * HOUR) });
+    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-capped", "62871", "outbound", now - 29 * HOUR) });
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "not-target", csName: "CS Target", key: undefined,
+      providerNumberId: "PHONE-CAPPED", nameAliases: [], berduStaffIds: [], providerNumberIds: [],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: now, updatedAt: now,
+    });
+    for (let i = 0; i < 50; i++) {
+      await ctx.db.insert("csConfigs", {
+        orgId, normalizedName: `extra-${i}`, csName: `Extra ${i}`, key: `extra-${i}`,
+        nameAliases: [], berduStaffIds: [], providerNumberIds: [],
+        orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+        isActive: true, createdAt: now + i + 1, updatedAt: now,
+      });
+    }
+  });
+  const result = await t.query(internal.followUp.candidacyFor, {
+    conversationId: convId, nowOverride: now,
+  });
+  expect(result?.phoneNumberId).toBeNull();
+});

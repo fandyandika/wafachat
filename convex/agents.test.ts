@@ -1,7 +1,8 @@
 import { convexTest } from "convex-test";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import * as agents from "./agents";
 import { resolveAgent, canonicalizeCs } from "./agents";
 import type { Id } from "./_generated/dataModel";
 
@@ -388,6 +389,105 @@ test("seedKeys: durable scan/apply pagination advances through more than 51 acti
       .collect();
     expect(rows).toHaveLength(52);
     expect(rows.every((row: any) => row.providerNumberId === row.providerNumberIds[0])).toBe(true);
+  });
+});
+
+test("seedKeysForOrg migrates the requested tenant without viewer-derived scope", async () => {
+  const t = convexTest(schema);
+  const orgA = await seedOrg(t);
+  const orgB = await t.run((ctx: any) => ctx.db.insert("organizations", {
+    slug: "other", name: "Other", createdAt: 1, updatedAt: 1,
+  })) as Id<"organizations">;
+  await seedAgent(t, orgA, { key: undefined, nameAliases: undefined });
+  await seedAgent(t, orgB, { key: undefined, nameAliases: undefined });
+
+  let result: any;
+  for (let call = 0; call < 8; call++) {
+    result = await t.mutation(internal.agents.seedKeysForOrg, { orgId: orgB });
+    if (result.done) break;
+  }
+  expect(result.done).toBe(true);
+  await t.run(async (ctx: any) => {
+    expect(await ctx.db.query("providerNumberBackfillRuns")
+      .withIndex("by_org", (q: any) => q.eq("orgId", orgA)).unique()).toBeNull();
+    expect((await ctx.db.query("providerNumberBackfillRuns")
+      .withIndex("by_org", (q: any) => q.eq("orgId", orgB)).unique())?.phase).toBe("complete");
+  });
+});
+
+test("provider migration driver reports completion and isolates per-org failures", async () => {
+  const driveProviderMigrations = (agents as any).driveProviderMigrations;
+  expect(driveProviderMigrations).toBeTypeOf("function");
+  const attempted: string[] = [];
+  const continued: string[] = [];
+  const result = await driveProviderMigrations(
+    ["org-1", "org-2", "org-3"],
+    async (orgId: string) => {
+      attempted.push(orgId);
+      if (orgId === "org-2") throw new Error("tenant failed");
+      return { done: orgId === "org-3" };
+    },
+    async (orgId: string) => { continued.push(orgId); },
+  );
+  expect(attempted).toEqual(["org-1", "org-2", "org-3"]);
+  expect(continued).toEqual(["org-1"]);
+  expect(result).toEqual({
+    completedOrganizations: 1,
+    continuingOrganizations: 1,
+    failedOrganizations: ["org-2"],
+  });
+});
+
+test("platform provider migration schedules resumable work for every organization", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = convexTest(schema);
+    const orgA = await seedOrg(t);
+    const orgB = await t.run((ctx: any) => ctx.db.insert("organizations", {
+      slug: "other", name: "Other", createdAt: 1, updatedAt: 1,
+    })) as Id<"organizations">;
+    await seedAgent(t, orgA, { providerNumberId: undefined, providerNumberIds: ["PHONE-A"] });
+    await seedAgent(t, orgB, {
+      csName: "Beta", normalizedName: "beta", key: "beta", berduStaffIds: [],
+      providerNumberId: undefined, providerNumberIds: ["PHONE-B"],
+    });
+
+    const first = await t.action(internal.agents.seedKeysForAllOrganizations, {});
+    expect(first).toMatchObject({
+      completedOrganizations: 0,
+      continuingOrganizations: 2,
+      failedOrganizations: [],
+      complete: true,
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    await t.run(async (ctx: any) => {
+      for (const orgId of [orgA, orgB]) {
+        expect((await ctx.db.query("providerNumberBackfillRuns")
+          .withIndex("by_org", (q: any) => q.eq("orgId", orgId)).unique())?.phase).toBe("complete");
+      }
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("resolveAgent fails closed for array-based staff and alias claims above the registry cap", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedAgent(t, orgId, {
+    csName: "Target", normalizedName: "target", key: "target",
+    nameAliases: ["Special Alias"], berduStaffIds: ["SPECIAL-STAFF"], providerNumberIds: [],
+  });
+  for (let i = 0; i < 50; i++) {
+    await seedAgent(t, orgId, {
+      csName: `Extra ${i}`, normalizedName: `extra-${i}`, key: `extra-${i}`,
+      nameAliases: [], berduStaffIds: [], providerNumberIds: [], createdAt: i + 2,
+    });
+  }
+
+  await t.run(async (ctx: any) => {
+    expect(await resolveAgent(ctx, orgId, { berduStaffId: "SPECIAL-STAFF" })).toBeNull();
+    expect(await resolveAgent(ctx, orgId, { name: "Special Alias" })).toBeNull();
   });
 });
 

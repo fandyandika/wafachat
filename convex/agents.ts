@@ -1,6 +1,7 @@
 import { v } from "convex/values";
-import { mutation } from "./_generated/server";
+import { internalAction, internalMutation, mutation } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { requireAdminOrg } from "./authz";
 import { csKey, normalizeCsName } from "./lib";
 import { paginator } from "convex-helpers/server/pagination";
@@ -16,7 +17,8 @@ import schema from "./schema";
 export type ResolvedAgent = { key: string; csName: string; agentId: Id<"csConfigs"> };
 
 const normName = (s: string) => s.trim().toLowerCase();
-export const PROVIDER_NUMBER_ID_REGISTRY_LIMIT = 50;
+export const ACTIVE_AGENT_REGISTRY_LIMIT = 50;
+export const PROVIDER_NUMBER_ID_REGISTRY_LIMIT = ACTIVE_AGENT_REGISTRY_LIMIT;
 const PROVIDER_CLAIM_VERSION = 2;
 const MAX_PROVIDER_IDS_PER_AGENT = 100;
 
@@ -40,12 +42,14 @@ async function getIndexedClaims(ctx: { db: any }, orgId: Id<"organizations">, ru
     .take(2);
 }
 
-async function getBoundedActiveLegacyRegistry(ctx: { db: any }, orgId: Id<"organizations">): Promise<any[] | null> {
+export async function getBoundedActiveAgentRegistry(
+  ctx: { db: any }, orgId: Id<"organizations">,
+): Promise<any[] | null> {
   const rows = await ctx.db
     .query("csConfigs")
     .withIndex("by_org_active", (q: any) => q.eq("orgId", orgId).eq("isActive", true))
-    .take(PROVIDER_NUMBER_ID_REGISTRY_LIMIT + 1);
-  return rows.length > PROVIDER_NUMBER_ID_REGISTRY_LIMIT ? null : rows;
+    .take(ACTIVE_AGENT_REGISTRY_LIMIT + 1);
+  return rows.length > ACTIVE_AGENT_REGISTRY_LIMIT ? null : rows;
 }
 
 /** Validate an active ownership claim through the durable index, or a bounded pre-migration proof. */
@@ -57,7 +61,7 @@ export async function canAssignProviderNumberId(
     const claims = await getIndexedClaims(ctx, orgId, run._id, providerNumberId);
     return !claims.some((claim: any) => claim.agentId !== exceptId);
   }
-  const rows = await getBoundedActiveLegacyRegistry(ctx, orgId);
+  const rows = await getBoundedActiveAgentRegistry(ctx, orgId);
   return rows !== null && !rows.some((row: any) =>
     row._id !== exceptId && providerClaims(row.providerNumberId, row.providerNumberIds).includes(providerNumberId));
 }
@@ -91,11 +95,11 @@ export async function resolveAgent(
   if (!q.name && !q.berduStaffId && !q.phoneNumberId) return null;
   // Every resolution path is active-only. Avoid materializing the active registry for the
   // common phone-number path; the legacy array fallback remains org-scoped during migration.
-  let activeRows: any[] | undefined;
-  const getActiveRows = async () => activeRows ??= await ctx.db
-    .query("csConfigs")
-    .withIndex("by_org_active", (ix: any) => ix.eq("orgId", orgId).eq("isActive", true))
-    .collect();
+  let activeRows: any[] | null | undefined;
+  const getActiveRows = async () => {
+    if (activeRows === undefined) activeRows = await getBoundedActiveAgentRegistry(ctx, orgId);
+    return activeRows;
+  };
   const keyOf = (r: any): string => r.key ?? csKey(r.csName); // pre-seed fallback
   // 1) provider phone_number_id (KirimDev message attribution)
   if (q.phoneNumberId) {
@@ -112,7 +116,7 @@ export async function resolveAgent(
       }
     } else {
       // Until the durable claim migration completes, prove the whole active registry is bounded.
-      const registry = await getBoundedActiveLegacyRegistry(ctx, orgId);
+      const registry = await getBoundedActiveAgentRegistry(ctx, orgId);
       if (!registry) return null;
       const matches = registry.filter((row: any) =>
         providerClaims(row.providerNumberId, row.providerNumberIds).includes(q.phoneNumberId!));
@@ -125,7 +129,9 @@ export async function resolveAgent(
   }
   // 2) Berdu staff id (order attribution)
   if (q.berduStaffId) {
-    const hit = (await getActiveRows()).find((r: any) => (r.berduStaffIds ?? []).includes(q.berduStaffId));
+    const rows = await getActiveRows();
+    if (!rows) return null;
+    const hit = rows.find((r: any) => (r.berduStaffIds ?? []).includes(q.berduStaffId));
     if (hit) return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
   }
   // 3) raw name form: current csName (REQUIRED for post-rename: csKey(newName) != key,
@@ -134,6 +140,7 @@ export async function resolveAgent(
     const n = normName(q.name);
     if (n.length > 0) {
       const rows = await getActiveRows();
+      if (!rows) return null;
       const hit =
         rows.find((r: any) => normName(r.csName) === n) ??
         rows.find((r: any) => (r.nameAliases ?? []).some((a: string) => normName(a) === n)) ??
@@ -161,13 +168,14 @@ export async function canonicalizeCs(
 }
 
 const SEED_BATCH = 50;
+type SeedPhase = "cleanup" | "scan" | "apply" | "complete";
+type SeedKeysResult = { seeded: number; phase: SeedPhase; done: boolean };
 
 // Durable claim migration. Cleanup restarts old/transient runs, scan synchronizes every active
 // scalar+alias claim, apply backfills safe singleton scalars, and complete remains as proof state.
-export const seedKeys = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const { orgId } = await requireAdminOrg(ctx, "agents.seedKeys");
+async function seedKeysForOrgCore(
+  ctx: { db: any }, orgId: Id<"organizations">,
+): Promise<SeedKeysResult> {
     let run = await getClaimRun(ctx, orgId);
     if (!run) {
       const now = Date.now();
@@ -189,7 +197,7 @@ export const seedKeys = mutation({
 
     if (run.phase === "cleanup") {
       const claims = await ctx.db.query("providerNumberBackfillClaims")
-        .withIndex("by_org_run", (q) => q.eq("orgId", orgId).eq("runId", run!._id))
+        .withIndex("by_org_run", (q: any) => q.eq("orgId", orgId).eq("runId", run!._id))
         .take(SEED_BATCH);
       for (const claim of claims) await ctx.db.delete(claim._id);
       if (claims.length < SEED_BATCH) {
@@ -232,7 +240,7 @@ export const seedKeys = mutation({
         : undefined;
       if (!candidate) continue;
       const claims = await ctx.db.query("providerNumberBackfillClaims")
-        .withIndex("by_org_run_providerNumberId", (q) =>
+        .withIndex("by_org_run_providerNumberId", (q: any) =>
           q.eq("orgId", orgId).eq("runId", run!._id).eq("providerNumberId", candidate))
         .take(2);
       if (claims.length === 1 && claims[0].agentId === row._id) {
@@ -244,6 +252,92 @@ export const seedKeys = mutation({
       ? { phase: "complete", cursor: undefined, updatedAt: Date.now() }
       : { cursor: page.continueCursor, updatedAt: Date.now() });
     return { seeded, phase: page.isDone ? "complete" as const : "apply" as const, done: page.isDone };
+}
+
+export const seedKeysForOrg = internalMutation({
+  args: { orgId: v.id("organizations") },
+  handler: (ctx, args): Promise<SeedKeysResult> => seedKeysForOrgCore(ctx, args.orgId),
+});
+
+export const seedKeys = mutation({
+  args: {},
+  handler: async (ctx): Promise<SeedKeysResult> => {
+    const { orgId } = await requireAdminOrg(ctx, "agents.seedKeys");
+    return seedKeysForOrgCore(ctx, orgId);
+  },
+});
+
+export async function driveProviderMigrations<T>(
+  orgIds: readonly T[],
+  migrate: (orgId: T) => Promise<{ done: boolean }>,
+  scheduleContinuation: (orgId: T) => Promise<unknown>,
+) {
+  let completedOrganizations = 0;
+  let continuingOrganizations = 0;
+  const failedOrganizations: string[] = [];
+  for (const orgId of orgIds) {
+    try {
+      const result = await migrate(orgId);
+      if (result.done) {
+        completedOrganizations++;
+      } else {
+        await scheduleContinuation(orgId);
+        continuingOrganizations++;
+      }
+    } catch {
+      failedOrganizations.push(String(orgId));
+    }
+  }
+  return { completedOrganizations, continuingOrganizations, failedOrganizations };
+}
+
+type ProviderOrgWorkerResult = SeedKeysResult & { scheduledContinuation: boolean };
+
+export const runSeedKeysForOrg = internalAction({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args): Promise<ProviderOrgWorkerResult> => {
+    const result: SeedKeysResult = await ctx.runMutation(internal.agents.seedKeysForOrg, {
+      orgId: args.orgId,
+    });
+    if (!result.done) {
+      await ctx.scheduler.runAfter(0, internal.agents.runSeedKeysForOrg, { orgId: args.orgId });
+    }
+    return { ...result, scheduledContinuation: !result.done };
+  },
+});
+
+type ProviderDriverResult = {
+  completedOrganizations: number;
+  continuingOrganizations: number;
+  failedOrganizations: string[];
+  complete: boolean;
+  scheduledDriverContinuation: boolean;
+};
+
+// Operator-safe, identity-independent, and bounded to one 20-org page per action.
+export const seedKeysForAllOrganizations = internalAction({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<ProviderDriverResult> => {
+    const page: {
+      page: Array<{ _id: Id<"organizations"> }>;
+      continueCursor: string;
+      isDone: boolean;
+    } = await ctx.runQuery(internal.orgs.listOrgPageInternal, { cursor: args.cursor });
+    const result = await driveProviderMigrations(
+      page.page.map((org) => org._id),
+      (orgId) => ctx.runMutation(internal.agents.seedKeysForOrg, { orgId }),
+      (orgId) => ctx.scheduler.runAfter(0, internal.agents.runSeedKeysForOrg, { orgId }),
+    );
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.agents.seedKeysForAllOrganizations, {
+        cursor: page.continueCursor,
+      });
+    }
+    return {
+      ...result,
+      complete: page.isDone,
+      scheduledDriverContinuation: !page.isDone,
+    };
   },
 });
 

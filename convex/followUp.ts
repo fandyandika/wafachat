@@ -8,6 +8,7 @@ import { internal } from "./_generated/api";
 import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
 import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
+import { getBoundedActiveAgentRegistry } from "./agents";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
@@ -185,11 +186,10 @@ export const candidacyFor = internalQuery({
         .withIndex("by_org_key", (q) => q.eq("orgId", c.orgId).eq("key", k))
         .first() ?? cfg;
       if (!cfg?.providerNumberId) {
-        const legacy = await ctx.db
-          .query("csConfigs")
-          .withIndex("by_org_active", (q) => q.eq("orgId", c.orgId).eq("isActive", true))
-          .collect();
-        cfg = legacy.find((x) => x.key == null && csKey(x.csName) === k && x.providerNumberId) ?? cfg;
+        const legacy = await getBoundedActiveAgentRegistry(ctx, c.orgId);
+        if (legacy) {
+          cfg = legacy.find((x) => x.key == null && csKey(x.csName) === k && x.providerNumberId) ?? cfg;
+        }
       }
     }
     const touch = await touchInfo(ctx, c._id, lastInbound?.createdAt ?? null);
