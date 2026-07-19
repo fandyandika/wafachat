@@ -913,3 +913,89 @@ test("debugRollupParity: rejects non-admin", async () => {
     t.withIdentity(csIdentity).query(api.rollups.debugRollupParity, { windowKey: "2026-07-08" })
   ).rejects.toThrow(/unauthorized|admin/);
 });
+
+async function parityFixture() {
+  const t = convexTest(schema);
+  await seedDefaultOrg(t);
+  await seed(t);
+  const orgId = await getDefaultOrgId(t);
+  await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+  const admin = t.withIdentity({ subject: "parity-admin", role: "admin" as const, name: "Admin", email: "parity@w" });
+  return { t, orgId, admin };
+}
+
+const TOP_LEVEL_V2_FACTS = [
+  "leadOrders", "leadsCust", "closings", "closedCust", "cancelled", "manualClosings",
+  "delivered", "revenue", "discount", "cod", "transfer", "fuClosings", "fuH1", "fuH2", "fuH3",
+] as const;
+
+test.each(TOP_LEVEL_V2_FACTS)("debugRollupParity independently detects corrupted top-level v2 fact %s", async (field) => {
+  const { t, admin } = await parityFixture();
+  await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    const row = await ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", W)).first();
+    if (!row) throw new Error("missing parity row");
+    await ctx.db.patch(row._id, { [field]: (row[field] ?? 0) + 1 });
+  });
+  const result = await admin.query(api.rollups.debugRollupParity, { windowKey: W });
+  expect(result.mismatches.some((m) => m.field === field)).toBe(true);
+});
+
+const PRODUCT_V2_FACTS = ["leads", "closings", "leadOrders", "revenue", "discount", "cod", "transfer"] as const;
+
+test.each(PRODUCT_V2_FACTS)("debugRollupParity independently detects corrupted byProduct v2 fact %s", async (field) => {
+  const { t, admin } = await parityFixture();
+  await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    const row = await ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", W)).first();
+    if (!row?.byProduct[0]) throw new Error("missing parity product row");
+    const byProduct = row.byProduct.map((product, index) => index === 0
+      ? { ...product, [field]: (product[field] ?? 0) + 1 }
+      : product);
+    await ctx.db.patch(row._id, { byProduct });
+  });
+  const result = await admin.query(api.rollups.debugRollupParity, { windowKey: W });
+  expect(result.mismatches.some((m) => m.field === "byProduct")).toBe(true);
+});
+
+test("debugRollupParity rejects a missing v2 completeness marker", async () => {
+  const { t, admin } = await parityFixture();
+  await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    const marker = await ctx.db.query("rollupWindows").withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", W)).unique();
+    if (!marker) throw new Error("missing marker fixture");
+    await ctx.db.delete(marker._id);
+  });
+  const result = await admin.query(api.rollups.debugRollupParity, { windowKey: W });
+  expect(result.mismatches.some((m) => m.field === "completenessMarker")).toBe(true);
+});
+
+test("debugRollupParity rejects a non-v2 completeness marker", async () => {
+  const { t, admin } = await parityFixture();
+  await t.run(async (ctx) => {
+    const orgId = await requireDefaultOrgId(ctx);
+    const marker = await ctx.db.query("rollupWindows").withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", W)).unique();
+    if (!marker) throw new Error("missing marker fixture");
+    await ctx.db.patch(marker._id, { schemaVersion: 1 });
+  });
+  const result = await admin.query(api.rollups.debugRollupParity, { windowKey: W });
+  expect(result.mismatches.some((m) => m.field === "completenessMarker")).toBe(true);
+});
+
+test("debugRollupParity key discovery uses the same half-open end as recompute", async () => {
+  const t = convexTest(schema);
+  await seedDefaultOrg(t);
+  const orgId = await getDefaultOrgId(t);
+  const range = windowRangeForKey(W);
+  await t.run(async (ctx) => ctx.db.insert("orders", {
+    orgId, orderId: "NEXT-WINDOW", customerPhone: "6281777999000", customerName: "Next",
+    assignedCsName: "Next CS", csKey: "next", productName: "Book", products: "Book", productsSubtotal: "1",
+    shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "",
+    source: "berdu", aiEligible: false, createdAt: range.endAt, updatedAt: range.endAt,
+  } as any));
+  await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: W });
+  const result = await t.withIdentity({ subject: "boundary-admin", role: "admin", name: "Admin", email: "boundary@w" })
+    .query(api.rollups.debugRollupParity, { windowKey: W });
+  expect(result.freshRows).toBe(0);
+  expect(result.mismatches).toEqual([]);
+});

@@ -541,13 +541,24 @@ export const debugRollupParity = query({
 
     const { startAt, endAt } = windowRangeForKey(args.windowKey);
     const mismatches: Array<{ csKey: string; field: string; stored: any; fresh: any }> = [];
+    const marker = await ctx.db.query("rollupWindows")
+      .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", args.windowKey))
+      .unique();
+    if (marker?.schemaVersion !== ROLLUP_SCHEMA_VERSION) {
+      mismatches.push({
+        csKey: "(window)",
+        field: "completenessMarker",
+        stored: marker?.schemaVersion ?? null,
+        fresh: ROLLUP_SCHEMA_VERSION,
+      });
+    }
 
     // Fetch all csKeys in the window for this org
     const keys = new Set<string>();
 
     // From orders
     const orders = (
-      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
     for (const o of orders) {
       keys.add(csKeyOf(o.assignedCsName));
@@ -555,7 +566,7 @@ export const debugRollupParity = query({
 
     // From recaps
     const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)).collect()
     ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
     for (const r of recaps) {
       keys.add(csKeyOf(r.csName));
@@ -569,10 +580,12 @@ export const debugRollupParity = query({
       storedMap.set(row.csKey, row);
     }
 
+    let freshRowCount = 0;
     // Compute fresh for each csKey
     for (const csKey of keys) {
       const fresh = await computeRollupValues(ctx, orgId, csKey, args.windowKey);
       const stored = storedMap.get(csKey);
+      if (fresh) freshRowCount++;
 
       // Compare
       if (!fresh && !stored) {
@@ -608,7 +621,7 @@ export const debugRollupParity = query({
       // Both exist, compare field by field (excluding updatedAt which always changes)
       const fieldsToCheck = [
         "csName", "leadOrders", "leadsCust", "closings", "closedCust", "cancelled",
-        "manualClosings", "delivered", "revenue", "discount",
+        "manualClosings", "delivered", "revenue", "discount", "cod", "transfer",
         "fuClosings", "fuH1", "fuH2", "fuH3",
       ];
 
@@ -625,12 +638,12 @@ export const debugRollupParity = query({
         }
       }
 
-      // Compare byProduct CONTENT, key-order independent: Convex normalizes stored object
-      // key order (alphabetical) while fresh in-memory objects keep insertion order, so
-      // stringify-ing raw objects false-positives. Normalize to [product, leads, closings]
-      // tuples sorted by leads desc then product asc (same as computeRollupValues).
-      const sortByLeads = (a: any, b: any) => b.leads - a.leads || a.product.localeCompare(b.product);
-      const toTuples = (arr: any[]) => [...(arr ?? [])].sort(sortByLeads).map((p) => [p.product, p.leads, p.closings]);
+      // Compare every v2 product fact, key-order independent. Missing optional
+      // migration fields are mismatches against the exact fresh number.
+      const sortByProduct = (a: any, b: any) => a.product.localeCompare(b.product);
+      const toTuples = (arr: any[]) => [...(arr ?? [])].sort(sortByProduct).map((p) => [
+        p.product, p.leads, p.closings, p.leadOrders, p.revenue, p.discount, p.cod, p.transfer,
+      ]);
       const storedProductsJson = JSON.stringify(toTuples(stored.byProduct));
       const freshProductsJson = JSON.stringify(toTuples(fresh.byProduct));
       if (storedProductsJson !== freshProductsJson) {
@@ -647,7 +660,8 @@ export const debugRollupParity = query({
       windowKey: args.windowKey,
       mismatches,
       storedRows: storedRollups.length,
-      freshRows: keys.size,
+      freshRows: freshRowCount,
+      markerVersion: marker?.schemaVersion ?? null,
     };
   },
 });
