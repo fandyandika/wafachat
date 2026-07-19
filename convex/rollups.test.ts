@@ -84,6 +84,54 @@ test("empty window produces no row", async () => {
   expect(rows).toHaveLength(0);
 });
 
+test("backfillCsKey paginates only the authenticated organization", async () => {
+  const t = convexTest(schema);
+  const orgA = await t.run((ctx: any) => ctx.db.insert("organizations", {
+    slug: "cskey-a", name: "CS Key A", createdAt: 1, updatedAt: 1,
+  }));
+  const orgB = await t.run((ctx: any) => ctx.db.insert("organizations", {
+    slug: "cskey-b", name: "CS Key B", createdAt: 2, updatedAt: 2,
+  }));
+  const userA = await t.run((ctx: any) => ctx.db.insert("users", {
+    orgId: orgA, email: "cskey-admin@example.test", name: "CS Key Admin", passwordHash: "test",
+    role: "admin", isActive: true, createdAt: 1, updatedAt: 1,
+  }));
+  const insertOrder = (ctx: any, orgId: any, orderId: string, createdAt: number) => ctx.db.insert("orders", {
+    orgId, orderId, customerPhone: `6281000${createdAt}`, customerName: orderId,
+    assignedCsName: "Agent Name", productName: "Book", products: "Book", productsSubtotal: "1",
+    shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "",
+    source: "berdu", aiEligible: false, createdAt, updatedAt: createdAt,
+  } as any);
+  const [a1, a2, b1] = await t.run(async (ctx: any) => Promise.all([
+    insertOrder(ctx, orgA, "A-1", 10), insertOrder(ctx, orgA, "A-2", 11),
+    insertOrder(ctx, orgB, "B-1", 12),
+  ]));
+  const asA = t.withIdentity({
+    subject: String(userA), role: "admin", name: "CS Key Admin", email: "cskey-admin@example.test",
+    orgId: String(orgA),
+  });
+
+  let cursor: string | undefined;
+  let done = false;
+  let patched = 0;
+  for (let page = 0; page < 4 && !done; page++) {
+    const result = await asA.mutation(api.rollups.backfillCsKey, {
+      table: "orders", limit: 1, cursor,
+    });
+    patched += result.patched;
+    cursor = result.continueCursor;
+    done = result.done;
+  }
+
+  expect(done).toBe(true);
+  expect(patched).toBe(2);
+  await t.run(async (ctx: any) => {
+    expect((await ctx.db.get(a1))?.csKey).toBe("agentname");
+    expect((await ctx.db.get(a2))?.csKey).toBe("agentname");
+    expect((await ctx.db.get(b1))?.csKey).toBeUndefined();
+  });
+});
+
 test("cancelled payment methods remain in top-level COD and transfer facts", async () => {
   const t = convexTest(schema);
   await seedDefaultOrg(t);

@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { internalAction, internalMutation, mutation } from "./_generated/server";
+import { internalAction, internalMutation, internalQuery, mutation } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { requireAdminOrg } from "./authz";
@@ -306,9 +306,178 @@ export const runSeedKeysForOrg = internalAction({
   },
 });
 
+const PROVIDER_PLATFORM_RUN_KEY = `provider-claims-v${PROVIDER_CLAIM_VERSION}`;
+const PROVIDER_PLATFORM_PAGE = 20;
+type ProviderPlatformOrgStatus = "pending" | "failed" | "complete";
+
+export const ensureProviderPlatformRun = internalMutation({
+  args: { runId: v.optional(v.id("providerPlatformMigrationRuns")) },
+  handler: async (ctx, args) => {
+    if (args.runId) {
+      const requested = await ctx.db.get(args.runId);
+      if (!requested) throw new Error("provider platform migration run not found");
+      return requested;
+    }
+    const existing = await ctx.db.query("providerPlatformMigrationRuns")
+      .withIndex("by_key", (q) => q.eq("key", PROVIDER_PLATFORM_RUN_KEY)).unique();
+    if (existing) return existing;
+    const now = Date.now();
+    const runId = await ctx.db.insert("providerPlatformMigrationRuns", {
+      key: PROVIDER_PLATFORM_RUN_KEY,
+      status: "running",
+      enumerationComplete: false,
+      enumeratedOrganizations: 0,
+      completedOrganizations: 0,
+      pendingOrganizations: 0,
+      failedOrganizations: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const created = await ctx.db.get(runId);
+    if (!created) throw new Error("provider platform migration run creation failed");
+    return created;
+  },
+});
+
+export const registerProviderPlatformPage = internalMutation({
+  args: {
+    runId: v.id("providerPlatformMigrationRuns"),
+    expectedCursor: v.optional(v.string()),
+    orgIds: v.array(v.id("organizations")),
+    continueCursor: v.string(),
+    isDone: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) throw new Error("provider platform migration run not found");
+    if (run.enumerationComplete || run.enumerationCursor !== args.expectedCursor) {
+      return { accepted: false, inserted: 0 };
+    }
+    let inserted = 0;
+    for (const orgId of args.orgIds) {
+      const existing = await ctx.db.query("providerPlatformMigrationOrganizations")
+        .withIndex("by_run_org", (q) => q.eq("runId", args.runId).eq("orgId", orgId)).unique();
+      if (existing) continue;
+      await ctx.db.insert("providerPlatformMigrationOrganizations", {
+        runId: args.runId,
+        orgId,
+        status: "pending",
+        attempts: 0,
+        updatedAt: Date.now(),
+      });
+      inserted++;
+    }
+    await ctx.db.patch(run._id, {
+      enumerationCursor: args.isDone ? undefined : args.continueCursor,
+      enumerationComplete: args.isDone,
+      enumeratedOrganizations: run.enumeratedOrganizations + inserted,
+      pendingOrganizations: run.pendingOrganizations + inserted,
+      updatedAt: Date.now(),
+    });
+    return { accepted: true, inserted };
+  },
+});
+
+export const getProviderPlatformWorkPage = internalQuery({
+  args: { runId: v.id("providerPlatformMigrationRuns"), retryFailures: v.boolean() },
+  handler: async (ctx, args) => {
+    const pending = await ctx.db.query("providerPlatformMigrationOrganizations")
+      .withIndex("by_run_status", (q) => q.eq("runId", args.runId).eq("status", "pending"))
+      .take(PROVIDER_PLATFORM_PAGE);
+    if (pending.length > 0 || !args.retryFailures) return pending;
+    return ctx.db.query("providerPlatformMigrationOrganizations")
+      .withIndex("by_run_status", (q) => q.eq("runId", args.runId).eq("status", "failed"))
+      .take(PROVIDER_PLATFORM_PAGE);
+  },
+});
+
+export const recordProviderPlatformOrg = internalMutation({
+  args: {
+    runId: v.id("providerPlatformMigrationRuns"),
+    orgId: v.id("organizations"),
+    status: v.union(v.literal("pending"), v.literal("failed"), v.literal("complete")),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) throw new Error("provider platform migration run not found");
+    const audit = await ctx.db.query("providerPlatformMigrationOrganizations")
+      .withIndex("by_run_org", (q) => q.eq("runId", args.runId).eq("orgId", args.orgId)).unique();
+    if (!audit) throw new Error("provider platform organization audit not found");
+    const deltas: Record<ProviderPlatformOrgStatus, number> = {
+      pending: 0,
+      failed: 0,
+      complete: 0,
+    };
+    deltas[audit.status]--;
+    deltas[args.status]++;
+    await ctx.db.patch(audit._id, {
+      status: args.status,
+      attempts: audit.attempts + 1,
+      lastError: args.status === "failed" ? args.error?.slice(0, 1_000) ?? "unknown failure" : undefined,
+      updatedAt: Date.now(),
+    });
+    await ctx.db.patch(run._id, {
+      pendingOrganizations: run.pendingOrganizations + deltas.pending,
+      failedOrganizations: run.failedOrganizations + deltas.failed,
+      completedOrganizations: run.completedOrganizations + deltas.complete,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+export const refreshProviderPlatformRun = internalMutation({
+  args: { runId: v.id("providerPlatformMigrationRuns") },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) throw new Error("provider platform migration run not found");
+    const complete = run.enumerationComplete
+      && run.pendingOrganizations === 0
+      && run.failedOrganizations === 0
+      && run.completedOrganizations === run.enumeratedOrganizations;
+    const status = complete
+      ? "complete" as const
+      : run.enumerationComplete && run.pendingOrganizations === 0 && run.failedOrganizations > 0
+        ? "failed" as const
+        : "running" as const;
+    if (run.status !== status) await ctx.db.patch(run._id, { status, updatedAt: Date.now() });
+    return { ...run, status, complete };
+  },
+});
+
+export const getProviderPlatformSnapshot = internalQuery({
+  args: { runId: v.id("providerPlatformMigrationRuns") },
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run) throw new Error("provider platform migration run not found");
+    const failures = await ctx.db.query("providerPlatformMigrationOrganizations")
+      .withIndex("by_run_status", (q) => q.eq("runId", args.runId).eq("status", "failed"))
+      .take(PROVIDER_PLATFORM_PAGE);
+    const complete = run.enumerationComplete
+      && run.pendingOrganizations === 0
+      && run.failedOrganizations === 0
+      && run.completedOrganizations === run.enumeratedOrganizations;
+    return {
+      runId: run._id,
+      enumerationCursor: run.enumerationCursor,
+      organizationEnumerationComplete: run.enumerationComplete,
+      enumeratedOrganizations: run.enumeratedOrganizations,
+      completedOrganizations: run.completedOrganizations,
+      continuingOrganizations: run.pendingOrganizations,
+      failedOrganizationCount: run.failedOrganizations,
+      failedOrganizations: failures.map((row) => String(row.orgId)),
+      complete,
+      status: complete ? "complete" as const : run.status,
+    };
+  },
+});
+
 type ProviderDriverResult = {
+  runId: Id<"providerPlatformMigrationRuns">;
+  enumeratedOrganizations: number;
   completedOrganizations: number;
   continuingOrganizations: number;
+  failedOrganizationCount: number;
   failedOrganizations: string[];
   complete: boolean;
   organizationEnumerationComplete: boolean;
@@ -317,28 +486,70 @@ type ProviderDriverResult = {
 
 // Operator-safe, identity-independent, and bounded to one 20-org page per action.
 export const seedKeysForAllOrganizations = internalAction({
-  args: { cursor: v.optional(v.string()) },
+  args: {
+    runId: v.optional(v.id("providerPlatformMigrationRuns")),
+    retryFailures: v.optional(v.boolean()),
+  },
   handler: async (ctx, args): Promise<ProviderDriverResult> => {
-    const page: {
-      page: Array<{ _id: Id<"organizations"> }>;
-      continueCursor: string;
-      isDone: boolean;
-    } = await ctx.runQuery(internal.orgs.listOrgPageInternal, { cursor: args.cursor });
-    const result = await driveProviderMigrations(
-      page.page.map((org) => org._id),
-      (orgId) => ctx.runMutation(internal.agents.seedKeysForOrg, { orgId }),
-      (orgId) => ctx.scheduler.runAfter(0, internal.agents.runSeedKeysForOrg, { orgId }),
+    const run: any = await ctx.runMutation(internal.agents.ensureProviderPlatformRun, {
+      runId: args.runId,
+    });
+    let snapshot: any = await ctx.runQuery(internal.agents.getProviderPlatformSnapshot, {
+      runId: run._id,
+    });
+    if (!snapshot.organizationEnumerationComplete) {
+      const page: {
+        page: Array<{ _id: Id<"organizations"> }>;
+        continueCursor: string;
+        isDone: boolean;
+      } = await ctx.runQuery(internal.orgs.listOrgPageInternal, {
+        cursor: snapshot.enumerationCursor,
+      });
+      await ctx.runMutation(internal.agents.registerProviderPlatformPage, {
+        runId: run._id,
+        expectedCursor: snapshot.enumerationCursor,
+        orgIds: page.page.map((org) => org._id),
+        continueCursor: page.continueCursor,
+        isDone: page.isDone,
+      });
+    }
+
+    const work: Array<{ orgId: Id<"organizations"> }> = await ctx.runQuery(
+      internal.agents.getProviderPlatformWorkPage,
+      { runId: run._id, retryFailures: args.retryFailures ?? true },
     );
-    if (!page.isDone) {
+    for (const audit of work) {
+      try {
+        const result: SeedKeysResult = await ctx.runMutation(internal.agents.seedKeysForOrg, {
+          orgId: audit.orgId,
+        });
+        await ctx.runMutation(internal.agents.recordProviderPlatformOrg, {
+          runId: run._id,
+          orgId: audit.orgId,
+          status: result.done ? "complete" : "pending",
+        });
+      } catch (error) {
+        await ctx.runMutation(internal.agents.recordProviderPlatformOrg, {
+          runId: run._id,
+          orgId: audit.orgId,
+          status: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    await ctx.runMutation(internal.agents.refreshProviderPlatformRun, { runId: run._id });
+    snapshot = await ctx.runQuery(internal.agents.getProviderPlatformSnapshot, { runId: run._id });
+    const scheduledDriverContinuation = !snapshot.complete
+      && (!snapshot.organizationEnumerationComplete || snapshot.continuingOrganizations > 0);
+    if (scheduledDriverContinuation) {
       await ctx.scheduler.runAfter(0, internal.agents.seedKeysForAllOrganizations, {
-        cursor: page.continueCursor,
+        runId: run._id,
+        retryFailures: false,
       });
     }
     return {
-      ...result,
-      complete: page.isDone && result.continuingOrganizations === 0 && result.failedOrganizations.length === 0,
-      organizationEnumerationComplete: page.isDone,
-      scheduledDriverContinuation: !page.isDone,
+      ...snapshot,
+      scheduledDriverContinuation,
     };
   },
 });

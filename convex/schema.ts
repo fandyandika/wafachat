@@ -130,6 +130,30 @@ export default defineSchema({
     .index("by_org_run", ["orgId", "runId"])
     .index("by_org_run_agent", ["orgId", "runId", "agentId"]),
 
+  providerPlatformMigrationRuns: defineTable({
+    key: v.string(),
+    status: v.union(v.literal("running"), v.literal("failed"), v.literal("complete")),
+    enumerationCursor: v.optional(v.string()),
+    enumerationComplete: v.boolean(),
+    enumeratedOrganizations: v.number(),
+    completedOrganizations: v.number(),
+    pendingOrganizations: v.number(),
+    failedOrganizations: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
+  providerPlatformMigrationOrganizations: defineTable({
+    runId: v.id("providerPlatformMigrationRuns"),
+    orgId: v.id("organizations"),
+    status: v.union(v.literal("pending"), v.literal("failed"), v.literal("complete")),
+    attempts: v.number(),
+    lastError: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_run_org", ["runId", "orgId"])
+    .index("by_run_status", ["runId", "status"]),
+
   // ── Ingestion API (Fase 1) ────────────────────────────────────────────────
   // Capture-first: every inbound webhook is stored raw BEFORE processing, so a
   // processing bug never loses data and failed events replay from OUR table,

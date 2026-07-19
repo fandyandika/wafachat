@@ -503,19 +503,30 @@ export const backfillRange = mutation({
 // comes from the same name the rollups already grouped by). Idempotent: re-runnable.
 // Controller loops per table until { done: true }.
 export const backfillCsKey = mutation({
-  args: { table: v.union(v.literal("orders"), v.literal("shippingRecaps")), limit: v.optional(v.number()) },
+  args: {
+    table: v.union(v.literal("orders"), v.literal("shippingRecaps")),
+    limit: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
-    await requireAdminOrg(ctx, "rollups.backfillCsKey");
-    const limit = args.limit ?? 500;
-    const rows = await ctx.db
-      .query(args.table)
-      .filter((q: any) => q.eq(q.field("csKey"), undefined))
-      .take(limit);
+    const { orgId } = await requireAdminOrg(ctx, "rollups.backfillCsKey");
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 500), 500));
+    const indexed = args.table === "orders"
+      ? ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId))
+      : ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId));
+    const page = await (indexed as any).paginate({ cursor: args.cursor ?? null, numItems: limit });
+    const rows = page.page.filter((row: any) => row.csKey === undefined);
     for (const r of rows) {
       const raw = args.table === "orders" ? (r as any).assignedCsName : (r as any).csName;
       await ctx.db.patch(r._id, { csKey: csKeyOf(raw ?? "") });
     }
-    return { table: args.table, patched: rows.length, done: rows.length < limit };
+    return {
+      table: args.table,
+      scanned: page.page.length,
+      patched: rows.length,
+      done: page.isDone,
+      continueCursor: page.isDone ? undefined : page.continueCursor,
+    };
   },
 });
 

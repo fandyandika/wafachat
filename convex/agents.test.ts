@@ -480,6 +480,62 @@ test("platform provider migration schedules resumable work for every organizatio
   }
 });
 
+test("platform provider migration cannot complete while an earlier organization failed", async () => {
+  vi.useFakeTimers();
+  try {
+    const t = convexTest(schema);
+    const orgIds: Array<Id<"organizations">> = [];
+    for (let index = 0; index < 22; index++) {
+      orgIds.push(await t.run((ctx: any) => ctx.db.insert("organizations", {
+        slug: `provider-platform-${index}`, name: `Provider Platform ${index}`,
+        createdAt: index + 1, updatedAt: index + 1,
+      })) as Id<"organizations">);
+    }
+    const failingAgent = await seedAgent(t, orgIds[0], {
+      providerNumberId: undefined,
+      providerNumberIds: Array.from({ length: 101 }, (_, index) => `TOO-MANY-${index}`),
+    });
+    for (let index = 1; index < orgIds.length; index++) {
+      await seedAgent(t, orgIds[index], {
+        csName: `Agent ${index}`, normalizedName: `agent-${index}`, key: `agent-${index}`,
+        berduStaffIds: [], providerNumberId: undefined, providerNumberIds: [`PHONE-${index}`],
+      });
+    }
+
+    const first = await t.action(internal.agents.seedKeysForAllOrganizations, {});
+    expect(first.organizationEnumerationComplete).toBe(false);
+    expect(first.complete).toBe(false);
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const failed = await t.action(internal.agents.seedKeysForAllOrganizations, {});
+    expect(failed).toMatchObject({
+      enumeratedOrganizations: 22,
+      completedOrganizations: 21,
+      continuingOrganizations: 0,
+      complete: false,
+      organizationEnumerationComplete: true,
+    });
+    expect(failed.failedOrganizations).toEqual([String(orgIds[0])]);
+
+    await t.run((ctx: any) => ctx.db.patch(failingAgent, {
+      providerNumberIds: ["RECOVERED-PHONE"], updatedAt: Date.now(),
+    }));
+    await t.action(internal.agents.seedKeysForAllOrganizations, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const recovered = await t.action(internal.agents.seedKeysForAllOrganizations, {});
+    expect(recovered).toMatchObject({
+      enumeratedOrganizations: 22,
+      completedOrganizations: 22,
+      continuingOrganizations: 0,
+      failedOrganizations: [],
+      complete: true,
+      organizationEnumerationComplete: true,
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("resolveAgent fails closed for array-based staff and alias claims above the registry cap", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
