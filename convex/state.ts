@@ -398,33 +398,6 @@ export const upsertOrderFromN8n = internalMutation({
   },
 });
 
-// Reconciler support: list the present per-day order counters for a Berdu date
-// prefix (e.g. "260624" -> orderIds "O-260624######"). The n8n reconciler diffs
-// these against Berdu's sequential daily numbering to find dropped orders to
-// backfill via /order/detail. Returns only the counters present in WaFaChat.
-export const listOrderCountersByPrefix = internalQuery({
-  args: { datePrefix: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, args) => {
-    const lo = `O-${args.datePrefix}000000`;
-    const hi = `O-${args.datePrefix}999999`;
-    const rows = await ctx.db
-      .query("orders")
-      .withIndex("by_org_orderId", (q) => q.eq("orgId", args.orgId).gte("orderId", lo).lte("orderId", hi))
-      .collect();
-    const counters = rows
-      .map((r) => parseInt(r.orderId.slice(-6), 10))
-      .filter((n) => !Number.isNaN(n))
-      .sort((a, b) => a - b);
-    return {
-      datePrefix: args.datePrefix,
-      counters,
-      min: counters[0] ?? null,
-      max: counters[counters.length - 1] ?? null,
-      count: counters.length,
-    };
-  },
-});
-
 export const setConversationStatusFromN8n = internalMutation({
   args: {
     phone: v.string(),

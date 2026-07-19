@@ -56,25 +56,6 @@ test("listConversations: includeClosed=false omits closed entirely", async () =>
   expect(phones).not.toContain("62813");
 });
 
-test("listOrderCountersByPrefix returns sorted present counters for the date prefix only", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  const now = Date.now();
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    const base = { orgId, customerPhone: "62811", customerName: "X", productName: "P", products: "P", productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "", assignedCsName: "Risma", source: "berdu" as const, aiEligible: false, updatedAt: now, createdAt: now };
-    await ctx.db.insert("orders", { ...base, orderId: "O-260624000009" });
-    await ctx.db.insert("orders", { ...base, orderId: "O-260624000010" });
-    await ctx.db.insert("orders", { ...base, orderId: "O-260624000012" }); // gap at 11
-    await ctx.db.insert("orders", { ...base, orderId: "O-260623000005" }); // different day -> excluded
-  });
-  const res = await t.query(internal.state.listOrderCountersByPrefix, { datePrefix: "260624", orgId });
-  expect(res.counters).toEqual([9, 10, 12]);
-  expect(res.min).toBe(9);
-  expect(res.max).toBe(12);
-  expect(res.count).toBe(3);
-});
-
 test("upsertOrderFromN8n honors explicit createdAt on insert (reconciler backfill keeps real order time)", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });

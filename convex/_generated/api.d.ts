@@ -27,6 +27,7 @@ import type * as ingest_core from "../ingest/core.js";
 import type * as ingest_events from "../ingest/events.js";
 import type * as ingest_kirimdevAdapter from "../ingest/kirimdevAdapter.js";
 import type * as ingest_monitor from "../ingest/monitor.js";
+import type * as ingest_reconcileState from "../ingest/reconcileState.js";
 import type * as ingest_reconciler from "../ingest/reconciler.js";
 import type * as ingest_signature from "../ingest/signature.js";
 import type * as ingest_sources from "../ingest/sources.js";
@@ -70,6 +71,7 @@ declare const fullApi: ApiFromModules<{
   "ingest/events": typeof ingest_events;
   "ingest/kirimdevAdapter": typeof ingest_kirimdevAdapter;
   "ingest/monitor": typeof ingest_monitor;
+  "ingest/reconcileState": typeof ingest_reconcileState;
   "ingest/reconciler": typeof ingest_reconciler;
   "ingest/signature": typeof ingest_signature;
   "ingest/sources": typeof ingest_sources;

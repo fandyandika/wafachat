@@ -1,5 +1,6 @@
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
 import { hmacBase64 } from "./signature";
 
 export function wibDatePrefix(nowMs: number): string {
@@ -47,8 +48,7 @@ export const runReconcile = internalAction({
   args: {},
   handler: async (ctx) => {
     // Inert until Berdu creds are configured (M3). Skip BEFORE reading order counters so
-    // this 5-min cron does not poll all of today's orders for nothing while the order path
-    // still runs on n8n. (~all-today's-orders read * 288 runs/day of pure waste otherwise.)
+    // this 15-min cron does not poll while the primary webhook path is healthy.
     if (!process.env.BERDU_APP_ID || !process.env.BERDU_USER_ID || !process.env.BERDU_APP_SECRET || !process.env.BERDU_HMAC_KEY) return;
     // B3 decision (spec §1.3): BERDU_* env creds belong to tenant #1 only, so the
     // reconciler is default-org-only BY DESIGN until tenantIntegrations exists.
@@ -56,25 +56,41 @@ export const runReconcile = internalAction({
     const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
     if (!orgId) return;
     const datePrefix = wibDatePrefix(Date.now());
-    const counters = await ctx.runQuery(internal.state.listOrderCountersByPrefix, { datePrefix, orgId });
-    const gaps = computeGaps(counters.counters, counters.min, counters.max);
+    const run = await ctx.runQuery(internal.ingest.reconcileState.prepareReconcileRun, { datePrefix, orgId });
+    const unresolvedCounters = new Set(run.gaps);
     let healed = 0;
-    for (const c of gaps.slice(0, 50)) { // bound one run
-      const orderId = `O-${datePrefix}${String(c).padStart(6, "0")}`;
-      const detail = await fetchBerduOrderDetail(orderId);
-      if (!detail) continue;
-      const eventId = await ctx.runMutation(internal.ingest.events.captureEvent, {
-        sourceKey: "berdu-reconciler", kind: "lead.created",
-        rawHeaders: "{}", rawBody: JSON.stringify({ order: detail }), signatureOk: true,
-        orgId,
-      });
+    for (const c of run.gaps.slice(0, 50)) { // external detail-fetch cap per cron run
+      let eventId: Id<"ingestEvents"> | undefined;
       try {
+        const orderId = `O-${datePrefix}${String(c).padStart(6, "0")}`;
+        const detail = await fetchBerduOrderDetail(orderId);
+        if (!detail) continue;
+        eventId = await ctx.runMutation(internal.ingest.events.captureEvent, {
+          sourceKey: "berdu-reconciler", kind: "lead.created",
+          rawHeaders: "{}", rawBody: JSON.stringify({ order: detail }), signatureOk: true,
+          orgId,
+        });
         await ctx.runMutation(internal.ingest.core.processEvent, { eventId });
+        unresolvedCounters.delete(c);
         healed++;
       } catch (e) {
-        await ctx.runMutation(internal.ingest.events.markFailed, { eventId, error: (e as Error).message });
+        // An individual fetch/process failure must not prevent the state commit:
+        // the counter remains unresolved and is retried by a later cron run.
+        if (eventId) {
+          await ctx.runMutation(internal.ingest.events.markFailed, {
+            eventId,
+            error: (e as Error).message,
+          });
+        }
+        console.warn(`[reconciler] ${datePrefix}/${c} failed: ${(e as Error).message}`);
       }
     }
-    if (gaps.length > 0) console.log(`[reconciler] ${datePrefix}: ${gaps.length} gaps, ${healed} healed`);
+    await ctx.runMutation(internal.ingest.reconcileState.commitReconcileRun, {
+      orgId,
+      datePrefix,
+      nextCounter: run.nextCounter,
+      unresolvedCounters: [...unresolvedCounters],
+    });
+    if (run.gaps.length > 0) console.log(`[reconciler] ${datePrefix}: ${run.gaps.length} gaps, ${healed} healed`);
   },
 });

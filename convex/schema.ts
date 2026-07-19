@@ -37,6 +37,16 @@ export default defineSchema({
     .index("by_org_createdAt", ["orgId", "createdAt"])
     .index("by_org_csKey_createdAt", ["orgId", "csKey", "createdAt"]),
 
+  // Per-day cursor for the Berdu safety-net reconciler. This keeps repeated
+  // cron runs to only the new order-id tail plus a bounded set of old holes.
+  reconcileStates: defineTable({
+    orgId: v.id("organizations"),
+    datePrefix: v.string(),
+    nextCounter: v.number(),
+    unresolvedCounters: v.array(v.number()),
+    updatedAt: v.number(),
+  }).index("by_org_datePrefix", ["orgId", "datePrefix"]),
+
   conversations: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     orderId: v.string(),
