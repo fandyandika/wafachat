@@ -10,6 +10,7 @@
 import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { requireAdminOrg } from "./authz";
 import { messageHasDoneMarker } from "./followUpMath";
 import { paginator } from "convex-helpers/server/pagination";
@@ -18,7 +19,7 @@ import schema from "./schema";
 // 5 days — same ceiling the follow-up funnel uses (followUpMath). Past this, a silent lead is dead.
 export const ARCHIVE_AFTER_MS = 5 * 24 * 60 * 60 * 1000;
 const BATCH = 25; // small: each non-closed row also scans its recent messages for "done" markers
-export const SWEEP_MAX_PAGES = 800; // total across both statuses: at most 20,000 unique rows per run
+export const SWEEP_MAX_PAGES = 4; // total across both statuses: at most 100 selected rows per action
 
 // "Done" markers are shared with the live hook in messages.ts (via followUpMath.messageHasDoneMarker),
 // so the keyword list never drifts. New markers close a conversation in REAL TIME on message insert;
@@ -164,7 +165,15 @@ export const processConversationIds = internalMutation({
   },
 });
 
-type SweepResult = { considered: number; closedWon: number; closedMarker: number; closedStale: number; dryRun: boolean };
+type SweepResult = {
+  considered: number;
+  closedWon: number;
+  closedMarker: number;
+  closedStale: number;
+  dryRun: boolean;
+  pages: number;
+  complete: boolean;
+};
 
 export async function sweep(
   ctx: { runQuery: any; runMutation: any },
@@ -215,41 +224,120 @@ export async function sweep(
     cursors[status] = page.continueCursor;
     done[status] = page.isDone;
     nextStatus = status === "active" ? "handover" : "active";
+    if (!dryRun) {
+      // Persist immediately after the page's apply succeeds. If an action is
+      // interrupted, the next invocation resumes after the last applied page.
+      await ctx.runMutation(internal.conversationLifecycle.commitSweepState, {
+        orgId,
+        reset: done.active && done.handover,
+        activeCursor: cursors.active,
+        handoverCursor: cursors.handover,
+        activeDone: done.active,
+        handoverDone: done.handover,
+        nextStatus,
+      });
+    }
   }
-
-  if (!dryRun) {
-    await ctx.runMutation(internal.conversationLifecycle.commitSweepState, {
-      orgId,
-      reset: done.active && done.handover,
-      activeCursor: cursors.active,
-      handoverCursor: cursors.handover,
-      activeDone: done.active,
-      handoverDone: done.handover,
-      nextStatus,
-    });
-  }
-  return { considered, closedWon, closedMarker, closedStale, dryRun };
+  return {
+    considered, closedWon, closedMarker, closedStale, dryRun, pages,
+    complete: done.active && done.handover,
+  };
 }
 
-// Internal entry point. The daily cron calls it with no args (executes). For the one-time backfill /
-// dry-run, run it via the admin CLI (internal funcs are callable through `npx convex run`):
+export async function scheduleOrganizationSweeps<T>(
+  orgIds: readonly T[],
+  schedule: (orgId: T) => Promise<unknown>,
+) {
+  let scheduledOrganizations = 0;
+  const failedOrganizations: string[] = [];
+  for (const orgId of orgIds) {
+    try {
+      await schedule(orgId);
+      scheduledOrganizations++;
+    } catch {
+      // Scheduling one tenant must not prevent later tenants from being queued.
+      failedOrganizations.push(String(orgId));
+    }
+  }
+  return { scheduledOrganizations, failedOrganizations };
+}
+
+type RunOrgSweepResult = SweepResult & { scheduledContinuation: boolean };
+
+// One tenant and a small page budget per action. The durable page checkpoints
+// make scheduled continuations safe to retry after interruption.
+export const runOrgSweep = internalAction({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args): Promise<RunOrgSweepResult> => {
+    const result = await sweep(ctx, args.orgId, false, SWEEP_MAX_PAGES);
+    if (!result.complete) {
+      await ctx.scheduler.runAfter(0, internal.conversationLifecycle.runOrgSweep, {
+        orgId: args.orgId,
+      });
+    }
+    return { ...result, scheduledContinuation: !result.complete };
+  },
+});
+
+// Internal entry point. The daily cron calls it with no args and it schedules bounded per-org
+// workers. For a bounded dry-run page, run it via the admin CLI:
 //   npx convex run conversationLifecycle:cronArchiveSweep '{"dryRun":true}' --prod   (preview, no writes)
 //   npx convex run conversationLifecycle:cronArchiveSweep '{}' --prod                (execute)
 // Kept internal (not a public action) so it can never be triggered by an unauthenticated client.
-// Per-org loop: iterate every org, thread orgId through mutations.
+type CronArchiveResult =
+  | (SweepResult & { dryRun: true })
+  | {
+    scheduledOrganizations: number;
+    failedOrganizations: string[];
+    scheduledDriverContinuation: boolean;
+    complete: boolean;
+    dryRun: false;
+  };
+
 export const cronArchiveSweep = internalAction({
-  args: { dryRun: v.optional(v.boolean()) },
-  handler: async (ctx, args): Promise<SweepResult> => {
-    const orgs = await ctx.runQuery(internal.orgs.listOrgsInternal, {});
-    let totalConsidered = 0, totalClosedWon = 0, totalClosedMarker = 0, totalClosedStale = 0;
-    for (const org of orgs) {
-      const result = await sweep(ctx, org._id, args.dryRun ?? false);
-      totalConsidered += result.considered;
-      totalClosedWon += result.closedWon;
-      totalClosedMarker += result.closedMarker;
-      totalClosedStale += result.closedStale;
+  args: { dryRun: v.optional(v.boolean()), cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<CronArchiveResult> => {
+    const page: {
+      page: Array<{ _id: Id<"organizations"> }>;
+      continueCursor: string;
+      isDone: boolean;
+    } = await ctx.runQuery(internal.orgs.listOrgPageInternal, {
+      cursor: args.cursor,
+    });
+    if (args.dryRun) {
+      let considered = 0, closedWon = 0, closedMarker = 0, closedStale = 0, pages = 0;
+      for (const org of page.page) {
+        const result = await sweep(ctx, org._id, true);
+        considered += result.considered;
+        closedWon += result.closedWon;
+        closedMarker += result.closedMarker;
+        closedStale += result.closedStale;
+        pages += result.pages;
+      }
+      return {
+        considered, closedWon, closedMarker, closedStale, pages, dryRun: true,
+        complete: page.isDone,
+      };
     }
-    return { considered: totalConsidered, closedWon: totalClosedWon, closedMarker: totalClosedMarker, closedStale: totalClosedStale, dryRun: args.dryRun ?? false };
+
+    const scheduled: { scheduledOrganizations: number; failedOrganizations: string[] } =
+      await scheduleOrganizationSweeps(
+      page.page.map((org) => org._id),
+      (orgId) => ctx.scheduler.runAfter(0, internal.conversationLifecycle.runOrgSweep, { orgId }),
+    );
+    let scheduledDriverContinuation = false;
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.conversationLifecycle.cronArchiveSweep, {
+        cursor: page.continueCursor,
+      });
+      scheduledDriverContinuation = true;
+    }
+    return {
+      ...scheduled,
+      scheduledDriverContinuation,
+      complete: page.isDone,
+      dryRun: false,
+    };
   },
 });
 

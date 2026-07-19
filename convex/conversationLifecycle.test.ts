@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { getFunctionName } from "convex/server";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -228,7 +228,7 @@ test("scan/apply: long alternating history uses the latest inbound when deciding
   });
 });
 
-test("cronArchiveSweep scans each open row once when retained rows surround closable rows", async () => {
+test("runOrgSweep scans each open row once when retained rows surround closable rows", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
   const activeIds: Id<"conversations">[] = [];
@@ -253,7 +253,7 @@ test("cronArchiveSweep scans each open row once when retained rows surround clos
     });
   });
 
-  const result = await t.action(internal.conversationLifecycle.cronArchiveSweep, {});
+  const result = await t.action(internal.conversationLifecycle.runOrgSweep, { orgId });
 
   expect(result).toEqual({
     considered: 31,
@@ -261,6 +261,9 @@ test("cronArchiveSweep scans each open row once when retained rows surround clos
     closedMarker: 0,
     closedStale: 29,
     dryRun: false,
+    pages: 3,
+    complete: true,
+    scheduledContinuation: false,
   });
   await t.run(async (ctx) => {
     const activeConversations = await Promise.all(activeIds.map((id) => ctx.db.get(id)));
@@ -282,7 +285,10 @@ test("production sweep dryRun evaluates both statuses without closing them", asy
 
   const result = await t.action(internal.conversationLifecycle.cronArchiveSweep, { dryRun: true });
 
-  expect(result).toEqual({ considered: 2, closedWon: 0, closedMarker: 0, closedStale: 2, dryRun: true });
+  expect(result).toEqual({
+    considered: 2, closedWon: 0, closedMarker: 0, closedStale: 2,
+    dryRun: true, pages: 2, complete: true,
+  });
   await t.run(async (ctx) => {
     expect((await ctx.db.get(ids[0]))?.status).toBe("active");
     expect((await ctx.db.get(ids[1]))?.status).toBe("handover");
@@ -428,7 +434,7 @@ test("a handover-to-active transition missed between status scans is closed by t
     expect((await ctx.db.get(transitionedId))?.status).toBe("active");
   });
 
-  const nextSweep = await t.action(internal.conversationLifecycle.cronArchiveSweep, {});
+  const nextSweep = await t.action(internal.conversationLifecycle.runOrgSweep, { orgId });
   expect(nextSweep.considered).toBe(1);
   expect(nextSweep.closedStale).toBe(1);
   await t.run(async (ctx) => {
@@ -570,7 +576,10 @@ test("sweep's total page cap alternates statuses and processes at most 25 rows p
     runMutation: (ref: any, args: any) => t.mutation(ref, args),
   }, orgId, false, 2);
 
-  expect(result).toEqual({ considered: 50, closedWon: 0, closedMarker: 0, closedStale: 50, dryRun: false });
+  expect(result).toEqual({
+    considered: 50, closedWon: 0, closedMarker: 0, closedStale: 50,
+    dryRun: false, pages: 2, complete: false,
+  });
   await t.run(async (ctx) => {
     const open = await ctx.db
       .query("conversations")
@@ -579,4 +588,78 @@ test("sweep's total page cap alternates statuses and processes at most 25 rows p
     expect(open.filter((row) => row.status === "active")).toHaveLength(1);
     expect(open.filter((row) => row.status === "handover")).toHaveLength(1);
   });
+});
+
+test("production lifecycle actions have a small total page budget", () => {
+  expect(conversationLifecycle.SWEEP_MAX_PAGES).toBeLessThanOrEqual(4);
+});
+
+test("sweep checkpoints after every successfully applied page", async () => {
+  const commits: any[] = [];
+  const scans: Record<string, number> = { active: 0, handover: 0 };
+  const ctx = {
+    runQuery: (ref: any, args: any) => {
+      const name = getFunctionName(ref);
+      if (name === "conversationLifecycle:getSweepState") return null;
+      if (name === "conversationLifecycle:scanOpenBatch") {
+        scans[args.status]++;
+        return {
+          ids: [], continueCursor: `${args.status}-${scans[args.status]}`,
+          isDone: args.status === "handover",
+        };
+      }
+      throw new Error(`unexpected query ${name}`);
+    },
+    runMutation: (ref: any, args: any) => {
+      const name = getFunctionName(ref);
+      if (name === "conversationLifecycle:processConversationIds") {
+        return { closedWon: 0, closedMarker: 0, closedStale: 0 };
+      }
+      if (name === "conversationLifecycle:commitSweepState") {
+        commits.push(args);
+        return null;
+      }
+      throw new Error(`unexpected mutation ${name}`);
+    },
+  };
+  await conversationLifecycle.sweep(ctx, "org" as any, false, 2);
+  expect(commits).toHaveLength(2);
+});
+
+test("organization scheduling isolates a failure and continues to later tenants", async () => {
+  const scheduleOrganizationSweeps = (conversationLifecycle as any).scheduleOrganizationSweeps;
+  expect(scheduleOrganizationSweeps).toBeTypeOf("function");
+  const attempted: string[] = [];
+  const result = await scheduleOrganizationSweeps(["org-1", "org-2", "org-3"], async (orgId: string) => {
+    attempted.push(orgId);
+    if (orgId === "org-2") throw new Error("tenant failed");
+  });
+  expect(attempted).toEqual(["org-1", "org-2", "org-3"]);
+  expect(result).toEqual({ scheduledOrganizations: 2, failedOrganizations: ["org-2"] });
+});
+
+test("scheduled lifecycle continuation resumes after the page budget and closes every row", async () => {
+  vi.useFakeTimers({ now });
+  try {
+    const t = convexTest(schema);
+    const orgId = await seedOrg(t);
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 126; index++) {
+        await ctx.db.insert("conversations", { orgId, ...conv(`O-SCHEDULED-${index}`, `62888${index}`) });
+      }
+    });
+
+    const first = await t.action(internal.conversationLifecycle.runOrgSweep, { orgId });
+    expect(first.pages).toBe(conversationLifecycle.SWEEP_MAX_PAGES);
+    expect(first.complete).toBe(false);
+    expect(first.scheduledContinuation).toBe(true);
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const remaining = await t.run((ctx) => ctx.db.query("conversations")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "active"))
+      .collect());
+    expect(remaining).toHaveLength(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });

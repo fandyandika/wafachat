@@ -53,6 +53,16 @@ export const listOrgsInternal = internalQuery({
   handler: async (ctx) => ctx.db.query("organizations").collect(),
 });
 
+// Bounded organization enumeration for scheduled platform-wide maintenance.
+// The cursor is durable in the scheduler payload, so one action never needs to
+// read or enqueue every tenant at once.
+export const listOrgPageInternal = internalQuery({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => ctx.db
+    .query("organizations")
+    .paginate({ cursor: args.cursor ?? null, numItems: 20 }),
+});
+
 const B1_TABLES = [
   "orders", "shippingRecaps", "messages", "conversations", "customers", "events",
   "csConfigs", "ingestEvents", "ingestSources", "dailyRollups", "responseSamples",
