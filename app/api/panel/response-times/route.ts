@@ -6,30 +6,9 @@ import { verifySession } from '@/lib/auth-jwt';
 import { signConvexToken } from '@/lib/convex-token';
 import { bucketResponseTimeRange } from '@/lib/response-time-cache';
 
-// On-demand fetch for response-time stats. getResponseTimes scans the whole messages
-// table for the window, and was live-subscribed on Dashboard/Performance/Laporan — so
-// every inbound message re-read the entire window on every open page (a big DB I/O cost).
-// Fetching once per load / date-change instead removes that reactive amplification.
-const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
-
-// Second layer: a 2-minute shared cache. The query scans every message doc in the
-// window (multi-MB of Convex DB bandwidth per call), and with CS staff opening
-// Laporan on their phones all day the same window was re-scanned dozens of times.
-// All opens within the TTL — across ALL users — now share one Convex read. The
-// stats aggregate a whole day, so 2 minutes of staleness is invisible.
-const getResponseTimesCached = unstable_cache(
-  async (startAt: number, endAt: number, csName?: string) => {
-    // Server-minted identity: the route already verified the caller's session; the
-    // cached result is shared across users, so a fixed server principal is correct.
-    convex.setAuth(
-      await signConvexToken({ userId: 'server:response-times', role: 'admin', name: 'server', email: 'server@wafachat' }),
-    );
-    return convex.query(api.responseTime.getResponseTimes, { startAt, endAt, csName });
-  },
-  ['panel-response-times'],
-  { revalidate: 120 },
-);
-
+// On-demand fetch removes reactive amplification from the response-time scan.
+// The two-minute shared cache is explicitly isolated by DB-verified organization,
+// effective CS scope, and bucketed half-open range.
 export async function POST(req: NextRequest) {
   const session = await verifySession(req.cookies.get('auth_token')?.value);
   if (!session) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
@@ -40,11 +19,33 @@ export async function POST(req: NextRequest) {
   if (!Number.isFinite(startAt) || !Number.isFinite(endAt)) {
     return NextResponse.json({ ok: false, error: 'bad request' }, { status: 400 });
   }
-  const csName = typeof body?.csName === 'string' && body.csName.length > 0 ? body.csName : undefined;
+  const requestedCsName = typeof body?.csName === 'string' && body.csName.length > 0
+    ? body.csName
+    : undefined;
 
   try {
+    // Request-local mutable auth state: no caller can overwrite another request's token.
+    const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
+    convex.setAuth(await signConvexToken(session));
+    const access = await convex.query(api.responseTime.getResponseTimeAccess, { requestedCsName });
     const bucketedRange = bucketResponseTimeRange(startAt, endAt);
-    const data = await getResponseTimesCached(bucketedRange.startAt, bucketedRange.endAt, csName);
+    const scopeKey = access.effectiveCsName ?? '__all__';
+    const getResponseTimesCached = unstable_cache(
+      () => convex.query(api.responseTime.getResponseTimes, {
+        startAt: bucketedRange.startAt,
+        endAt: bucketedRange.endAt,
+        csName: access.effectiveCsName,
+      }),
+      [
+        'panel-response-times',
+        `org:${access.orgId}`,
+        `scope:${scopeKey}`,
+        `start:${bucketedRange.startAt}`,
+        `end:${bucketedRange.endAt}`,
+      ],
+      { revalidate: 120 },
+    );
+    const data = await getResponseTimesCached();
     return NextResponse.json({ ok: true, data });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message || 'failed' }, { status: 500 });

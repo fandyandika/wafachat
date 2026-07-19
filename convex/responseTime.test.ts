@@ -119,3 +119,54 @@ test("getResponseTimes counts SLA breaches (active-hours)", async () => {
   const risma = res.cs.find((c) => c.csName === "Risma");
   expect(risma?.slaBreaches).toBe(1);
 });
+
+test("getResponseTimes derives CS scope and organization from the current users row", async () => {
+  const t = convexTest(schema);
+  const orgOne = await seedOrg(t);
+  const orgTwo = await t.run((ctx: any) => ctx.db.insert("organizations", {
+    slug: "org-two", name: "Org Two", createdAt: 2, updatedAt: 2,
+  }));
+  const identities = await t.run(async (ctx: any) => {
+    const passwordHash = "test";
+    const userOne = await ctx.db.insert("users", {
+      orgId: orgOne, email: "cs-one@example.test", name: "One", passwordHash,
+      role: "cs", csName: "CS One", isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    const userTwo = await ctx.db.insert("users", {
+      orgId: orgTwo, email: "cs-two@example.test", name: "Two", passwordHash,
+      role: "cs", csName: "CS Two", isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    return { userOne, userTwo };
+  });
+  const seedSample = async (orgId: any, csName: string, phone: string) => {
+    await t.run(async (ctx: any) => {
+      const conversationId = await ctx.db.insert("conversations", {
+        orgId, ...convBase, orderId: `O-${phone}`, customerPhone: phone, assignedCsName: csName,
+      });
+      await ctx.db.insert("messages", {
+        orgId, ...msgBase, conversationId, orderId: `O-${phone}`, customerPhone: phone,
+        direction: "inbound", messageType: "text", role: "customer", createdAt: t0 + 1_000,
+      });
+      await ctx.db.insert("messages", {
+        orgId, ...msgBase, conversationId, orderId: `O-${phone}`, customerPhone: phone,
+        direction: "outbound", messageType: "text", role: "cs", createdAt: t0 + 31_000,
+      });
+    });
+    const windowKey = windowKeyFor(t0);
+    await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey });
+    await t.mutation(internal.rollups.rebuildSamplesForWindow, { orgId, windowKey });
+  };
+  await seedSample(orgOne, "CS One", "628101");
+  await seedSample(orgTwo, "CS Two", "628202");
+
+  const asOne = t.withIdentity({
+    subject: String(identities.userOne), role: "cs", name: "One", email: "cs-one@example.test",
+    csName: "Stale Cookie Name", orgId: String(orgOne),
+  });
+  const access = await asOne.query(api.responseTime.getResponseTimeAccess, { requestedCsName: "CS Two" });
+  expect(access).toEqual({ orgId: String(orgOne), role: "cs", effectiveCsName: "CS One" });
+  const result = await asOne.query(api.responseTime.getResponseTimes, {
+    startAt: t0, endAt: t0 + 200_000, csName: "CS Two",
+  });
+  expect(result.cs.map((row) => row.csName)).toEqual(["CS One"]);
+});
