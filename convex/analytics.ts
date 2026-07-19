@@ -50,7 +50,7 @@ function aggName(a: CsAgg): string {
 export async function computeCsLeaderboardRaw(ctx: any, orgId: Id<"organizations">, args: { startAt: number; endAt: number; csName?: string }) {
     const len = args.endAt - args.startAt;
     const cur = await computeCsAgg(ctx, orgId, args.startAt, args.endAt, args.csName);
-    const prev = await computeCsAgg(ctx, orgId, args.startAt - len, args.startAt - 1, args.csName);
+    const prev = await computeCsAgg(ctx, orgId, args.startAt - len, args.startAt, args.csName);
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
     const keys = Array.from(new Set(Array.from(cur.keys()).concat(Array.from(prev.keys()))));
     const rows = keys.map((k) => {
@@ -179,7 +179,7 @@ export const getCsDetail = query({
     const BOUNDARY_MS = 6 * 60 * 60 * 1000; // neighbor-period peek on each side
 
     const orders = (
-      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
+      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt)).collect()
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && csKey(o.assignedCsName) === k);
 
     // One index read covers the window AND both boundary peeks.
@@ -187,7 +187,7 @@ export const getCsDetail = query({
       await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt - BOUNDARY_MS).lte("closedAt", args.endAt + BOUNDARY_MS)).collect()
     ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones) && csKey(r.csName) === k);
 
-    const inWin = (r: any) => r.closedAt >= args.startAt && r.closedAt <= args.endAt;
+    const inWin = (r: any) => r.closedAt >= args.startAt && r.closedAt < args.endAt;
     const isCancelled = (s: string) => s === "cancelled" || s === "cancelled_after_export";
     const money = (r: any) => r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
 

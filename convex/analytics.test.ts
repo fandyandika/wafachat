@@ -53,6 +53,19 @@ test("getCsLeaderboard: per-CS metrics + delta vs prior window, ranked", async (
   expect(a.deltaClosings).toBe(1); // 1 - 0
 });
 
+test("getCsLeaderboard previous period includes the row at exactly startAt minus one millisecond", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "endpoint-admin", role: "admin", name: "Admin", email: "endpoint@w" });
+  const orgId = await seedOrg(t);
+  const range = windowRangeForKey(windowKeyFor(t0));
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "CUR-ENDPOINT", customerPhone: "6281777000001", assignedCsName: "CS A", productName: "Q", createdAt: range.startAt + 1, updatedAt: range.startAt + 1 });
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "PREV-ENDPOINT", customerPhone: "6281777000002", assignedCsName: "CS A", productName: "Q", createdAt: range.startAt - 1, updatedAt: range.startAt - 1 });
+  });
+  const rows = await asAdmin.query(api.analytics.getCsLeaderboard, { startAt: range.startAt, endAt: range.endAt, raw: true });
+  expect(rows[0].prevLeads).toBe(1);
+});
+
 test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
@@ -365,4 +378,19 @@ test("getCsDetail: counted closings match card semantics; cancelled + boundary s
   expect(d.boundary[0].when).toBe("after");
   const dbl = d.leads.filter((l: { orderCount: number }) => l.orderCount === 2);
   expect(dbl).toHaveLength(2); // both rows of the doubling customer flagged
+});
+
+test("getCsDetail excludes the exact end boundary from the main interval and keeps it in the neighbor peek", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "detail-boundary", role: "admin", name: "Admin", email: "detail-boundary@w" });
+  const orgId = await seedOrg(t);
+  const startAt = t0;
+  const endAt = t0 + DAY;
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", { orgId, ...ordBase, orderId: "DETAIL-END", customerPhone: "6281888000001", assignedCsName: "CS A", productName: "Q", createdAt: endAt, updatedAt: endAt });
+    await ctx.db.insert("shippingRecaps", { orgId, ...recBase, orderIdBerdu: "DETAIL-END", customerPhone: "6281888000001", customerName: "Boundary", csName: "CS A", closedAt: endAt, total: 1, status: "ready", createdAt: endAt, updatedAt: endAt });
+  });
+  const detail = await asAdmin.query(api.analytics.getCsDetail, { startAt, endAt, csName: "CS A" });
+  expect(detail.counts).toEqual({ closings: 0, leadsUnique: 0, leadOrders: 0 });
+  expect(detail.boundary).toEqual([expect.objectContaining({ orderIdBerdu: "DETAIL-END", when: "after" })]);
 });

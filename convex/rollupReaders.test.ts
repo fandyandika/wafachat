@@ -879,7 +879,7 @@ runTest("performanceFromRollups matches legacy (csName-filtered)", async (t, def
   expect(rollup).toEqual(legacy);
 });
 
-runTest("single sealed performance ignores post-recompute raw rows while product difficulty stays exact raw", async (t, defaultOrg) => {
+runTest("single sealed performance and product difficulty both stay exact raw", async (t, defaultOrg) => {
   await t.run(async (ctx) => {
     const late = w1Start + 12 * 3_600_000;
     await ctx.db.insert("orders", {
@@ -902,10 +902,13 @@ runTest("single sealed performance ignores post-recompute raw rows while product
   const performance = await t.run(async (ctx) => readers.performanceFromRollups(ctx, defaultOrg as Id<"organizations">, {
     startAt: w1Start, endAt: w1End,
   }));
+  const rawPerformance = await t.run(async (ctx) => readers.performanceFromRaw(ctx, defaultOrg as Id<"organizations">, {
+    startAt: w1Start, endAt: w1End,
+  }));
 
   expect(products.map((row) => row.productName)).toContain("Late Raw Only");
-  expect(performance.products.map((row) => row.product)).not.toContain("Late Raw Only");
-  expect(performance.totalCod).toBe(1);
+  expect(performance.products.map((row) => row.product)).toContain("Late Raw Only");
+  expect(performance).toEqual(rawPerformance);
 });
 
 runTest("non-aligned daily report uses only the exact raw midnight-to-now range", async (t, defaultOrg) => {
@@ -1018,6 +1021,48 @@ runTest("multi-window performance falls back to raw for repeat-customer uniquene
   const actual = await t.run(async (ctx) => readers.performanceFromRollups(ctx, defaultOrg as Id<"organizations">, args));
   expect(actual).toEqual(raw);
   expect(actual.totalLeads).toBe(raw.totalLeads);
+});
+
+runTest("single-window performance falls back to raw when one phone appears under two CS", async (t, defaultOrg) => {
+  await t.run(async (ctx) => {
+    for (const [orderId, csName, csKey, createdAt] of [["CROSS-CS-1", "Azelia", "azelia", w1Start + 7_000], ["CROSS-CS-2", "Lila", "lila", w1Start + 8_000]] as const) {
+      await ctx.db.insert("orders", {
+        orgId: defaultOrg as Id<"organizations">, orderId, customerPhone: "6281222333444", customerName: "Cross CS", assignedCsName: csName, csKey,
+        productName: "Buku Sirah", products: "Buku Sirah", productsSubtotal: "100000", shippingCost: "0", total: "100000",
+        shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt, updatedAt: createdAt,
+      } as any);
+    }
+  });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId: defaultOrg, windowKey: W1 });
+  const readers = await import("./rollupReaders");
+  const args = { startAt: w1Start, endAt: w1End };
+  const raw = await t.run(async (ctx) => readers.performanceFromRaw(ctx, defaultOrg as Id<"organizations">, args));
+  const actual = await t.run(async (ctx) => readers.performanceFromRollups(ctx, defaultOrg as Id<"organizations">, args));
+  expect(actual).toEqual(raw);
+});
+
+runTest("product previous period includes a row at exactly startAt minus one millisecond", async (t, defaultOrg) => {
+  await t.run(async (ctx) => {
+    const currentAt = w1Start + 10_000;
+    const previousAt = w1Start - 1;
+    for (const [orderId, phone, createdAt] of [["ENDPOINT-CUR", "6281333000001", currentAt], ["ENDPOINT-PREV", "6281333000002", previousAt]] as const) {
+      await ctx.db.insert("orders", {
+        orgId: defaultOrg as Id<"organizations">, orderId, customerPhone: phone, customerName: orderId, assignedCsName: "Azelia", csKey: "azelia",
+        productName: "Endpoint Product", products: "Endpoint Product", productsSubtotal: "1", shippingCost: "0", total: "1",
+        shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt, updatedAt: createdAt,
+      } as any);
+    }
+    await ctx.db.insert("shippingRecaps", {
+      orgId: defaultOrg as Id<"organizations">, customerPhone: "6281333000002", customerName: "Previous", csName: "Azelia", csKey: "azelia",
+      orderIdBerdu: "ENDPOINT-PREV", status: "ready", total: 1, packageContent: "Endpoint Product", paymentMethod: "transfer", sourceMessageText: "", flags: [],
+      recipientName: "Previous", recipientPhone: "6281333000002", recipientAddress: "", recipientDistrict: "", recipientCity: "", version: 1,
+      closedAt: previousAt, createdAt: previousAt, updatedAt: previousAt,
+    } as any);
+  });
+  const rows = await t.run(async (ctx) => (await import("./rollupReaders")).productDifficultyFromRaw(ctx, defaultOrg as Id<"organizations">, {
+    startAt: w1Start, endAt: w1End, minLeads: 1,
+  }));
+  expect(rows.find((row) => row.productName === "Endpoint Product")?.prevCr).toBe(100);
 });
 
 runTest("an exact 16:00 boundary row is excluded from the previous product window", async (t, defaultOrg) => {

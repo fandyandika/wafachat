@@ -375,7 +375,7 @@ export async function leaderboardFromRollups(
   const curRollups = curRollupsByKey.flat();
 
   // Previous period
-  const prevKeys = windowKeysForRange(args.startAt - len, args.startAt - 1);
+  const prevKeys = windowKeysForRange(args.startAt - len, args.startAt);
   const prevRollupsByKey = await Promise.all(
     prevKeys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
   );
@@ -480,7 +480,7 @@ export async function productDifficultyFromRaw(
   };
 
   const cur = await aggregateFromRawTables(args.startAt, args.endAt);
-  const prev = await aggregateFromRawTables(args.startAt - len, args.startAt - 1);
+  const prev = await aggregateFromRawTables(args.startAt - len, args.startAt);
 
   const rows = Array.from(cur.leads.entries())
     .filter(([, leads]) => leads >= minLeads)
@@ -615,85 +615,6 @@ export async function periodReportFromRollups(
   // Calendar week/month bounds are not 16:00-WIB aligned; exact raw reads avoid
   // importing the preceding/following business-window fragments.
   return periodReportFromRaw(ctx, orgId, args);
-  /* istanbul ignore next -- legacy rollup implementation retained for migration */
-  const { start, end, prevStart, prevEnd, label } = periodRange(args.period, args.anchor ?? Date.now());
-  const key = args.csName ? csKeyOf(args.csName) : null;
-
-  // Snap to window boundaries
-  const keys = windowKeysForRange(start, end);
-  const prevKeys = windowKeysForRange(prevStart, prevEnd);
-
-  const curRollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
-  );
-  const curRollups = curRollupsByKey.flat();
-
-  const prevRollupsByKey = await Promise.all(
-    prevKeys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
-  );
-  const prevRollups = prevRollupsByKey.flat();
-
-  const aggregateTotals = (rollups: typeof curRollups) => {
-    let leads = 0,
-      closings = 0,
-      closedCust = 0,
-      revenue = 0,
-      cancelled = 0;
-    for (const rollup of rollups) {
-      if (key && csKeyOf(rollup.csKey) !== key) continue;
-      leads += rollup.leadsCust;
-      closings += rollup.closings;
-      closedCust += rollup.closedCust;
-      revenue += rollup.revenue;
-      cancelled += rollup.cancelled;
-    }
-    return { leads, closings, closedCust, revenue, cancelled };
-  };
-
-  const curT = aggregateTotals(curRollups);
-  const prevT = aggregateTotals(prevRollups);
-
-  const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-
-  const perCs = Array.from(
-    Array.from(curRollups)
-      .reduce((map, rollup) => {
-        if (key && csKeyOf(rollup.csKey) !== key) return map;
-        const ck = rollup.csKey;
-        const entry = map.get(ck) ?? { leads: 0, closings: 0, closedCust: 0, revenue: 0, csName: rollup.csName };
-        entry.leads += rollup.leadsCust;
-        entry.closings += rollup.closings;
-        entry.closedCust += rollup.closedCust;
-        entry.revenue += rollup.revenue;
-        map.set(ck, entry);
-        return map;
-      }, new Map<string, any>())
-      .values()
-  )
-    .map((a: any) => ({
-      csName: a.csName,
-      leads: a.leads,
-      closings: a.closings,
-      cr: cr(a.closedCust, a.leads),
-      revenue: a.revenue,
-    }))
-    .sort((a, b) => b.closings - a.closings);
-
-  return {
-    label,
-    rangeStart: start,
-    rangeEnd: end,
-    leads: curT.leads,
-    closings: curT.closings,
-    cr: cr(curT.closedCust, curT.leads),
-    revenue: curT.revenue,
-    cancelled: curT.cancelled,
-    prevLeads: prevT.leads,
-    prevClosings: prevT.closings,
-    prevCr: cr(prevT.closedCust, prevT.leads),
-    prevRevenue: prevT.revenue,
-    perCs,
-  };
 }
 
 // ── 8. Performance from Rollups ─────────────────────────────────────────────
@@ -843,63 +764,9 @@ export async function performanceFromRollups(
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; includeInferredDiscount?: boolean; csName?: string }
 ) {
-  const requestedKeys = windowKeysForRange(args.startAt, args.endAt);
-  if (!isWindowAlignedRange(args.startAt, args.endAt) || args.includeInferredDiscount || requestedKeys.length !== 1
-    || !(await areRollupWindowsComplete(ctx, orgId, args.startAt, args.endAt))) return performanceFromRaw(ctx, orgId, args);
-
-  const key = args.csName ? csKeyOf(args.csName) : null;
-  const rollups = (await Promise.all(windowKeysForRange(args.startAt, args.endAt).map((windowKey) =>
-    ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey)).collect()
-  ))).flat().filter((row: any) => !key || csKeyOf(row.csKey) === key);
-  const hasFacts = rollups.every((row: any) => row.cod !== undefined && row.transfer !== undefined
-    && !row.byProduct.some((product: any) => product.product === "lainnya")
-    && row.byProduct.every((product: any) => product.leadOrders !== undefined && product.revenue !== undefined && product.discount !== undefined && product.cod !== undefined && product.transfer !== undefined));
-  // Pre-Task-6 rows lack the additive facts. Fall back to a wholly raw response;
-  // do not combine old rollup totals with partial raw product data.
-  if (!hasFacts) return performanceFromRaw(ctx, orgId, args);
-
-  const products = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number }>();
-  const cs = new Map<string, { csName: string; leads: number; closing: number; revenue: number; discount: number }>();
-  let totalLeads = 0, totalClosing = 0, totalClosedCustomers = 0, totalRevenue = 0, totalDiscount = 0, delivered = 0, cancelled = 0, totalCod = 0, totalTransfer = 0;
-  for (const row of rollups) {
-    totalLeads += row.leadsCust;
-    totalClosing += row.closings;
-    totalClosedCustomers += row.closedCust;
-    totalRevenue += row.revenue;
-    totalDiscount += row.discount;
-    delivered += row.delivered;
-    cancelled += row.cancelled;
-    totalCod += row.cod;
-    totalTransfer += row.transfer;
-    const csRow = cs.get(row.csKey) ?? { csName: row.csName, leads: 0, closing: 0, revenue: 0, discount: 0 };
-    csRow.leads += row.leadsCust;
-    csRow.closing += row.closings;
-    csRow.revenue += row.revenue;
-    csRow.discount += row.discount;
-    cs.set(row.csKey, csRow);
-    for (const fact of row.byProduct) {
-      const product = products.get(fact.product) ?? { product: fact.product, leads: 0, closing: 0, revenue: 0, discount: 0 };
-      product.leads += fact.leads;
-      product.closing += fact.closings;
-      product.revenue += fact.revenue;
-      product.discount += fact.discount;
-      products.set(fact.product, product);
-    }
-  }
-  const cr = (closing: number, leads: number) => (leads > 0 ? Math.round((closing / leads) * 1000) / 10 : 0);
-  return {
-    totalLeads,
-    totalClosing,
-    overallCr: cr(totalClosedCustomers, totalLeads),
-    totalCod,
-    totalTransfer,
-    totalRevenue,
-    totalDiscount,
-    delivered,
-    cancelled,
-    products: Array.from(products.values()).map((row) => ({ ...row, cr: cr(row.closing, row.leads) })),
-    cs: Array.from(cs.values()).map((row) => ({ ...row, cr: cr(row.closing, row.leads) })),
-  };
+  // Per-CS rollups cannot preserve global phone identity when one phone appears
+  // under multiple CS rows, so even a single sealed window is not safely additive.
+  return performanceFromRaw(ctx, orgId, args);
 }
 
 // ── 9. Follow-Up Effectiveness from Rollups ────────────────────────────────
