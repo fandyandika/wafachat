@@ -72,3 +72,12 @@
 - Index audit found no name conflict: the new name appears only in its conversations-schema declaration and lifecycle scanner. `rtk npx convex codegen` completed schema bundling, binding generation, and its TypeScript check without generated-file changes.
 - Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 80 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
 - Commit: `afceb3d` — `fix: harden lifecycle scan and apply batches`.
+
+## Agent active-only P1 and lifecycle transition SLA
+
+- Strict TDD red proved that phone, Berdu staff, exact name, alias, and legacy no-key paths ignored an inactive row, but the canonical key-shaped name path still returned it. The exact org/key query now applies the same explicit `isActive === true` policy as every other resolver path; its already-bounded org/key range does not warrant another compound index.
+- Regression coverage includes inactive provider/staff/name/alias/key/legacy forms and confirms an active org-local canonical row still resolves by its key-shaped name.
+- Lifecycle status scans remain deliberately bounded and eventual-consistent across query transactions. A handover→active transition can move behind the active cursor after the handover range has already been observed; no row is deleted or lost, and the next scheduled production sweep processes it.
+- The SLA regression simulates that transition, proves the row is absent from the first cycle's collected IDs and remains open, then proves the next real cron sweep considers the one remaining row and closes it. A separate durable transition queue or sweep snapshot could provide same-run capture, but is a future architectural enhancement outside this I/O-remediation scope; a status-independent historical scan would double growing-table reads.
+- Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 82 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
+- Commit: `b62f215` — `fix: keep agent resolution active-only`.
