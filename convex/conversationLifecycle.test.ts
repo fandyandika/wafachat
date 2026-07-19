@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import * as conversationLifecycle from "./conversationLifecycle";
 
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
@@ -162,6 +163,32 @@ test("resolveBatch: outbound 'PESANAN COD DIPROSES' -> closedMarker (COD won lea
   });
 });
 
+test("resolveBatch remains a compatible single-page mutation with a continuation cursor", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 26; i++) {
+      await ctx.db.insert("conversations", { orgId, ...conv(`O-PAGE-${i}`, `62860${i}`) });
+    }
+  });
+
+  const result = await t.mutation(internal.conversationLifecycle.resolveBatch, {
+    cursor: null, status: "active", dryRun: false, now, orgId,
+  });
+
+  expect(result.considered).toBe(25);
+  expect(result.closedStale).toBe(25);
+  expect(result.isDone).toBe(false);
+  expect(result.continueCursor).toBeTypeOf("string");
+  await t.run(async (ctx) => {
+    const open = await ctx.db
+      .query("conversations")
+      .withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", orgId).eq("status", "active"))
+      .collect();
+    expect(open).toHaveLength(1);
+  });
+});
+
 test("resolveBatch: long alternating history uses the latest inbound when deciding stale", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
@@ -198,16 +225,25 @@ test("resolveBatch: long alternating history uses the latest inbound when decidi
   });
 });
 
-test("cronArchiveSweep: keeps sweeping after one status reaches its terminal page", async () => {
+test("cronArchiveSweep scans each open row once when retained rows surround closable rows", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
   const activeIds: Id<"conversations">[] = [];
+  const retainedIds: Id<"conversations">[] = [];
   let handoverId: Id<"conversations">;
   await t.run(async (ctx) => {
-    for (let i = 0; i < 26; i++) {
-      activeIds.push(await ctx.db.insert("conversations", {
-        orgId, ...conv(`O-ACTIVE-${i}`, `6283${i}`),
-      }));
+    for (let i = 0; i < 30; i++) {
+      const id = await ctx.db.insert("conversations", {
+        orgId,
+        ...conv(`O-ACTIVE-${i}`, `6283${i}`, { updatedAt: now - 10 * DAY + i }),
+      });
+      activeIds.push(id);
+      if (i === 0 || i === 12) {
+        retainedIds.push(id);
+        await ctx.db.insert("messages", {
+          orgId, ...inbound(id, `O-ACTIVE-${i}`, `6283${i}`, Date.now() - HOUR),
+        });
+      }
     }
     handoverId = await ctx.db.insert("conversations", {
       orgId, ...conv("O-HANDOVER", "628399", { status: "handover" as const }),
@@ -217,16 +253,90 @@ test("cronArchiveSweep: keeps sweeping after one status reaches its terminal pag
   const result = await t.action(internal.conversationLifecycle.cronArchiveSweep, {});
 
   expect(result).toEqual({
-    considered: 27,
+    considered: 31,
     closedWon: 0,
     closedMarker: 0,
-    closedStale: 27,
+    closedStale: 29,
     dryRun: false,
   });
   await t.run(async (ctx) => {
     const activeConversations = await Promise.all(activeIds.map((id) => ctx.db.get(id)));
-    expect(activeConversations).toHaveLength(26);
-    expect(activeConversations.every((conversation) => conversation?.status === "closed")).toBe(true);
+    expect(activeConversations.slice(25).every((conversation) => conversation?.status === "closed")).toBe(true);
+    expect((await ctx.db.get(retainedIds[0]))?.status).toBe("active");
+    expect((await ctx.db.get(retainedIds[1]))?.status).toBe("active");
+    expect(activeConversations.filter((conversation) => conversation?.status === "closed")).toHaveLength(28);
     expect((await ctx.db.get(handoverId))?.status).toBe("closed");
+  });
+});
+
+test("production sweep dryRun evaluates both statuses without closing them", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const ids = await t.run(async (ctx) => Promise.all([
+    ctx.db.insert("conversations", { orgId, ...conv("O-ACTIVE", "628401") }),
+    ctx.db.insert("conversations", { orgId, ...conv("O-HANDOVER", "628402", { status: "handover" as const }) }),
+  ]));
+
+  const result = await t.action(internal.conversationLifecycle.cronArchiveSweep, { dryRun: true });
+
+  expect(result).toEqual({ considered: 2, closedWon: 0, closedMarker: 0, closedStale: 2, dryRun: true });
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(ids[0]))?.status).toBe("active");
+    expect((await ctx.db.get(ids[1]))?.status).toBe("handover");
+  });
+});
+
+test("two-phase apply re-reads fresh activity before deciding whether to close", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const conversationId = await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId, ...conv("O-RACE", "628403"),
+  }));
+  const scanned = await t.query(internal.conversationLifecycle.scanOpenBatch, {
+    cursor: null, status: "active", orgId,
+  });
+  expect(scanned.ids).toEqual([conversationId]);
+  await t.run((ctx) => ctx.db.insert("messages", {
+    orgId, ...inbound(conversationId, "O-RACE", "628403", Date.now()),
+  }));
+
+  const result = await t.mutation(internal.conversationLifecycle.processConversationIds, {
+    ids: scanned.ids, dryRun: false, now: Date.now(), orgId,
+  });
+
+  expect(result).toEqual({ closedWon: 0, closedMarker: 0, closedStale: 0 });
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(conversationId))?.status).toBe("active");
+  });
+});
+
+test("sweep's total page cap alternates statuses and processes at most 25 rows per page", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (const status of ["active", "handover"] as const) {
+      for (let i = 0; i < 26; i++) {
+        await ctx.db.insert("conversations", {
+          orgId, ...conv(`${status}-${i}`, `6285${status === "active" ? 1 : 2}${i}`, { status }),
+        });
+      }
+    }
+  });
+  const actualSweep = (conversationLifecycle as any).sweep;
+  expect(actualSweep).toBeTypeOf("function");
+
+  const result = await actualSweep({
+    runQuery: (ref: any, args: any) => t.query(ref, args),
+    runMutation: (ref: any, args: any) => t.mutation(ref, args),
+  }, orgId, false, 2);
+
+  expect(result).toEqual({ considered: 50, closedWon: 0, closedMarker: 0, closedStale: 50, dryRun: false });
+  await t.run(async (ctx) => {
+    const open = await ctx.db
+      .query("conversations")
+      .withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", orgId))
+      .collect();
+    expect(open.filter((row) => row.status === "active")).toHaveLength(1);
+    expect(open.filter((row) => row.status === "handover")).toHaveLength(1);
   });
 });
