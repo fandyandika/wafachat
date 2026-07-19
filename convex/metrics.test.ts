@@ -140,3 +140,52 @@ test("getDuplicateOrders: groups repeat phones, flags accidental, excludes test+
   const none = await asAdmin.query(api.metrics.getDuplicateOrders, { startAt: t0 - 1, endAt: t0 + DAY, csName: "CS B" });
   expect(none.length).toBe(0);
 });
+
+test("dashboard windows are half-open and neighboring windows do not double-count the boundary", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "boundary-admin", role: "admin", name: "Admin", email: "boundary@w" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", {
+      orgId, orderId: "BOUNDARY", customerPhone: "6281888000001", customerName: "Boundary",
+      assignedCsName: "CS A", productName: "Book", products: "Book", productsSubtotal: "1",
+      shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "", shippingCity: "",
+      source: "berdu", aiEligible: true, createdAt: t0, updatedAt: t0,
+    });
+  });
+
+  const previous = await asAdmin.query(api.metrics.getDashboardSummary, { startAt: t0 - 1, endAt: t0 });
+  const next = await asAdmin.query(api.metrics.getDashboardSummary, { startAt: t0, endAt: t0 + 1 });
+  expect(previous.leads).toBe(0);
+  expect(next.leads).toBe(1);
+});
+
+test("public analytics rejects oversized ranges before reading", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "range-admin", role: "admin", name: "Admin", email: "range@w" });
+  await seedOrg(t);
+  await expect(asAdmin.query(api.metrics.getDashboardSummary, {
+    startAt: t0,
+    endAt: t0 + 36 * DAY,
+  })).rejects.toThrow(/range exceeds/i);
+});
+
+test("public analytics fails loudly when an exact source exceeds its row cap", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "cap-admin", role: "admin", name: "Admin", email: "cap@w" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 901; index++) {
+      await ctx.db.insert("orders", {
+        orgId, orderId: `CAP-${index}`, customerPhone: `6281${String(index).padStart(9, "0")}`,
+        customerName: `Customer ${index}`, assignedCsName: "CS A", productName: "Book", products: "Book",
+        productsSubtotal: "1", shippingCost: "0", total: "1", shippingAddress: "", shippingDistrict: "",
+        shippingCity: "", source: "berdu", aiEligible: true, createdAt: t0 + index, updatedAt: t0 + index,
+      });
+    }
+  });
+  await expect(asAdmin.query(api.metrics.getDashboardSummary, {
+    startAt: t0,
+    endAt: t0 + DAY,
+  })).rejects.toThrow(/row cap/i);
+});

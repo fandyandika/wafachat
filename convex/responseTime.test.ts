@@ -170,3 +170,21 @@ test("getResponseTimes derives CS scope and organization from the current users 
   });
   expect(result.cs.map((row) => row.csName)).toEqual(["CS One"]);
 });
+
+test("response samples use half-open ranges at neighboring cache boundaries", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "boundary-admin", role: "admin", name: "Admin", email: "boundary@w" });
+  const orgId = await seedOrg(t);
+  const conversationId = await t.run((ctx: any) => ctx.db.insert("conversations", {
+    orgId, ...convBase, orderId: "BOUNDARY", customerPhone: "6281999000001", assignedCsName: "CS A",
+  }));
+  await t.run((ctx: any) => ctx.db.insert("responseSamples", {
+    orgId, csKey: "a", csName: "CS A", conversationId, deltaMs: 30_000,
+    inboundAt: t0 - 30_000, slaBreach: false, createdAt: t0,
+  }));
+
+  const previous = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: t0 - 120_000, endAt: t0 });
+  const next = await asAdmin.query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 120_000 });
+  expect(previous.overall.firstReplyCount).toBe(0);
+  expect(next.overall.firstReplyCount).toBe(1);
+});

@@ -16,7 +16,7 @@ Deferred items. Pull from here when needed.
 1. **Convex correctness baseline** — fix the two date-dependent tests; full suite green.
 2. **Low-risk I/O wins** — indexed health snapshot, reusable response-time cache buckets, incremental Berdu reconciliation.
 3. **Follow-up/lifecycle efficiency** — direction index and org-scoped pagination.
-4. **Analytics completion** — sealed periods fully rollup-backed; partial live windows exact and raw.
+4. **Analytics safety completion** — additive sealed facts remain rollup-backed; non-composable identity unions remain exact raw with half-open 35-day/900-row fail-loud bounds. No additive distinct approximation.
 5. **Ingestion tuning** — indexed agent resolution while preserving raw capture/replay.
 6. **24-hour production comparison** — target ≤135 MB/day at comparable traffic, stretch ≤115 MB/day.
 7. **PWA project** — installable app shell, new branded icons, safe update flow, static/offline fallback only; authenticated Convex data is never cached by the service worker.

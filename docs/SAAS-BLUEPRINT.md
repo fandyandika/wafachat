@@ -63,9 +63,10 @@ peluang positioning.
 4. **CS = entity ber-ID, bukan string nama.** Akar dari bug fragmentasi ("CS Aisyah" pecah
    3 kartu) dan semua akrobat `csKey`. Target: 1 CS = 1 ID stabil + tabel alias per sumber
    (Berdu staff ID, phone_number_id, variasi nama di pesan).
-5. **Metrics engine: event-in → rollup harian tersimpan** (per org × CS × hari), menggantikan
-   derive-on-read yang scan ulang tiap buka (sudah pernah menyebabkan insiden bandwidth
-   107 MB/hari). Raw event tetap disimpan untuk drill-down (Rincian).
+5. **Metrics engine: event-in → rollup harian tersimpan** (per org × CS × hari) untuk fakta
+   yang composable. Union identitas lintas hari/CS (distinct phone/order) tetap dihitung exact
+   dari raw range yang dibatasi 35 hari + 900 row/source dan fail-loud; count distinct harian
+   tidak pernah dijumlahkan sebagai aproksimasi. Raw event tetap disimpan untuk drill-down.
 6. **Closing-rule builder per tenant**: wizard "tempel contoh pesan closing-mu" → sistem
    menyusun parser (generalisasi tabel `closingRules`). Tier premium: AI parsing format bebas.
 
@@ -211,8 +212,9 @@ adalah aset — pertahankan perilakunya (142 test hijau sebagai kontrak).
 4. Ingestion API: endpoint `POST /ingest/lead` + `POST /ingest/message` (HMAC per org) +
    Field Mapper config; port logika n8n "Normalize Order Data" & "Map to append_message"
    ke sini.
-5. Rollup harian (org × agent × hari) terisi dari event; panel membaca rollup, drill-down
-   membaca raw event.
+5. Rollup harian (org × agent × hari) terisi dari event; panel membaca fakta additive dari
+   rollup. Metrik union identitas dan drill-down membaca raw range exact dengan cap eksplisit
+   sampai tersedia representasi composable yang exact.
 6. Settings per org: timezone + jam cutoff, closing rules, nomor internal, jam aktif SLA,
    target Queen (band CR, bobot).
 7. Billing (Midtrans/Xendit) + gating fitur per paket.

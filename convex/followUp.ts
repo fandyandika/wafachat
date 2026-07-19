@@ -7,9 +7,11 @@ import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
 import { internal } from "./_generated/api";
 import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
+import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
+const MAX_FOLLOW_UP_ROWS = 100;
 
 // Count follow-up touches (outbound messages after the 24h window closed, relative to lastInbound).
 // Manual-via-WABA follow-ups and API sends both land here, so the funnel can't double-send a lead a
@@ -17,10 +19,10 @@ const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbou
 async function touchInfo(ctx: any, conversationId: any, lastInboundAt: number | null) {
   if (lastInboundAt == null) return { count: 0, lastAt: null as number | null, ats: [] as number[] };
   const windowClose = lastInboundAt + WINDOW_HOURS * HOUR;
-  const touches = await ctx.db
+  const touches = await collectExactBounded(ctx.db
     .query("messages")
     .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", conversationId).eq("direction", "outbound").gt("createdAt", windowClose))
-    .collect();
+    , "followUp touch history", MAX_FOLLOW_UP_ROWS);
   const ats = (touches.map((t: any) => t.createdAt) as number[]).sort((a, b) => a - b);
   return { count: ats.length, lastAt: ats.length ? ats[ats.length - 1] : null, ats };
 }
@@ -30,10 +32,10 @@ async function touchInfo(ctx: any, conversationId: any, lastInboundAt: number | 
 export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: any, lastInboundAt: number | null, beforeTime: number) {
   if (lastInboundAt == null) return 0;
   const windowClose = lastInboundAt + WINDOW_HOURS * HOUR;
-  const touches = await ctx.db
+  const touches = await collectExactBounded(ctx.db
     .query("messages")
     .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", conversationId).eq("direction", "outbound").gt("createdAt", windowClose).lt("createdAt", beforeTime))
-    .collect();
+    , "followUp closing touch history", MAX_FOLLOW_UP_ROWS);
   return touches.length;
 }
 
@@ -52,7 +54,7 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
     const recent = (
       await Promise.all(
         (["active", "handover"] as const).map((s) =>
-          ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", args.orgId).eq("status", s).gte("updatedAt", since)).collect(),
+          collectExactBounded(ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", args.orgId).eq("status", s).gte("updatedAt", since)), "followUp candidates", MAX_FOLLOW_UP_ROWS),
         ),
       )
     ).flat();
@@ -339,10 +341,10 @@ export const getArchivedFollowUps = query({
     // Manual archive sets status="closed" + followUpArchivedAt, so read only recently-closed
     // conversations via the index (NOT a full-table .filter().collect() scan) then keep the
     // ones that were actually archived. Bounds reads to recent closed convs.
-    const archived = await ctx.db
+    const archived = await collectExactBounded(ctx.db
       .query("conversations")
       .withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", orgId).eq("status", "closed").gte("updatedAt", since))
-      .collect();
+      , "followUp archived conversations");
 
     const filtered = archived
       .filter((c) => c.followUpArchivedAt != null)
@@ -436,12 +438,13 @@ export async function computeFollowUpEffectivenessRaw(
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; csName?: string },
 ) {
+  assertPublicAnalyticsRange(args.startAt, args.endAt, "followUp.getFollowUpEffectiveness");
   const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = args.csName ? csKey(args.csName) : null;
   const recaps = (
-    await ctx.db.query("shippingRecaps")
-      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lte("closedAt", args.endAt))
-      .collect()
+    await collectExactBounded(ctx.db.query("shippingRecaps")
+      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lt("closedAt", args.endAt)),
+      "followUp.getFollowUpEffectiveness recaps")
   ).filter((recap: any) => recap.status !== "cancelled" && recap.status !== "cancelled_after_export"
     && !isInternalTestPhone(recap.customerPhone, internalPhones) && (!key || csKey(recap.csName) === key));
   const latestByClosing = new Map<string, any>();
@@ -473,13 +476,17 @@ export const getClosedFollowUps = query({
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
-    const since = now - (args.sinceDays ?? 7) * DAY;
+    const sinceDays = args.sinceDays ?? 7;
+    if (!Number.isFinite(sinceDays) || sinceDays < 0 || sinceDays > 35) {
+      throw new Error("followUp.getClosedFollowUps: range exceeds 35 days");
+    }
+    const since = now - sinceDays * DAY;
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
 
-    const recaps = await ctx.db
+    const recaps = await collectExactBounded(ctx.db
       .query("shippingRecaps")
-      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", since).lte("closedAt", now))
-      .collect();
+      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", since).lt("closedAt", now)),
+      "followUp.getClosedFollowUps recaps");
 
     const filtered = recaps
       .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export")

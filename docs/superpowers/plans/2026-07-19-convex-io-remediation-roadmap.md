@@ -4,7 +4,7 @@
 
 **Goal:** Reduce WaFaChat production database I/O from the 18 July 2026 baseline without changing business metrics, weakening capture-first ingestion, or breaking tenant isolation.
 
-**Architecture:** Apply the safest high-return reductions first: deterministic tests, indexed point reads for scheduled jobs, stable cache buckets, and direction-aware message indexes. Then complete the existing rollup architecture for analytics. Ingestion is optimized last because its raw-event write and replay guarantees are intentional; only redundant registry/rule reads may be removed.
+**Architecture:** Apply the safest high-return reductions first: deterministic tests, indexed point reads for scheduled jobs, stable cache buckets, and direction-aware message indexes. Additive facts remain rollup-backed. Identity-sensitive distinct unions remain exact raw reads until a future composable identity representation is designed; those public reads are hard-bounded and fail loudly instead of approximating or silently truncating. Ingestion is optimized last because its raw-event write and replay guarantees are intentional; only redundant registry/rule reads may be removed.
 
 **Tech Stack:** Next.js App Router, TypeScript, Convex, convex-test, Vitest, Vercel `unstable_cache`.
 
@@ -14,7 +14,7 @@
 - Preserve `ingestEvents.rawBody` and replay capability for the full configured retention period.
 - Every growing-table query must be scoped by `orgId` and an index range.
 - Public metric results must remain equal to the existing raw implementation for equivalent windows.
-- Partial live windows use exact raw ranges; sealed 16:00-WIB windows use rollups.
+- Partial live windows use exact raw ranges. Sealed 16:00-WIB windows use rollups only for composable facts; identity-sensitive distinct unions stay exact raw with a 35-day range limit, 900-row per-source cap, and explicit errors when the caller must narrow the range.
 - No PWA changes are part of this plan; PWA receives its own design and implementation plan after this gate passes.
 - Run shell commands through `rtk` in this workspace.
 
@@ -332,7 +332,9 @@ rtk git commit -m "perf: index directional message reads"
 
 ---
 
-### Task 6: Complete rollup-backed analytics
+### Task 6: Complete safe analytics facts and exact bounded identity readers
+
+> **Final-review resolution (2026-07-19):** The proposed sealed-window reader cutover was rejected for non-composable identity metrics. Summing per-window/per-CS distinct counts changes global phone/order unions and is not exact. Public dashboard, leaderboard, product, performance, period, follow-up, and daily-report identity paths therefore remain raw and exact for both sealed and live windows. Every caller-supplied range is half-open, finite, limited to 35 days, and every growing source uses `take(cap + 1)` with fail-loud behavior at 900 rows. Exact fallback lookups are capped at 100. No approximate/additive distinct math is permitted. Existing rollups remain migration/parity facts and may serve response samples/composable totals only after completeness markers prove the exact schema version.
 
 **Files:**
 - Modify: `convex/schema.ts`
@@ -346,7 +348,7 @@ rtk git commit -m "perf: index directional message reads"
 **Interfaces:**
 - Extends `dailyRollups.byProduct` with optional migration fields: `leadOrders`, `revenue`, `discount`, `cod`, `transfer`.
 - Adds rollup totals `cod` and `transfer` as optional during migration, required after backfill.
-- Produces exact raw fallback for non-aligned live windows.
+- Produces exact bounded raw readers for every identity-sensitive window, including sealed windows.
 
 - [ ] **Step 1: Add parity tests before schema changes**
 
@@ -373,10 +375,9 @@ Compute these values from the order and recap slices already loaded by `computeR
 
 - [ ] **Step 3: Remove redundant raw analytics reads**
 
-- `periodReportFromRollups`: sum `rollup.cancelled`; remove the `shippingRecaps` query.
-- `productDifficultyFromRollups`: use `byProduct.leadOrders` and `closings` for current/previous sealed windows.
-- `performanceFromRollups`: use rollup totals and product facts for aligned windows.
-- For non-aligned ranges, calculate the complete response from the exact raw orders/recaps already read; never mix whole-window totals with partial raw details.
+- Keep non-composable identity metrics on exact raw orders/recaps for all windows; never sum distinct per-window facts.
+- Enforce `[startAt,endAt)`, a 35-day public range, a 900-row per-source exact cap, and a 100-lookup fallback cap. Exceeding a cap fails loudly and asks the caller to narrow the range.
+- Keep response-time samples precomputed and marker-gated rollup facts available for composable readers; never mix whole-window rollup totals with partial raw details.
 
 - [ ] **Step 4: Backfill and enforce**
 
@@ -392,7 +393,7 @@ rtk npx vitest run
 rtk npm run build
 ```
 
-Expected: zero failures and parity zero for every sealed fixture.
+Expected: zero failures, exact raw parity for accepted ranges, explicit cap/range errors, and parity zero for every sealed rollup fixture.
 
 ```powershell
 rtk git add convex/schema.ts convex/rollups.ts convex/rollupReaders.ts convex/shippingRecaps.ts convex/analytics.ts convex/rollups.test.ts convex/rollupReaders.test.ts
@@ -501,4 +502,3 @@ rtk git commit -m "docs: record Convex I/O remediation results"
 - **Scope boundary:** PWA, billing, onboarding, and tenant credential storage remain separate projects.
 - **Type consistency:** all new indexes are org-prefixed; migration fields are optional until the backfill gate.
 - **Reliability:** capture-first ingestion and replay retention are explicitly preserved.
-

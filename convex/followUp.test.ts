@@ -507,7 +507,7 @@ test("getFollowUpEffectiveness: counts closings with FU touches", async () => {
 
     // Recap with 2 touches
     await ctx.db.insert("shippingRecaps", { orgId,
-      orderIdBerdu: "O-21", customerPhone: "62821", customerName: "Budi", csName: "Nabila", closedAt: now,
+      orderIdBerdu: "O-21", customerPhone: "62821", customerName: "Budi", csName: "Nabila", closedAt: now - 1,
       recipientName: "Budi", recipientPhone: "62821", recipientAddress: "", recipientDistrict: "",
       recipientCity: "", packageContent: "X", paymentMethod: "cod" as const,
       status: "ready" as const, flags: [], sourceMessageText: "", version: 1, followUpTouchesAtClose: 2,
@@ -523,6 +523,24 @@ test("getFollowUpEffectiveness: counts closings with FU touches", async () => {
   expect(res.totalClosings).toBe(1);
   expect(res.fromFollowUp).toBe(1);
   expect(res.byStage.h2).toBe(1);
+});
+
+test("follow-up effectiveness uses half-open neighboring windows", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "boundary-admin", role: "admin", name: "Admin", email: "boundary@w" });
+  const orgId = await seedOrg(t);
+  await t.run((ctx) => ctx.db.insert("shippingRecaps", { orgId,
+    orderIdBerdu: "FU-BOUNDARY", customerPhone: "6281777000001", customerName: "Boundary", csName: "Nabila", closedAt: now,
+    recipientName: "Boundary", recipientPhone: "6281777000001", recipientAddress: "", recipientDistrict: "",
+    recipientCity: "", packageContent: "X", paymentMethod: "cod" as const,
+    status: "ready" as const, flags: [], sourceMessageText: "", version: 1, followUpTouchesAtClose: 1,
+    createdAt: now, updatedAt: now,
+  }));
+
+  const previous = await asAdmin.query(api.followUp.getFollowUpEffectiveness, { startAt: now - HOUR, endAt: now });
+  const next = await asAdmin.query(api.followUp.getFollowUpEffectiveness, { startAt: now, endAt: now + HOUR });
+  expect(previous.totalClosings).toBe(0);
+  expect(next.totalClosings).toBe(1);
 });
 
 // Closing tab: recent closings, with via-follow-up flag, scoped + cleaned

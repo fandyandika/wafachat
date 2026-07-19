@@ -4,6 +4,7 @@ import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
 import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
+import { assertFallbackLookupBudget, assertPublicAnalyticsRange, collectExactBounded, MAX_RESPONSE_SAMPLES } from "./analyticsBounds";
 
 /**
  * Analytics reader helpers.
@@ -42,13 +43,17 @@ export async function responseTimesFromSamples(
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; csName?: string }
 ) {
+  assertPublicAnalyticsRange(args.startAt, args.endAt, "responseTime.getResponseTimes");
   // Fetch samples in range, sorted by createdAt
   const samples = (
     await ctx.db
       .query("responseSamples")
-      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
-      .collect()
+      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt))
+      .take(MAX_RESPONSE_SAMPLES + 1)
   ).sort((a: any, b: any) => a.createdAt - b.createdAt);
+  if (samples.length > MAX_RESPONSE_SAMPLES) {
+    throw new Error(`responseTime.getResponseTimes samples: exact row cap ${MAX_RESPONSE_SAMPLES} exceeded; narrow the requested range`);
+  }
 
   // Group by conversationId, preserving order (ALL samples, no filter - need global overall stats)
   const byConv = new Map<string, typeof samples>();
@@ -143,6 +148,7 @@ export async function productDifficultyFromRaw(
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; minLeads?: number; csName?: string }
 ) {
+  assertPublicAnalyticsRange(args.startAt, args.endAt, "analytics.getProductDifficulty");
   // Note: This function reads from raw tables like the legacy getProductDifficulty
   // because the rollups byProduct counts distinct customers, not raw orders.
   // getProductDifficulty needs raw order counts per product.
@@ -156,11 +162,11 @@ export async function productDifficultyFromRaw(
   // Helper to aggregate products from raw tables (counts raw orders for leads, not distinct customers)
   const aggregateFromRawTables = async (startAt: number, endAt: number) => {
     const orders = (
-      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)).collect()
+      await collectExactBounded(ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)), "analytics.getProductDifficulty orders")
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKeyOf(o.assignedCsName) === key));
 
     const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)).collect()
+      await collectExactBounded(ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)), "analytics.getProductDifficulty recaps")
     ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKeyOf(r.csName) === key));
 
     const leads = new Map<string, number>();
@@ -207,6 +213,7 @@ export async function productDifficultyFromRaw(
 }
 
 export async function areRollupWindowsComplete(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number, nowMs = Date.now()): Promise<boolean> {
+  assertPublicAnalyticsRange(startAt, endAt, "rollup completeness");
   if (!isWindowAlignedRange(startAt, endAt) || endAt > nowMs) return false;
   const keys = windowKeysForRange(startAt, endAt);
   const markers = await Promise.all(keys.map((windowKey) => ctx.db.query("rollupWindows")
@@ -257,8 +264,8 @@ export async function periodReportFromRaw(
   const aggregate = async (rangeStart: number, rangeEnd: number) => {
     const endExclusive = rangeEnd + 1;
     const [orders, recapsAll] = await Promise.all([
-      ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", rangeStart).lt("createdAt", endExclusive)).collect(),
-      ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", rangeStart).lt("closedAt", endExclusive)).collect(),
+      collectExactBounded(ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", rangeStart).lt("createdAt", endExclusive)), "analytics.getPeriodReport orders"),
+      collectExactBounded(ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", rangeStart).lt("closedAt", endExclusive)), "analytics.getPeriodReport recaps"),
     ]);
     const visibleOrders = orders.filter((row: any) => !isInternalTestPhone(row.customerPhone, internalPhones) && (!filterKey || csKeyOf(row.assignedCsName) === filterKey));
     const visibleRecaps = recapsAll.filter((row: any) => !isInternalTestPhone(row.customerPhone, internalPhones) && (!filterKey || csKeyOf(row.csName) === filterKey));
@@ -306,21 +313,22 @@ export async function performanceFromRaw(
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; includeInferredDiscount?: boolean; csName?: string }
 ) {
+  assertPublicAnalyticsRange(args.startAt, args.endAt, "shippingRecaps.getPerformance");
   const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = args.csName ? csKeyOf(args.csName) : null;
 
   const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
 
   // Read raw recaps for detailed product breakdown and closed customer count (rollups don't have per-product revenue)
-  const recaps = await ctx.db
+  const recaps = await collectExactBounded(ctx.db
     .query("shippingRecaps")
     .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lt("closedAt", args.endAt))
-    .collect();
+    , "shippingRecaps.getPerformance recaps");
 
-  const orders = await ctx.db
+  const orders = await collectExactBounded(ctx.db
     .query("orders")
     .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt))
-    .collect();
+    , "shippingRecaps.getPerformance orders");
 
   const realOrders = orders.filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKeyOf(o.assignedCsName) === key));
   const visibleRecaps = recaps.filter((r: any) => (!key || csKeyOf(r.csName) === key) && !isInternalTestPhone(r.customerPhone, internalPhones));
@@ -355,6 +363,7 @@ export async function performanceFromRaw(
     fbSeen.add(phone);
     fbNeeded.push({ phone, orderIdBerdu: r.orderIdBerdu });
   }
+  assertFallbackLookupBudget(fbNeeded.length, "shippingRecaps.getPerformance");
   const fbResults = await Promise.all(
     fbNeeded.map(async ({ phone, orderIdBerdu }) => {
       let order: any = null;
@@ -362,8 +371,10 @@ export async function performanceFromRaw(
         order = await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", orderIdBerdu)).unique();
       }
       if (!order) {
-        const all = await ctx.db.query("orders").withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone)).collect();
-        order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
+        order = await ctx.db.query("orders")
+          .withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone))
+          .order("desc")
+          .first();
       }
       return { phone, order };
     }),
