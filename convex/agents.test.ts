@@ -98,15 +98,17 @@ test("resolveAgent applies one active-only policy to phone, staff, name, alias, 
   });
 });
 
-test("resolveAgent: canonical-key and legacy fallbacks stay inside the requested org", async () => {
+test("resolveAgent: scalar provider IDs stay tenant-scoped and legacy arrays still fall back inside the requested org", async () => {
   const t = convexTest(schema);
   const orgA = await seedOrg(t);
   const orgB = await t.run((ctx: any) => ctx.db.insert("organizations", { slug: "other", name: "Other Org", createdAt: 1, updatedAt: 1 })) as Id<"organizations">;
-  await seedAgent(t, orgA, { csName: "Alfa", normalizedName: "alfa", key: "shared", providerNumberIds: ["PHONE-SHARED"] });
-  await seedAgent(t, orgB, { csName: "Beta", normalizedName: "beta", key: "shared", providerNumberIds: ["PHONE-SHARED"], berduStaffIds: [] });
+  await seedAgent(t, orgA, { csName: "Alfa", normalizedName: "alfa", key: "shared", providerNumberId: "PHONE-SHARED", providerNumberIds: [] });
+  await seedAgent(t, orgB, { csName: "Beta", normalizedName: "beta", key: "shared", providerNumberId: "PHONE-SHARED", providerNumberIds: [], berduStaffIds: [] });
+  await seedAgent(t, orgB, { csName: "Legacy", normalizedName: "legacy", key: "legacy", providerNumberId: undefined, providerNumberIds: ["PHONE-LEGACY"], berduStaffIds: [] });
   await t.run(async (ctx: any) => {
     expect((await resolveAgent(ctx, orgB, { name: "CS Shared" }))?.csName).toBe("Beta");
     expect((await resolveAgent(ctx, orgB, { phoneNumberId: "PHONE-SHARED" }))?.csName).toBe("Beta");
+    expect((await resolveAgent(ctx, orgB, { phoneNumberId: "PHONE-LEGACY" }))?.csName).toBe("Legacy");
   });
 });
 
@@ -127,19 +129,23 @@ test("resolveAgent: legacy no-key fallback returns only the requested org's matc
   });
 });
 
-test("seedKeys: idempotent — stamps key=csKey(csName) + nameAliases=[] only where missing", async () => {
+test("seedKeys: idempotently backfills scalar provider IDs only from unambiguous legacy arrays", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
   await seedAgent(t, orgId, { key: undefined, nameAliases: undefined });
   await seedAgent(t, orgId, { csName: "Risma", normalizedName: "risma", key: "risma", nameAliases: [], berduStaffIds: ["B-1CxSmL"], providerNumberIds: ["433364286526515"] });
+  await seedAgent(t, orgId, { csName: "Multi", normalizedName: "multi", key: "multi", nameAliases: [], berduStaffIds: [], providerNumberIds: ["PHONE-ONE", "PHONE-TWO"] });
   const asAdmin = t.withIdentity(ADMIN);
   const r1 = await asAdmin.mutation(api.agents.seedKeys, {});
-  expect(r1.seeded).toBe(1);
+  expect(r1.seeded).toBe(2);
   const r2 = await asAdmin.mutation(api.agents.seedKeys, {});
   expect(r2.seeded).toBe(0);
   await t.run(async (ctx: any) => {
     const rows = await ctx.db.query("csConfigs").collect();
     for (const row of rows) { expect(row.key).toBeDefined(); expect(row.nameAliases).toBeDefined(); }
+    expect(rows.find((row: any) => row.csName === "Aisyah")?.providerNumberId).toBe("1197250776802755");
+    expect(rows.find((row: any) => row.csName === "Risma")?.providerNumberId).toBe("433364286526515");
+    expect(rows.find((row: any) => row.csName === "Multi")?.providerNumberId).toBeUndefined();
   });
 });
 

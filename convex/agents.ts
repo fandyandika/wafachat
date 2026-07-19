@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { requireAdmin, requireAdminOrg } from "./authz";
+import { requireAdminOrg } from "./authz";
 import { csKey, normalizeCsName } from "./lib";
 
 // ─── Fase B2a: agents = the csConfigs registry, addressed through ONE resolver. ───
@@ -21,21 +21,27 @@ export async function resolveAgent(
   q: { name?: string; berduStaffId?: string; phoneNumberId?: string },
 ): Promise<ResolvedAgent | null> {
   if (!q.name && !q.berduStaffId && !q.phoneNumberId) return null;
-  // Every resolution path is active-only. The org-scoped rows below cover phone, staff, current
-  // name, alias, and legacy no-key matching; the exact canonical-key query repeats that policy.
-  const rows = await ctx.db
+  // Every resolution path is active-only. Avoid materializing the active registry for the
+  // common phone-number path; the legacy array fallback remains org-scoped during migration.
+  let activeRows: any[] | undefined;
+  const getActiveRows = async () => activeRows ??= await ctx.db
     .query("csConfigs")
-    .withIndex("by_org_active", (q: any) => q.eq("orgId", orgId).eq("isActive", true))
+    .withIndex("by_org_active", (ix: any) => ix.eq("orgId", orgId).eq("isActive", true))
     .collect();
   const keyOf = (r: any): string => r.key ?? csKey(r.csName); // pre-seed fallback
   // 1) provider phone_number_id (KirimDev message attribution)
   if (q.phoneNumberId) {
-    const hit = rows.find((r: any) => r.providerNumberId === q.phoneNumberId || (r.providerNumberIds ?? []).includes(q.phoneNumberId));
+    const scalar = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_org_providerNumberId", (ix: any) => ix.eq("orgId", orgId).eq("providerNumberId", q.phoneNumberId))
+      .first();
+    if (scalar?.isActive) return { key: keyOf(scalar), csName: scalar.csName, agentId: scalar._id };
+    const hit = (await getActiveRows()).find((r: any) => (r.providerNumberIds ?? []).includes(q.phoneNumberId));
     if (hit) return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
   }
   // 2) Berdu staff id (order attribution)
   if (q.berduStaffId) {
-    const hit = rows.find((r: any) => (r.berduStaffIds ?? []).includes(q.berduStaffId));
+    const hit = (await getActiveRows()).find((r: any) => (r.berduStaffIds ?? []).includes(q.berduStaffId));
     if (hit) return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
   }
   // 3) raw name form: current csName (REQUIRED for post-rename: csKey(newName) != key,
@@ -43,6 +49,7 @@ export async function resolveAgent(
   if (q.name) {
     const n = normName(q.name);
     if (n.length > 0) {
+      const rows = await getActiveRows();
       const hit =
         rows.find((r: any) => normName(r.csName) === n) ??
         rows.find((r: any) => (r.nameAliases ?? []).some((a: string) => normName(a) === n)) ??
@@ -73,13 +80,19 @@ export async function canonicalizeCs(
 export const seedKeys = mutation({
   args: {},
   handler: async (ctx) => {
-    await requireAdmin(ctx, "agents.seedKeys");
-    const rows = await ctx.db.query("csConfigs").collect();
+    const { orgId } = await requireAdminOrg(ctx, "agents.seedKeys");
+    const rows = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_org_active", (q) => q.eq("orgId", orgId))
+      .collect();
     let seeded = 0;
     for (const r of rows) {
       const patch: Record<string, unknown> = {};
       if (r.key === undefined) patch.key = csKey(r.csName);
       if (r.nameAliases === undefined) patch.nameAliases = [];
+      if (r.providerNumberId === undefined && r.providerNumberIds?.length === 1) {
+        patch.providerNumberId = r.providerNumberIds[0];
+      }
       if (Object.keys(patch).length > 0) {
         await ctx.db.patch(r._id, { ...patch, updatedAt: Date.now() });
         seeded++;

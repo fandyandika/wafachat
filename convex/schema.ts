@@ -105,6 +105,7 @@ export default defineSchema({
   })
     .index("by_org_key", ["orgId", "key"])
     .index("by_org_normalizedName", ["orgId", "normalizedName"])
+    .index("by_org_providerNumberId", ["orgId", "providerNumberId"])
     .index("by_org_active", ["orgId", "isActive"]),
 
   // ── Ingestion API (Fase 1) ────────────────────────────────────────────────

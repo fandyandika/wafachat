@@ -4,6 +4,11 @@ import { requireMemberOrg, requireAdminOrg } from "./authz";
 
 const DEFAULT_PHRASES = ["PEMESANAN BERHASIL"];
 
+/** Only outbound text can carry a configured closing phrase. */
+export function canContainClosingSignal(direction: string, messageType: string): boolean {
+  return direction === "outbound" && messageType === "text";
+}
+
 export async function getActiveClosingPhrases(
   ctx: { db: any }, orgId: Id<"organizations">,
 ): Promise<string[]> {

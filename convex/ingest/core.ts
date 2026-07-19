@@ -81,9 +81,13 @@ export async function processCapturedEvent(
     if (!p.phone || !p.content || !p.externalMessageId) return { status: "skipped", skipReason: "missing phone/content/externalMessageId" };
     if (p.direction !== "inbound" && p.direction !== "outbound") return { status: "skipped", skipReason: "invalid direction" };
     if (p.role !== "customer" && p.role !== "cs" && p.role !== "ai") return { status: "skipped", skipReason: "invalid role" };
+    const messageType = p.messageType ?? "text";
+    if (messageType !== "text" && messageType !== "image" && messageType !== "template" && messageType !== "button") {
+      return { status: "skipped", skipReason: "invalid messageType" };
+    }
     const result = await appendMessageCore(ctx, {
       phone: String(p.phone), role: p.role, direction: p.direction,
-      content: String(p.content), messageType: "text",
+      content: String(p.content), messageType,
       externalMessageId: String(p.externalMessageId),
       createdAt: typeof p.timestamp === "number" ? p.timestamp : event.receivedAt,
       csName: typeof p.csName === "string" ? p.csName : undefined,

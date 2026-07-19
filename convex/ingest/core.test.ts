@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
+import { processCapturedEvent } from "./core";
 
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
@@ -205,6 +206,52 @@ test("lead.created attribution: csConfigs.berduStaffIds overrides the baked defa
     const orders = await ctx.db.query("orders").collect();
     const order = orders.find((o) => o.orderId.includes("2607110001"));
     expect(order?.assignedCsName).toBe("Sari"); // registry won, not baked "Aisyah"
+  });
+});
+
+test("ingestion reads tenant closing phrases only for outbound text while retaining closing detection", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    await ctx.db.insert("closingRules", { orgId, phrase: "CUSTOM CLOSED", active: true, createdAt: 1 });
+    let closingRuleQueries = 0;
+    const tracedCtx = {
+      ...ctx,
+      db: new Proxy(ctx.db, {
+        get(target, property, receiver) {
+          if (property === "query") {
+            return (table: string) => {
+              if (table === "closingRules") closingRuleQueries++;
+              return target.query(table);
+            };
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    };
+    const event = (rawBody: Record<string, unknown>) => ({
+      sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}",
+      rawBody: JSON.stringify(rawBody), receivedAt: 1, orgId,
+    });
+
+    await processCapturedEvent(tracedCtx, event({
+      phone: "6281234567001", direction: "inbound", role: "customer",
+      content: "CUSTOM CLOSED", externalMessageId: "inbound-close",
+    }));
+    expect(closingRuleQueries).toBe(0);
+
+    await processCapturedEvent(tracedCtx, event({
+      phone: "6281234567002", direction: "outbound", role: "cs", messageType: "template",
+      content: "CUSTOM CLOSED", externalMessageId: "template-close",
+    }));
+    expect(closingRuleQueries).toBe(0);
+
+    await processCapturedEvent(tracedCtx, event({
+      phone: "6281234567003", direction: "outbound", role: "cs", messageType: "text",
+      content: "CUSTOM CLOSED", externalMessageId: "text-close",
+    }));
+    expect(closingRuleQueries).toBe(1);
+    expect(await ctx.db.query("shippingRecaps").collect()).toHaveLength(1);
   });
 });
 

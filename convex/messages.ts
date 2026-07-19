@@ -5,7 +5,7 @@ import type { Id } from "./_generated/dataModel";
 import { normalizePhone, csKey } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 import { messageMatchesPhrase, upsertRecapFromMessage } from "./shippingRecaps";
-import { getActiveClosingPhrases } from "./closingRules";
+import { canContainClosingSignal, getActiveClosingPhrases } from "./closingRules";
 import { messageHasDoneMarker } from "./followUpMath";
 import { countFollowUpTouchesBeforeTime } from "./followUp";
 import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
@@ -275,7 +275,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   });
 
   let closingRecapId: Id<"shippingRecaps"> | undefined;
-  if (args.direction === "outbound") {
+  if (canContainClosingSignal(args.direction, args.messageType ?? "text")) {
     const phrases = await getActiveClosingPhrases(ctx, args.orgId);
     if (messageMatchesPhrase(args.content, phrases)) {
       const result = await upsertRecapFromMessage(ctx, {
