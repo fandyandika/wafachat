@@ -63,38 +63,6 @@ async function closeReason(
   return now - ref > ARCHIVE_AFTER_MS ? "stale" : null;
 }
 
-// Compatibility entry point for callers that process one page directly. Production sweeping does not
-// chain these mutation cursors; it uses the read-only scan + bounded apply flow below.
-export const resolveBatch = internalMutation({
-  args: {
-    cursor: v.union(v.string(), v.null()),
-    status: v.optional(v.union(v.literal("active"), v.literal("handover"))),
-    dryRun: v.boolean(), now: v.number(), orgId: v.id("organizations"),
-  },
-  handler: async (ctx, args) => {
-    const status = args.status ?? "active";
-    const page = await ctx.db
-      .query("conversations")
-      .withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", args.orgId).eq("status", status))
-      .paginate({ cursor: args.cursor, numItems: BATCH });
-    let closedWon = 0;
-    let closedMarker = 0;
-    let closedStale = 0;
-    let considered = 0;
-    for (const c of page.page) {
-      considered++;
-      const reason = await closeReason(ctx, c, args.orgId, args.now);
-      if (reason) {
-        if (!args.dryRun) await ctx.db.patch(c._id, { status: "closed", updatedAt: args.now });
-        if (reason === "won") closedWon++;
-        else if (reason === "marker") closedMarker++;
-        else closedStale++;
-      }
-    }
-    return { continueCursor: String(page.continueCursor), isDone: page.isDone, considered, closedWon, closedMarker, closedStale };
-  },
-});
-
 // Phase 1 is read-only: cursors remain valid because indexed status rows are not patched while scanning.
 export const scanOpenBatch = internalQuery({
   args: {

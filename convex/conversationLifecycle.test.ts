@@ -37,7 +37,35 @@ const recap = (orderIdBerdu: string, phone: string) => ({
   version: 1, createdAt: now - DAY, updatedAt: now - DAY,
 });
 
-test("resolveBatch closes WON (recap) + STALE (>5d), keeps FRESH; counts correct", async () => {
+async function scanAndProcessStatus(
+  t: any,
+  orgId: Id<"organizations">,
+  options: { dryRun: boolean; now: number; status?: "active" | "handover" },
+) {
+  const ids: Id<"conversations">[] = [];
+  let cursor: string | null = null;
+  let isDone = false;
+  while (!isDone) {
+    const page: any = await t.query(internal.conversationLifecycle.scanOpenBatch, {
+      cursor, status: options.status ?? "active", orgId,
+    });
+    ids.push(...page.ids);
+    cursor = page.continueCursor;
+    isDone = page.isDone;
+  }
+  const totals = { closedWon: 0, closedMarker: 0, closedStale: 0 };
+  for (let offset = 0; offset < ids.length; offset += 25) {
+    const result = await t.mutation(internal.conversationLifecycle.processConversationIds, {
+      ids: ids.slice(offset, offset + 25), dryRun: options.dryRun, now: options.now, orgId,
+    });
+    totals.closedWon += result.closedWon;
+    totals.closedMarker += result.closedMarker;
+    totals.closedStale += result.closedStale;
+  }
+  return { considered: ids.length, ...totals };
+}
+
+test("scan/apply closes WON (recap) + STALE (>5d), keeps FRESH; counts correct", async () => {
   const t = convexTest(schema);
   let won: Id<"conversations">, stale: Id<"conversations">, fresh: Id<"conversations">;
   const orgId = await seedOrg(t);
@@ -55,7 +83,7 @@ test("resolveBatch closes WON (recap) + STALE (>5d), keeps FRESH; counts correct
     await ctx.db.insert("orders", { orgId, ...order("O-FRESH", "62803") });
     await ctx.db.insert("messages", { orgId, ...inbound(fresh, "O-FRESH", "62803", now - 2 * HOUR) }); // recent -> in funnel
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
+  const r = await scanAndProcessStatus(t, orgId, { dryRun: false, now });
   expect(r.closedWon).toBe(1);
   expect(r.closedStale).toBe(1);
   await t.run(async (ctx) => {
@@ -65,7 +93,7 @@ test("resolveBatch closes WON (recap) + STALE (>5d), keeps FRESH; counts correct
   });
 });
 
-test("resolveBatch dryRun reports counts but mutates nothing", async () => {
+test("scan/apply dryRun reports counts but mutates nothing", async () => {
   const t = convexTest(schema);
   let stale: Id<"conversations">;
   const orgId = await seedOrg(t);
@@ -74,14 +102,14 @@ test("resolveBatch dryRun reports counts but mutates nothing", async () => {
     await ctx.db.insert("orders", { orgId, ...order("O-S", "62804") });
     await ctx.db.insert("messages", { orgId, ...inbound(stale, "O-S", "62804", now - 6 * DAY) });
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: true, now, orgId });
+  const r = await scanAndProcessStatus(t, orgId, { dryRun: true, now });
   expect(r.closedStale).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(stale))!.status).toBe("active");
   });
 });
 
-test("resolveBatch keeps a brand-new conversation with no inbound yet (not stale)", async () => {
+test("scan/apply keeps a brand-new conversation with no inbound yet (not stale)", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
   const orgId = await seedOrg(t);
@@ -89,14 +117,14 @@ test("resolveBatch keeps a brand-new conversation with no inbound yet (not stale
     cId = await ctx.db.insert("conversations", { orgId, ...conv("O-NEW", "62805", { createdAt: now - 2 * HOUR, updatedAt: now - 2 * HOUR }) });
     await ctx.db.insert("orders", { orgId, ...order("O-NEW", "62805") });
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
+  const r = await scanAndProcessStatus(t, orgId, { dryRun: false, now });
   expect(r.closedWon + r.closedStale).toBe(0);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("active");
   });
 });
 
-test("resolveBatch: a 'done' marker (shopee) in the chat -> closedMarker + closed", async () => {
+test("scan/apply: a 'done' marker (shopee) in the chat -> closedMarker + closed", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
   const orgId = await seedOrg(t);
@@ -106,14 +134,14 @@ test("resolveBatch: a 'done' marker (shopee) in the chat -> closedMarker + close
     await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-MK", "62820", now - 2 * HOUR) }); // fresh -> not stale
     await ctx.db.insert("messages", { orgId, ...outbound(cId, "O-MK", "62820", now - HOUR, "Silakan checkout di shopee ya kak") });
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
+  const r = await scanAndProcessStatus(t, orgId, { dryRun: false, now });
   expect(r.closedMarker).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("closed");
   });
 });
 
-test("resolveBatch: order-less 'manual:' thread closed by a recap on the customer's PHONE", async () => {
+test("scan/apply: order-less 'manual:' thread closed by a recap on the customer's PHONE", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
   const orgId = await seedOrg(t);
@@ -122,14 +150,14 @@ test("resolveBatch: order-less 'manual:' thread closed by a recap on the custome
     await ctx.db.insert("messages", { orgId, ...inbound(cId, "manual:62821", "62821", now - 2 * HOUR) }); // fresh
     await ctx.db.insert("shippingRecaps", { orgId, ...recap("O-REALC", "62821") }); // recap under a real order, same phone
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
+  const r = await scanAndProcessStatus(t, orgId, { dryRun: false, now });
   expect(r.closedWon).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("closed");
   });
 });
 
-test("resolveBatch: real-order lead NOT closed by an OLD recap on the same phone (repeat-safe)", async () => {
+test("scan/apply: real-order lead NOT closed by an OLD recap on the same phone (repeat-safe)", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
   const orgId = await seedOrg(t);
@@ -139,14 +167,14 @@ test("resolveBatch: real-order lead NOT closed by an OLD recap on the same phone
     await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-NEWD", "62822", now - 2 * HOUR) }); // fresh -> not stale
     await ctx.db.insert("shippingRecaps", { orgId, ...recap("O-OLDD", "62822") }); // OLD recap, different order, same phone
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
+  const r = await scanAndProcessStatus(t, orgId, { dryRun: false, now });
   expect(r.closedWon + r.closedMarker + r.closedStale).toBe(0);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("active");
   });
 });
 
-test("resolveBatch: outbound 'PESANAN COD DIPROSES' -> closedMarker (COD won leaves funnel, not a closing)", async () => {
+test("scan/apply: outbound 'PESANAN COD DIPROSES' -> closedMarker (COD won leaves funnel, not a closing)", async () => {
   const t = convexTest(schema);
   let cId: Id<"conversations">;
   const orgId = await seedOrg(t);
@@ -156,40 +184,14 @@ test("resolveBatch: outbound 'PESANAN COD DIPROSES' -> closedMarker (COD won lea
     await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-COD", "62823", now - 2 * HOUR) }); // fresh -> not stale
     await ctx.db.insert("messages", { orgId, ...outbound(cId, "O-COD", "62823", now - HOUR, "*PESANAN COD DIPROSES* ya kak 🙏") });
   });
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
+  const r = await scanAndProcessStatus(t, orgId, { dryRun: false, now });
   expect(r.closedMarker).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))!.status).toBe("closed");
   });
 });
 
-test("resolveBatch remains a compatible single-page mutation with a continuation cursor", async () => {
-  const t = convexTest(schema);
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    for (let i = 0; i < 26; i++) {
-      await ctx.db.insert("conversations", { orgId, ...conv(`O-PAGE-${i}`, `62860${i}`) });
-    }
-  });
-
-  const result = await t.mutation(internal.conversationLifecycle.resolveBatch, {
-    cursor: null, status: "active", dryRun: false, now, orgId,
-  });
-
-  expect(result.considered).toBe(25);
-  expect(result.closedStale).toBe(25);
-  expect(result.isDone).toBe(false);
-  expect(result.continueCursor).toBeTypeOf("string");
-  await t.run(async (ctx) => {
-    const open = await ctx.db
-      .query("conversations")
-      .withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", orgId).eq("status", "active"))
-      .collect();
-    expect(open).toHaveLength(1);
-  });
-});
-
-test("resolveBatch: long alternating history uses the latest inbound when deciding stale", async () => {
+test("scan/apply: long alternating history uses the latest inbound when deciding stale", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
   let cId: Id<"conversations">;
@@ -218,7 +220,7 @@ test("resolveBatch: long alternating history uses the latest inbound when decidi
     expect(latestInbound?.createdAt).toBe(latestInboundAt);
   });
 
-  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
+  const r = await scanAndProcessStatus(t, orgId, { dryRun: false, now });
   expect(r.closedStale).toBe(1);
   await t.run(async (ctx) => {
     expect((await ctx.db.get(cId))?.status).toBe("closed");
