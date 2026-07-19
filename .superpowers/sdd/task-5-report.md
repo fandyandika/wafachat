@@ -29,4 +29,4 @@
 
 ## Commit
 
-Pending at report creation.
+`fadbb37` — `perf: index directional message reads`
