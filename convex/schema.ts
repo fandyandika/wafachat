@@ -111,7 +111,9 @@ export default defineSchema({
     replayOf: v.optional(v.id("ingestEvents")),
   })
     .index("by_status_receivedAt", ["status", "receivedAt"])
-    .index("by_receivedAt", ["receivedAt"]),
+    .index("by_receivedAt", ["receivedAt"])
+    .index("by_org_kind_status_receivedAt", ["orgId", "kind", "status", "receivedAt"])
+    .index("by_org_status_receivedAt", ["orgId", "status", "receivedAt"]),
 
   ingestSources: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -131,7 +133,9 @@ export default defineSchema({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     alertKey: v.string(), // "silence" | "failure-spike"
     lastSentAt: v.number(),
-  }).index("by_alertKey", ["alertKey"]),
+  })
+    .index("by_alertKey", ["alertKey"])
+    .index("by_org_alertKey", ["orgId", "alertKey"]),
 
   // ── Rollup efficiency (specs/2026-07-08-rollup-efficiency-design.md) ──────
   // 1 row per (csKey, 16:00-WIB window). Recomputed-bounded on every order/recap

@@ -1,7 +1,6 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { requireDefaultOrgId } from "../orgs";
 
 const SILENCE_MIN = 45;
 const SPIKE_THRESHOLD = 5;
@@ -25,18 +24,18 @@ export function shouldAlert(snap: HealthSnapshot, nowMs: number) {
 }
 
 export const getHealthSnapshot = internalQuery({
-  args: { nowMs: v.number() },
+  args: { orgId: v.id("organizations"), nowMs: v.number() },
   handler: async (ctx, args): Promise<HealthSnapshot> => {
-    const recentProcessed = await ctx.db
+    const lastMsg = await ctx.db
       .query("ingestEvents")
-      .withIndex("by_status_receivedAt", (q) => q.eq("status", "processed"))
+      .withIndex("by_org_kind_status_receivedAt", (q) =>
+        q.eq("orgId", args.orgId).eq("kind", "message.event").eq("status", "processed"))
       .order("desc")
-      .take(50);
-    const lastMsg = recentProcessed.find((e) => e.kind === "message.event");
+      .first();
     const failed = await ctx.db
       .query("ingestEvents")
-      .withIndex("by_status_receivedAt", (q) =>
-        q.eq("status", "failed").gte("receivedAt", args.nowMs - SPIKE_WINDOW_MS))
+      .withIndex("by_org_status_receivedAt", (q) =>
+        q.eq("orgId", args.orgId).eq("status", "failed").gte("receivedAt", args.nowMs - SPIKE_WINDOW_MS))
       .collect();
     return {
       lastProcessedMessageAt: lastMsg?.processedAt ?? lastMsg?.receivedAt ?? null,
@@ -46,17 +45,15 @@ export const getHealthSnapshot = internalQuery({
 });
 
 export const stampAlertIfCool = internalMutation({
-  args: { alertKey: v.string(), nowMs: v.number() },
+  args: { orgId: v.id("organizations"), alertKey: v.string(), nowMs: v.number() },
   handler: async (ctx, args) => {
-    // B3: default-org BY DESIGN — infra health monitoring, internal mutation only
-    const orgId = await requireDefaultOrgId(ctx);
     const existing = await ctx.db
       .query("alertState")
-      .withIndex("by_alertKey", (q) => q.eq("alertKey", args.alertKey))
+      .withIndex("by_org_alertKey", (q) => q.eq("orgId", args.orgId).eq("alertKey", args.alertKey))
       .unique();
     if (existing && args.nowMs - existing.lastSentAt < COOLDOWN_MS) return { sent: false };
     if (existing) await ctx.db.patch(existing._id, { lastSentAt: args.nowMs });
-    else await ctx.db.insert("alertState", { alertKey: args.alertKey, lastSentAt: args.nowMs, orgId });
+    else await ctx.db.insert("alertState", { orgId: args.orgId, alertKey: args.alertKey, lastSentAt: args.nowMs });
     return { sent: true };
   },
 });
@@ -80,26 +77,34 @@ export const checkHealth = internalAction({
   args: {},
   handler: async (ctx) => {
     const nowMs = Date.now();
-    const snap = await ctx.runQuery(internal.ingest.monitor.getHealthSnapshot, { nowMs });
-    const alerts = shouldAlert(snap, nowMs);
-    if (alerts.silence) {
-      const gate = await ctx.runMutation(internal.ingest.monitor.stampAlertIfCool, { alertKey: "silence", nowMs });
-      if (gate.sent) {
-        const mins = snap.lastProcessedMessageAt
-          ? Math.round((nowMs - snap.lastProcessedMessageAt) / 60_000) : -1;
-        await sendTelegram(
-          `⚠️ WaFaChat: tidak ada pesan masuk ${mins >= 0 ? `${mins} menit` : "sama sekali"} di jam kerja. ` +
-          `Cek KirimDev subscription (Disabled?) & endpoint Convex.`,
-        );
+    const orgs = await ctx.runQuery(internal.orgs.listOrgsInternal, {});
+    for (const org of orgs) {
+      const snap = await ctx.runQuery(internal.ingest.monitor.getHealthSnapshot, { orgId: org._id, nowMs });
+      const alerts = shouldAlert(snap, nowMs);
+      const orgLabel = `${org.name} (${org.slug})`;
+      if (alerts.silence) {
+        const gate = await ctx.runMutation(internal.ingest.monitor.stampAlertIfCool, {
+          orgId: org._id, alertKey: "silence", nowMs,
+        });
+        if (gate.sent) {
+          const mins = snap.lastProcessedMessageAt
+            ? Math.round((nowMs - snap.lastProcessedMessageAt) / 60_000) : -1;
+          await sendTelegram(
+            `WaFaChat ${orgLabel}: tidak ada pesan masuk ${mins >= 0 ? `${mins} menit` : "sama sekali"} di jam kerja. ` +
+            "Cek KirimDev subscription (Disabled?) & endpoint Convex.",
+          );
+        }
       }
-    }
-    if (alerts.failureSpike) {
-      const gate = await ctx.runMutation(internal.ingest.monitor.stampAlertIfCool, { alertKey: "failure-spike", nowMs });
-      if (gate.sent) {
-        await sendTelegram(
-          `🔥 WaFaChat: ${snap.failedLast15m} ingest event GAGAL dalam 15 menit. ` +
-          `Jalankan replayAllFailed setelah perbaikan.`,
-        );
+      if (alerts.failureSpike) {
+        const gate = await ctx.runMutation(internal.ingest.monitor.stampAlertIfCool, {
+          orgId: org._id, alertKey: "failure-spike", nowMs,
+        });
+        if (gate.sent) {
+          await sendTelegram(
+            `WaFaChat ${orgLabel}: ${snap.failedLast15m} ingest event GAGAL dalam 15 menit. ` +
+            "Jalankan replayAllFailed setelah perbaikan.",
+          );
+        }
       }
     }
   },
