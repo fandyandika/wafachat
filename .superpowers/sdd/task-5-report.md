@@ -30,3 +30,11 @@
 ## Commit
 
 `fadbb37` — `perf: index directional message reads`
+
+## P1 follow-up — tenant-scoped Berdu fallback
+
+- Red regression: two organizations without active `berduStaffIds` both received tenant-1's baked `Aisyah` mapping. The test expected the default org to remain `Aisyah` and tenant two to resolve neutrally as `Staff B-1apQSy`.
+- Green fix: `resolveBerduStaffMap` still reads `csConfigs.by_org_active`; only when that org-scoped map is empty does it resolve the default organization through indexed `organizations.by_slug`. `DEFAULT_BERDU_STAFF_MAP` is returned only when the event org is the actual default org; all other unconfigured orgs receive `{}`.
+- Production internal flow remains direct: `processCapturedEvent` passes `event.orgId` into the resolver, with no global/unindexed growing-table scan.
+- Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 72 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
+- Commit: `9a335e6` — `fix: scope Berdu fallback to default org`.
