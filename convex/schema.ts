@@ -66,6 +66,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_org_orderId", ["orgId", "orderId"])
+    .index("by_org_status", ["orgId", "status"])
     .index("by_org_status_updatedAt", ["orgId", "status", "updatedAt"])
     .index("by_org_customerPhone_updatedAt", ["orgId", "customerPhone", "updatedAt"])
     .index("by_org_assignedCsName_status", ["orgId", "assignedCsName", "status"]),

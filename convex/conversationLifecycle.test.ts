@@ -312,6 +312,79 @@ test("two-phase apply re-reads fresh activity before deciding whether to close",
   });
 });
 
+test("processConversationIds rejects batches larger than 25", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const ids = await t.run(async (ctx) => {
+    const inserted: Id<"conversations">[] = [];
+    for (let i = 0; i < 26; i++) {
+      inserted.push(await ctx.db.insert("conversations", { orgId, ...conv(`O-OVER-${i}`, `62870${i}`) }));
+    }
+    return inserted;
+  });
+
+  await expect(t.mutation(internal.conversationLifecycle.processConversationIds, {
+    ids, dryRun: false, now, orgId,
+  })).rejects.toThrow(/at most 25/i);
+});
+
+test("processConversationIds rejects duplicate IDs", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const id = await t.run((ctx) => ctx.db.insert("conversations", { orgId, ...conv("O-DUP", "628711") }));
+
+  await expect(t.mutation(internal.conversationLifecycle.processConversationIds, {
+    ids: [id, id], dryRun: false, now, orgId,
+  })).rejects.toThrow(/duplicate/i);
+});
+
+test("processConversationIds accepts and closes a normal 25-ID batch", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const ids = await t.run(async (ctx) => {
+    const inserted: Id<"conversations">[] = [];
+    for (let i = 0; i < 25; i++) {
+      inserted.push(await ctx.db.insert("conversations", { orgId, ...conv(`O-LIMIT-${i}`, `62872${i}`) }));
+    }
+    return inserted;
+  });
+
+  const result = await t.mutation(internal.conversationLifecycle.processConversationIds, {
+    ids, dryRun: false, now, orgId,
+  });
+
+  expect(result).toEqual({ closedWon: 0, closedMarker: 0, closedStale: 25 });
+  await t.run(async (ctx) => {
+    expect((await Promise.all(ids.map((id) => ctx.db.get(id)))).every((row) => row?.status === "closed")).toBe(true);
+  });
+});
+
+test("scanOpenBatch cursor is stable when an unscanned row's updatedAt changes", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const ids = await t.run(async (ctx) => {
+    const inserted: Id<"conversations">[] = [];
+    for (let i = 0; i < 30; i++) {
+      inserted.push(await ctx.db.insert("conversations", {
+        orgId, ...conv(`O-SCAN-${i}`, `62873${i}`, { updatedAt: now - 10 * DAY + i }),
+      }));
+    }
+    return inserted;
+  });
+  const first = await t.query(internal.conversationLifecycle.scanOpenBatch, {
+    cursor: null, status: "active", orgId,
+  });
+  expect(first.ids).toHaveLength(25);
+  await t.run((ctx) => ctx.db.patch(ids[29], { updatedAt: now - 20 * DAY }));
+  const second = await t.query(internal.conversationLifecycle.scanOpenBatch, {
+    cursor: first.continueCursor, status: "active", orgId,
+  });
+
+  const scanned = [...first.ids, ...second.ids];
+  expect(scanned).toHaveLength(30);
+  expect(new Set(scanned)).toEqual(new Set(ids));
+});
+
 test("sweep's total page cap alternates statuses and processes at most 25 rows per page", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);

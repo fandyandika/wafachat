@@ -73,7 +73,7 @@ export const scanOpenBatch = internalQuery({
   handler: async (ctx, args) => {
     const page = await ctx.db
       .query("conversations")
-      .withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", args.orgId).eq("status", args.status))
+      .withIndex("by_org_status", (q: any) => q.eq("orgId", args.orgId).eq("status", args.status))
       .paginate({ cursor: args.cursor, numItems: BATCH });
     return {
       ids: page.page.map((conversation) => conversation._id),
@@ -92,6 +92,12 @@ export const processConversationIds = internalMutation({
     orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
+    if (args.ids.length > BATCH) {
+      throw new Error(`processConversationIds accepts at most ${BATCH} IDs`);
+    }
+    if (new Set(args.ids.map(String)).size !== args.ids.length) {
+      throw new Error("processConversationIds does not accept duplicate IDs");
+    }
     let closedWon = 0;
     let closedMarker = 0;
     let closedStale = 0;
