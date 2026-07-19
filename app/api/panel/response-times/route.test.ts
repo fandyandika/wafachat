@@ -85,6 +85,24 @@ test('response-time cache is isolated by the DB-verified organization', async ()
   expect(state.clients).toBe(2);
 });
 
+test('a sentinel-like CS name cannot collide with the all-agent cache scope', async () => {
+  state.sessions.push(
+    { userId: 'u1', role: 'admin', name: 'Admin', email: 'admin@example.test', orgId: 'org-1' },
+    { userId: 'u2', role: 'cs', name: '__all__', email: 'all@example.test', orgId: 'org-1' },
+  );
+  state.accessByToken.set('token:admin@example.test', { orgId: 'org-1', role: 'admin' });
+  state.accessByToken.set('token:all@example.test', {
+    orgId: 'org-1', role: 'cs', effectiveCsName: '__all__',
+  });
+
+  const admin = await POST(request({ startAt: 1_000, endAt: 241_999 }));
+  const cs = await POST(request({ startAt: 1_000, endAt: 241_999 }));
+
+  expect((await admin.json()).data.csName).toBeNull();
+  expect((await cs.json()).data.csName).toBe('__all__');
+  expect(state.calls.filter((call) => 'startAt' in call.args)).toHaveLength(2);
+});
+
 test('a CS request is forced to the CS identity stored in the database', async () => {
   state.sessions.push({
     userId: 'u1', role: 'cs', name: 'CS One', email: 'cs@example.test', csName: 'Stale Cookie Name', orgId: 'org-1',

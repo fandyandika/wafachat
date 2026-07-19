@@ -29,7 +29,11 @@ export async function POST(req: NextRequest) {
     convex.setAuth(await signConvexToken(session));
     const access = await convex.query(api.responseTime.getResponseTimeAccess, { requestedCsName });
     const bucketedRange = bucketResponseTimeRange(startAt, endAt);
-    const scopeKey = access.effectiveCsName ?? '__all__';
+    const scopeKey = JSON.stringify(
+      access.effectiveCsName === undefined
+        ? { kind: 'all' as const }
+        : { kind: 'cs' as const, csName: access.effectiveCsName },
+    );
     const getResponseTimesCached = unstable_cache(
       () => convex.query(api.responseTime.getResponseTimes, {
         startAt: bucketedRange.startAt,

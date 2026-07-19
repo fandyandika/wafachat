@@ -911,6 +911,50 @@ runTest("periodReportFromRaw matches public query (week period)", async (t, defa
   expect(rollup).toEqual(legacy);
 });
 
+test("period report headline totals are distinct across CS ownership", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "period-admin", role: "admin", name: "Admin", email: "period@w" });
+  const seeded = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  const currentAt = t1;
+  const previousAt = t1 - 7 * 86_400_000;
+  await t.run(async (ctx) => {
+    for (const [suffix, createdAt] of [["current", currentAt], ["previous", previousAt]] as const) {
+      for (const [index, csName] of ["CS A", "CS B"].entries()) {
+        await ctx.db.insert("orders", {
+          orgId: seeded.orgId, orderId: `${suffix}-O-${index}`, customerPhone: "6281555111000",
+          customerName: "Shared Customer", assignedCsName: csName, productName: "Book", products: "Book",
+          productsSubtotal: "100", shippingCost: "0", total: "100", shippingAddress: "",
+          shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false,
+          createdAt: createdAt + index, updatedAt: createdAt + index,
+        } as any);
+        await ctx.db.insert("shippingRecaps", {
+          orgId: seeded.orgId, customerPhone: "6281555111000", customerName: "Shared Customer",
+          csName, orderIdBerdu: `${suffix}-shared-closing`, status: "exported", total: 100,
+          discount: 0, packageContent: "Book", paymentMethod: "cod", sourceMessageText: "", flags: [],
+          recipientName: "Shared Customer", recipientPhone: "6281555111000", recipientAddress: "",
+          recipientDistrict: "", recipientCity: "", version: 1, closedAt: createdAt + index,
+          createdAt: createdAt + index, updatedAt: createdAt + index,
+        } as any);
+      }
+    }
+  });
+
+  const report = await t.run(async (ctx) =>
+    (await import("./rollupReaders")).periodReportFromRaw(ctx, seeded.orgId, {
+      period: "week", anchor: currentAt,
+    }),
+  );
+
+  expect(report.perCs).toHaveLength(2);
+  expect(report.perCs.map((row) => row.leads)).toEqual([1, 1]);
+  expect(report.leads).toBe(1);
+  expect(report.closings).toBe(1);
+  expect(report.cr).toBe(100);
+  expect(report.prevLeads).toBe(1);
+  expect(report.prevClosings).toBe(1);
+  expect(report.prevCr).toBe(100);
+});
+
 // ── PERFORMANCE ─────────────────────────────────────────────────────────────
 
 runTest("performanceFromRaw matches public query (W1)", async (t, defaultOrg) => {

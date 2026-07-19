@@ -44,18 +44,33 @@ export async function responseTimesFromSamples(
   args: { startAt: number; endAt: number; csName?: string }
 ) {
   assertPublicAnalyticsRange(args.startAt, args.endAt, "responseTime.getResponseTimes");
-  // Fetch samples in range, sorted by createdAt
+  // Apply the effective CS scope at the indexed read boundary. Besides keeping
+  // the payload tenant/member scoped, this prevents another CS's samples from
+  // consuming the exact-result budget for a CS-only request.
+  const requestedCsKey = args.csName ? csKeyOf(args.csName) : undefined;
   const samples = (
-    await ctx.db
-      .query("responseSamples")
-      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt))
+    await (requestedCsKey
+      ? ctx.db
+        .query("responseSamples")
+        .withIndex("by_org_cs_createdAt", (q: any) => q
+          .eq("orgId", orgId)
+          .eq("csKey", requestedCsKey)
+          .gte("createdAt", args.startAt)
+          .lt("createdAt", args.endAt))
+      : ctx.db
+        .query("responseSamples")
+        .withIndex("by_org_createdAt", (q: any) => q
+          .eq("orgId", orgId)
+          .gte("createdAt", args.startAt)
+          .lt("createdAt", args.endAt)))
       .take(MAX_RESPONSE_SAMPLES + 1)
   ).sort((a: any, b: any) => a.createdAt - b.createdAt);
   if (samples.length > MAX_RESPONSE_SAMPLES) {
     throw new Error(`responseTime.getResponseTimes samples: exact row cap ${MAX_RESPONSE_SAMPLES} exceeded; narrow the requested range`);
   }
 
-  // Group by conversationId, preserving order (ALL samples, no filter - need global overall stats)
+  // Group by conversationId, preserving order. For a CS-scoped request this
+  // collection already contains only that CS, so `overall` is self-only too.
   const byConv = new Map<string, typeof samples>();
   const convOrder: string[] = [];
   for (const s of samples) {
@@ -66,7 +81,7 @@ export async function responseTimesFromSamples(
     byConv.set(cKey, arr);
   }
 
-  // Aggregate by csKey (process ALL conversations for overall stats)
+  // Aggregate by csKey.
   const agg = new Map<string, { rawCounts: Map<string, number>; first: number[]; all: number[]; slaBreaches: number }>();
   const overallFirst: number[] = [];
   let overallSlaBreaches = 0;
@@ -126,11 +141,6 @@ export async function responseTimesFromSamples(
     };
   });
 
-  // Filter by csName if provided (but overall stats remain global)
-  if (args.csName) {
-    const k = csKeyOf(args.csName);
-    cs = cs.filter((c) => csKeyOf(c.csNameRaw) === k);
-  }
   cs.sort((x, y) => y.firstReplyCount - x.firstReplyCount);
 
   return {
@@ -270,6 +280,9 @@ export async function periodReportFromRaw(
     const visibleOrders = orders.filter((row: any) => !isInternalTestPhone(row.customerPhone, internalPhones) && (!filterKey || csKeyOf(row.assignedCsName) === filterKey));
     const visibleRecaps = recapsAll.filter((row: any) => !isInternalTestPhone(row.customerPhone, internalPhones) && (!filterKey || csKeyOf(row.csName) === filterKey));
     const activeRecaps = visibleRecaps.filter((row: any) => row.status !== "cancelled" && row.status !== "cancelled_after_export");
+    const globalLeads = new Set<string>();
+    const globalClosings = new Set<string>();
+    const globalClosed = new Set<string>();
     const map = new Map<string, { csName: string; leads: Set<string>; closings: Set<string>; closed: Set<string>; revenue: number }>();
     const get = (name: string) => {
       const key = csKeyOf(name);
@@ -277,11 +290,19 @@ export async function periodReportFromRaw(
       map.set(key, value);
       return value;
     };
-    for (const order of visibleOrders) get(order.assignedCsName).leads.add(normalizePhone(order.customerPhone));
+    for (const order of visibleOrders) {
+      const phone = normalizePhone(order.customerPhone);
+      get(order.assignedCsName).leads.add(phone);
+      globalLeads.add(phone);
+    }
     for (const recap of activeRecaps) {
       const value = get(recap.csName);
-      value.closings.add(recap.orderIdBerdu || normalizePhone(recap.customerPhone));
-      value.closed.add(normalizePhone(recap.customerPhone));
+      const phone = normalizePhone(recap.customerPhone);
+      const closingIdentity = recap.orderIdBerdu || phone;
+      value.closings.add(closingIdentity);
+      value.closed.add(phone);
+      globalClosings.add(closingIdentity);
+      globalClosed.add(phone);
       value.revenue += recap.total ?? recap.codValue ?? recap.nonCodItemPrice ?? 0;
     }
     const perCs = Array.from(map.values()).map((value) => ({
@@ -289,9 +310,9 @@ export async function periodReportFromRaw(
       cr: cr(value.closed.size, value.leads.size), revenue: value.revenue,
     })).sort((a, b) => b.closings - a.closings);
     return {
-      leads: perCs.reduce((sum, row) => sum + row.leads, 0),
-      closings: perCs.reduce((sum, row) => sum + row.closings, 0),
-      closed: Array.from(map.values()).reduce((sum, row) => sum + row.closed.size, 0),
+      leads: globalLeads.size,
+      closings: globalClosings.size,
+      closed: globalClosed.size,
       revenue: perCs.reduce((sum, row) => sum + row.revenue, 0),
       cancelled: visibleRecaps.filter((row: any) => row.status === "cancelled" || row.status === "cancelled_after_export").length,
       perCs,

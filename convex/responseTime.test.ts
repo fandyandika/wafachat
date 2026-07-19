@@ -157,6 +157,7 @@ test("getResponseTimes derives CS scope and organization from the current users 
     await t.mutation(internal.rollups.rebuildSamplesForWindow, { orgId, windowKey });
   };
   await seedSample(orgOne, "CS One", "628101");
+  await seedSample(orgOne, "CS Other", "628102");
   await seedSample(orgTwo, "CS Two", "628202");
 
   const asOne = t.withIdentity({
@@ -169,6 +170,8 @@ test("getResponseTimes derives CS scope and organization from the current users 
     startAt: t0, endAt: t0 + 200_000, csName: "CS Two",
   });
   expect(result.cs.map((row) => row.csName)).toEqual(["CS One"]);
+  expect(result.overall.firstReplyCount).toBe(1);
+  expect(result.overall.firstReplyMedianMs).toBe(30_000);
 });
 
 test("response samples use half-open ranges at neighboring cache boundaries", async () => {
