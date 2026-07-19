@@ -46,3 +46,12 @@
 - Added a true legacy fallback isolation regression with identical canonical names and absent `key` fields in two organizations. It asserts the requested organization resolves its own document ID, which fails under a plausible global-row fallback.
 - Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 73 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
 - Commit: `e35594c` — `fix: prevent lifecycle sweep cursor skips`.
+
+## P1 rereview — immutable scan, bounded atomic apply
+
+- Strict TDD red: a production sweep with retained active rows before and between stale candidates reported 33 considerations for 31 unique open rows. Resetting the mutated status cursor revisited the retained rows even though it reached and closed all 29 stale rows.
+- Production sweeping now has two phases. Read-only `scanOpenBatch` pages the org/status index without changing indexed rows and collects unique IDs. Bounded `processConversationIds` mutations then re-read each conversation and evaluate recap/WON, done-marker, and stale rules in the same transaction as any close patch.
+- Active and handover scans alternate fairly while both have work. The 800-page budget is total per organization across both statuses, with 25 rows per page and therefore at most 20,000 unique rows selected per run; a two-page regression proves exactly 25 rows from each status are processed.
+- Coverage also verifies production dry-run behavior, fresh activity arriving between scan and apply, trailing stale rows beyond the first page, retained rows remaining open, and the compatible single-page `resolveBatch` mutation contract.
+- Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 77 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
+- Commit: `6457c2e` — `fix: scan lifecycle rows before closing`.
