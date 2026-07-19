@@ -23,7 +23,7 @@
 
 ## Risks / notes
 
-- `resolveBatch` keeps its original `cursor` argument and defaults `status` to `active` for existing callers; the sweep explicitly invokes both statuses per iteration.
+- At that revision, the legacy one-page mutation kept its original cursor argument and defaulted status to active; this contract was removed in the final P1 follow-up below.
 - Convex-test represents a full-page cursor as an ID-like value, so lifecycle normalizes the returned cursor with `String(...)`; production cursors are already strings.
 - No PWA files changed.
 
@@ -41,7 +41,7 @@
 
 ## P2 rereview — production sweep and legacy no-key isolation
 
-- Replaced the direct `resolveBatch` starvation check with a production `cronArchiveSweep` regression containing 26 active rows and one handover row. It asserts the exact 27-row totals and verifies every stored row closes, covering the point where handover is terminal while active needs another iteration.
+- Replaced the direct one-page starvation check with a production `cronArchiveSweep` regression containing 26 active rows and one handover row. It asserts the exact 27-row totals and verifies every stored row closes, covering the point where handover is terminal while active needs another iteration.
 - The production-boundary regression exposed an index-cursor invalidation bug: closing the first 25 active rows removed them from the paginated status index and skipped row 26. The sweep now tracks terminal status streams independently and resets only a mutated stream's cursor, so terminal streams are not rerun and remaining indexed rows are not skipped.
 - Added a true legacy fallback isolation regression with identical canonical names and absent `key` fields in two organizations. It asserts the requested organization resolves its own document ID, which fails under a plausible global-row fallback.
 - Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 73 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
@@ -52,6 +52,14 @@
 - Strict TDD red: a production sweep with retained active rows before and between stale candidates reported 33 considerations for 31 unique open rows. Resetting the mutated status cursor revisited the retained rows even though it reached and closed all 29 stale rows.
 - Production sweeping now has two phases. Read-only `scanOpenBatch` pages the org/status index without changing indexed rows and collects unique IDs. Bounded `processConversationIds` mutations then re-read each conversation and evaluate recap/WON, done-marker, and stale rules in the same transaction as any close patch.
 - Active and handover scans alternate fairly while both have work. The 800-page budget is total per organization across both statuses, with 25 rows per page and therefore at most 20,000 unique rows selected per run; a two-page regression proves exactly 25 rows from each status are processed.
-- Coverage also verifies production dry-run behavior, fresh activity arriving between scan and apply, trailing stale rows beyond the first page, retained rows remaining open, and the compatible single-page `resolveBatch` mutation contract.
+- Coverage also verifies production dry-run behavior, fresh activity arriving between scan and apply, trailing stale rows beyond the first page, and retained rows remaining open.
 - Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 77 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
 - Commit: `6457c2e` — `fix: scan lifecycle rows before closing`.
+
+## Final P1 — remove the unsafe mutation-cursor API
+
+- Repository audit confirmed there were no production callers of the legacy one-page mutation. The export was removed because a continuation cursor cannot safely be chained after the same mutation removes rows from the indexed active/handover status range.
+- All classification tests now use the explicit replacement contract: read every org/status page through `scanOpenBatch`, then pass bounded 25-ID chunks to `processConversationIds`. Production continues to cover both active and handover through the alternating two-phase sweep.
+- Removed the misleading default-active wrapper behavior and updated the historical efficiency note to name the lifecycle sweep rather than the removed API.
+- Verification: `rtk rg` audit — zero repository references; ingest core + Berdu adapter + agents + focused Task 5 suites — 76 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
+- Commit: `133f9d1` — `refactor: remove unsafe lifecycle batch cursor`.
