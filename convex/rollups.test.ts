@@ -64,11 +64,14 @@ test("computeRollupRow reproduces getDailyReport aggregation rules", async () =>
   });
   const prods = Object.fromEntries(rows[0].byProduct.map((p: any) => [p.product, p]));
   expect(prods["Buku Sirah"]).toMatchObject({ leads: 1, closings: 1 });
+  expect(prods["Buku Sirah"]).toMatchObject({ leadOrders: 2, revenue: 100000, discount: 5000, cod: 0, transfer: 0 });
   // Note: "Quran Medis" is canonicalized to the full product name via PRODUCT_ALIASES
   expect(Object.keys(prods).length).toBe(2);
   const quranProduct = Object.keys(prods).find((k) => k.includes("Qur"));
   expect(quranProduct).toBeDefined();
   expect(prods[quranProduct!]).toMatchObject({ leads: 1, closings: 1 });
+  expect(prods[quranProduct!]).toMatchObject({ leadOrders: 1, revenue: 200000, cod: 0, transfer: 0 });
+  expect(rows[0]).toMatchObject({ cod: 0, transfer: 0 });
 });
 
 test("empty window produces no row", async () => {

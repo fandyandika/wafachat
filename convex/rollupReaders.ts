@@ -1,5 +1,5 @@
 import type { Id } from "./_generated/dataModel";
-import { windowKeyFor, windowRangeForKey, csKey as csKeyOf, getJakartaDate, normalizePhone, isInternalTestPhone, canonicalizeProduct } from "./lib";
+import { windowKeyFor, windowRangeForKey, isWindowAlignedRange, csKey as csKeyOf, getJakartaDate, normalizePhone, isInternalTestPhone, canonicalizeProduct } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
@@ -435,7 +435,7 @@ export async function leaderboardFromRollups(
 
 // ── 6. Product Difficulty from Rollups ──────────────────────────────────────
 
-export async function productDifficultyFromRollups(
+export async function productDifficultyFromRaw(
   ctx: any,
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; minLeads?: number; csName?: string }
@@ -503,6 +503,60 @@ export async function productDifficultyFromRollups(
   return rows;
 }
 
+export async function productDifficultyFromRollups(
+  ctx: any,
+  orgId: Id<"organizations">,
+  args: { startAt: number; endAt: number; minLeads?: number; csName?: string }
+) {
+  const key = args.csName ? csKeyOf(args.csName) : null;
+  const minLeads = args.minLeads ?? 3;
+  const len = args.endAt - args.startAt;
+  const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
+  const load = async (startAt: number, endAt: number) => {
+    const rollups = (await Promise.all(windowKeysForRange(startAt, endAt).map((windowKey) =>
+      ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey)).collect()
+    ))).flat().filter((row: any) => !key || csKeyOf(row.csKey) === key);
+    return rollups;
+  };
+
+  if (!isWindowAlignedRange(args.startAt, args.endAt)) {
+    return productDifficultyFromRaw(ctx, orgId, args);
+  }
+
+  const [curRollups, prevRollups] = await Promise.all([
+    load(args.startAt, args.endAt),
+    load(args.startAt - len, args.startAt - 1),
+  ]);
+  const hasFacts = [...curRollups, ...prevRollups].every((row: any) =>
+    !row.byProduct.some((product: any) => product.product === "lainnya")
+      && row.byProduct.every((product: any) => product.leadOrders !== undefined)
+  );
+  if (!hasFacts) return productDifficultyFromRaw(ctx, orgId, args);
+
+  const aggregate = (rollups: any[]) => {
+    const values = new Map<string, { leads: number; closings: number }>();
+    for (const row of rollups) for (const product of row.byProduct) {
+      const value = values.get(product.product) ?? { leads: 0, closings: 0 };
+      value.leads += product.leadOrders;
+      value.closings += product.closings;
+      values.set(product.product, value);
+    }
+    return values;
+  };
+  const cur = aggregate(curRollups);
+  const prev = aggregate(prevRollups);
+  const rows = Array.from(cur.entries())
+    .filter(([, value]) => value.leads >= minLeads)
+    .map(([productName, value]) => {
+      const previous = prev.get(productName) ?? { leads: 0, closings: 0 };
+      const currentCr = cr(value.closings, value.leads);
+      const prevCr = cr(previous.closings, previous.leads);
+      return { productName, leads: value.leads, closings: value.closings, cr: currentCr, prevCr, deltaCr: Math.round((currentCr - prevCr) * 10) / 10 };
+    });
+  rows.sort((a, b) => a.cr - b.cr || b.leads - a.leads);
+  return rows;
+}
+
 // ── 7. Period Report from Rollups ───────────────────────────────────────────
 
 const JAK_MS = 7 * 60 * 60 * 1000;
@@ -559,29 +613,23 @@ export async function periodReportFromRollups(
     let leads = 0,
       closings = 0,
       closedCust = 0,
-      revenue = 0;
+      revenue = 0,
+      cancelled = 0;
     for (const rollup of rollups) {
       if (key && csKeyOf(rollup.csKey) !== key) continue;
       leads += rollup.leadsCust;
       closings += rollup.closings;
       closedCust += rollup.closedCust;
       revenue += rollup.revenue;
+      cancelled += rollup.cancelled;
     }
-    return { leads, closings, closedCust, revenue };
+    return { leads, closings, closedCust, revenue, cancelled };
   };
 
   const curT = aggregateTotals(curRollups);
   const prevT = aggregateTotals(prevRollups);
 
   const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-
-  // Cancelled from raw table (cannot derive from rollups easily)
-  const shippingRecaps = await ctx.db
-    .query("shippingRecaps")
-    .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", start).lte("closedAt", end))
-    .collect();
-
-  const cancelled = shippingRecaps.filter((r: any) => (r.status === "cancelled" || r.status === "cancelled_after_export") && (!key || csKeyOf(r.csName) === key)).length;
 
   const perCs = Array.from(
     Array.from(curRollups)
@@ -615,7 +663,7 @@ export async function periodReportFromRollups(
     closings: curT.closings,
     cr: cr(curT.closedCust, curT.leads),
     revenue: curT.revenue,
-    cancelled,
+    cancelled: curT.cancelled,
     prevLeads: prevT.leads,
     prevClosings: prevT.closings,
     prevCr: cr(prevT.closedCust, prevT.leads),
@@ -626,45 +674,13 @@ export async function periodReportFromRollups(
 
 // ── 8. Performance from Rollups ─────────────────────────────────────────────
 
-export async function performanceFromRollups(
+export async function performanceFromRaw(
   ctx: any,
   orgId: Id<"organizations">,
   args: { startAt: number; endAt: number; includeInferredDiscount?: boolean; csName?: string }
 ) {
   const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = args.csName ? csKeyOf(args.csName) : null;
-  const keys = windowKeysForRange(args.startAt, args.endAt);
-
-  const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
-  );
-  const rollups = rollupsByKey.flat();
-
-  // Aggregate totals from rollups
-  let totalLeads = 0,
-    totalClosing = 0,
-    totalRevenue = 0,
-    totalDiscount = 0;
-
-  const csMap = new Map<string, { csName: string; leads: number; closing: number; revenue: number; discount: number }>();
-
-  for (const rollup of rollups) {
-    if (key && csKeyOf(rollup.csKey) !== key) continue;
-
-    totalLeads += rollup.leadsCust;
-    totalClosing += rollup.closings;
-    totalRevenue += rollup.revenue;
-    totalDiscount += rollup.discount;
-
-    // CS breakdown
-    const ck = rollup.csKey;
-    const c = csMap.get(ck) ?? { csName: rollup.csName, leads: 0, closing: 0, revenue: 0, discount: 0 };
-    c.leads += rollup.leadsCust;
-    c.closing += rollup.closings;
-    c.revenue += rollup.revenue;
-    c.discount += rollup.discount;
-    csMap.set(ck, c);
-  }
 
   const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
 
@@ -728,6 +744,15 @@ export async function performanceFromRollups(
   for (const { phone, order } of fbResults) if (order) fallbackOrderByPhone.set(phone, order);
 
   const productMap = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number }>();
+  const csMap = new Map<string, { csName: string; phones: Set<string>; closing: number; revenue: number; discount: number }>();
+  const getCs = (name: string) => {
+    const ck = csKeyOf(name);
+    const entry = csMap.get(ck) ?? { csName: name, phones: new Set<string>(), closing: 0, revenue: 0, discount: 0 };
+    csMap.set(ck, entry);
+    return entry;
+  };
+  let totalRevenue = 0;
+  let totalDiscount = 0;
   const closedCustomers = new Set<string>();
 
   for (const o of uniqueOrders) {
@@ -735,6 +760,7 @@ export async function performanceFromRollups(
     const prod = productMap.get(p) ?? { product: p, leads: 0, closing: 0, revenue: 0, discount: 0 };
     prod.leads += 1;
     productMap.set(p, prod);
+    getCs(o.assignedCsName).phones.add(normalizePhone(o.customerPhone));
   }
 
   for (const r of validClosings) {
@@ -749,6 +775,12 @@ export async function performanceFromRollups(
     prod.discount += discount;
     productMap.set(product, prod);
     closedCustomers.add(phone);
+    const cs = getCs(r.csName);
+    cs.closing += 1;
+    cs.revenue += revenue;
+    cs.discount += discount;
+    totalRevenue += revenue;
+    totalDiscount += discount;
   }
 
   const delivered = recaps.filter((r: any) => r.status === "delivered" && (!key || csKeyOf(r.csName) === key)).length;
@@ -771,9 +803,75 @@ export async function performanceFromRollups(
       cr: cr(row.closing, row.leads),
     })),
     cs: Array.from(csMap.values()).map((row) => ({
-      ...row,
-      cr: cr(row.closing, row.leads),
+      csName: row.csName,
+      leads: row.phones.size,
+      closing: row.closing,
+      revenue: row.revenue,
+      discount: row.discount,
+      cr: cr(row.closing, row.phones.size),
     })),
+  };
+}
+
+export async function performanceFromRollups(
+  ctx: any,
+  orgId: Id<"organizations">,
+  args: { startAt: number; endAt: number; includeInferredDiscount?: boolean; csName?: string }
+) {
+  if (!isWindowAlignedRange(args.startAt, args.endAt)) return performanceFromRaw(ctx, orgId, args);
+
+  const key = args.csName ? csKeyOf(args.csName) : null;
+  const rollups = (await Promise.all(windowKeysForRange(args.startAt, args.endAt).map((windowKey) =>
+    ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey)).collect()
+  ))).flat().filter((row: any) => !key || csKeyOf(row.csKey) === key);
+  const hasFacts = rollups.every((row: any) => row.cod !== undefined && row.transfer !== undefined
+    && !row.byProduct.some((product: any) => product.product === "lainnya")
+    && row.byProduct.every((product: any) => product.leadOrders !== undefined && product.revenue !== undefined && product.discount !== undefined && product.cod !== undefined && product.transfer !== undefined));
+  // Pre-Task-6 rows lack the additive facts. Fall back to a wholly raw response;
+  // do not combine old rollup totals with partial raw product data.
+  if (!hasFacts) return performanceFromRaw(ctx, orgId, args);
+
+  const products = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number }>();
+  const cs = new Map<string, { csName: string; leads: number; closing: number; revenue: number; discount: number }>();
+  let totalLeads = 0, totalClosing = 0, totalClosedCustomers = 0, totalRevenue = 0, totalDiscount = 0, delivered = 0, cancelled = 0, totalCod = 0, totalTransfer = 0;
+  for (const row of rollups) {
+    totalLeads += row.leadsCust;
+    totalClosing += row.closings;
+    totalClosedCustomers += row.closedCust;
+    totalRevenue += row.revenue;
+    totalDiscount += row.discount;
+    delivered += row.delivered;
+    cancelled += row.cancelled;
+    totalCod += row.cod;
+    totalTransfer += row.transfer;
+    const csRow = cs.get(row.csKey) ?? { csName: row.csName, leads: 0, closing: 0, revenue: 0, discount: 0 };
+    csRow.leads += row.leadsCust;
+    csRow.closing += row.closings;
+    csRow.revenue += row.revenue;
+    csRow.discount += row.discount;
+    cs.set(row.csKey, csRow);
+    for (const fact of row.byProduct) {
+      const product = products.get(fact.product) ?? { product: fact.product, leads: 0, closing: 0, revenue: 0, discount: 0 };
+      product.leads += fact.leads;
+      product.closing += fact.closings;
+      product.revenue += fact.revenue;
+      product.discount += fact.discount;
+      products.set(fact.product, product);
+    }
+  }
+  const cr = (closing: number, leads: number) => (leads > 0 ? Math.round((closing / leads) * 1000) / 10 : 0);
+  return {
+    totalLeads,
+    totalClosing,
+    overallCr: cr(totalClosedCustomers, totalLeads),
+    totalCod,
+    totalTransfer,
+    totalRevenue,
+    totalDiscount,
+    delivered,
+    cancelled,
+    products: Array.from(products.values()).map((row) => ({ ...row, cr: cr(row.closing, row.leads) })),
+    cs: Array.from(cs.values()).map((row) => ({ ...row, cr: cr(row.closing, row.leads) })),
   };
 }
 

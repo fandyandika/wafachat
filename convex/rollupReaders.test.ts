@@ -839,6 +839,110 @@ runTest("performanceFromRollups matches legacy (csName-filtered)", async (t, def
   expect(rollup).toEqual(legacy);
 });
 
+runTest("sealed product and performance readers ignore raw rows written after their rollups", async (t, defaultOrg) => {
+  await t.run(async (ctx) => {
+    const late = w1Start + 12 * 3_600_000;
+    await ctx.db.insert("orders", {
+      orgId: defaultOrg as Id<"organizations">, orderId: "O-LATE-RAW", customerPhone: "6281111199999", customerName: "Late Raw",
+      assignedCsName: "Azelia", productName: "Late Raw Only", products: "Late Raw Only", productsSubtotal: "90000", shippingCost: "0", total: "90000",
+      shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: late, updatedAt: late,
+    } as any);
+    await ctx.db.insert("shippingRecaps", {
+      orgId: defaultOrg as Id<"organizations">, customerPhone: "6281111199999", customerName: "Late Raw", csName: "Azelia", orderIdBerdu: "O-LATE-RAW",
+      status: "exported", total: 90000, discount: 0, packageContent: "Late Raw Only", paymentMethod: "cod", sourceMessageText: "", flags: [],
+      recipientName: "Late Raw", recipientPhone: "6281111199999", recipientAddress: "", recipientDistrict: "", recipientCity: "", version: 1,
+      closedAt: late, createdAt: late, updatedAt: late,
+    } as any);
+  });
+
+  const readers = await import("./rollupReaders");
+  const products = await t.run(async (ctx) => readers.productDifficultyFromRollups(ctx, defaultOrg as Id<"organizations">, {
+    startAt: w1Start, endAt: w1End, minLeads: 1,
+  }));
+  const performance = await t.run(async (ctx) => readers.performanceFromRollups(ctx, defaultOrg as Id<"organizations">, {
+    startAt: w1Start, endAt: w1End,
+  }));
+
+  expect(products.map((row) => row.productName)).not.toContain("Late Raw Only");
+  expect(performance.products.map((row) => row.product)).not.toContain("Late Raw Only");
+  expect(performance.totalCod).toBe(1);
+});
+
+runTest("non-aligned daily report uses only the exact raw midnight-to-now range", async (t, defaultOrg) => {
+  const startAt = w1Start + 8 * 3_600_000; // midnight WIB inside W1
+  const endAt = startAt + 4 * 3_600_000;
+  const expected = await t.run(async (ctx) =>
+    (await import("./analytics")).computeDailyReportRaw(ctx, defaultOrg as Id<"organizations">, startAt, endAt)
+  );
+  const actual = await t.withIdentity({ subject: "a1", role: "admin", name: "Admin", email: "a@w" })
+    .query(api.analytics.getDailyReport, { startAt, endAt });
+
+  expect(actual).toEqual(expected);
+});
+
+runTest("sealed one-day, seven-day, CS-filtered, and product-rich readers match raw calculations", async (t, defaultOrg) => {
+  const readers = await import("./rollupReaders");
+  const rawAnalytics = await import("./analytics");
+  const oneDay = { startAt: w1Start, endAt: w1End };
+  const sevenDay = { startAt: w1Start, endAt: w1Start + 7 * 86_400_000 };
+
+  const rawOneDay = await t.run(async (ctx) => rawAnalytics.computeDailyReportRaw(ctx, defaultOrg as Id<"organizations">, oneDay.startAt, oneDay.endAt));
+  const rollupOneDay = await t.run(async (ctx) => readers.dailyReportFromRollups(ctx, defaultOrg as Id<"organizations">, oneDay));
+  expect(rollupOneDay).toEqual(rawOneDay);
+
+  const rawSevenDay = await t.run(async (ctx) => rawAnalytics.computeDailyReportRaw(ctx, defaultOrg as Id<"organizations">, sevenDay.startAt, sevenDay.endAt));
+  const rollupSevenDay = await t.run(async (ctx) => readers.dailyReportFromRollups(ctx, defaultOrg as Id<"organizations">, sevenDay));
+  expect(rollupSevenDay).toEqual(rawSevenDay);
+
+  const filtered = { ...oneDay, csName: "Lila" };
+  const rawProducts = await t.run(async (ctx) => readers.productDifficultyFromRaw(ctx, defaultOrg as Id<"organizations">, { ...filtered, minLeads: 1 }));
+  const rollupProducts = await t.run(async (ctx) => readers.productDifficultyFromRollups(ctx, defaultOrg as Id<"organizations">, { ...filtered, minLeads: 1 }));
+  expect(rollupProducts).toEqual(rawProducts);
+
+  const rawPerformance = await t.run(async (ctx) => readers.performanceFromRaw(ctx, defaultOrg as Id<"organizations">, filtered));
+  const rollupPerformance = await t.run(async (ctx) => readers.performanceFromRollups(ctx, defaultOrg as Id<"organizations">, filtered));
+  expect(rollupPerformance).toEqual(rawPerformance);
+});
+
+runTest("legacy rollups missing optional product facts fall back to a wholly raw response", async (t, defaultOrg) => {
+  await t.run(async (ctx) => {
+    const row = await (ctx.db.query("dailyRollups") as any)
+      .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", defaultOrg as Id<"organizations">).eq("windowKey", W1))
+      .first();
+    if (!row) throw new Error("expected W1 rollup");
+    const { cod, transfer, byProduct, ...legacy } = row as any;
+    await ctx.db.replace(row._id, {
+      ...legacy,
+      byProduct: byProduct.map(({ leadOrders, revenue, discount, cod: productCod, transfer: productTransfer, ...product }: any) => product),
+    });
+  });
+  const readers = await import("./rollupReaders");
+  const args = { startAt: w1Start, endAt: w1End, minLeads: 1 };
+  const rawProducts = await t.run(async (ctx) => readers.productDifficultyFromRaw(ctx, defaultOrg as Id<"organizations">, args));
+  const rollupProducts = await t.run(async (ctx) => readers.productDifficultyFromRollups(ctx, defaultOrg as Id<"organizations">, args));
+  expect(rollupProducts).toEqual(rawProducts);
+  const rawPerformance = await t.run(async (ctx) => readers.performanceFromRaw(ctx, defaultOrg as Id<"organizations">, args));
+  const rollupPerformance = await t.run(async (ctx) => readers.performanceFromRollups(ctx, defaultOrg as Id<"organizations">, args));
+  expect(rollupPerformance).toEqual(rawPerformance);
+});
+
+runTest("overflow product rollups fall back to raw detail instead of exposing the lainnya bucket", async (t, defaultOrg) => {
+  await t.run(async (ctx) => {
+    const row = await (ctx.db.query("dailyRollups") as any)
+      .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", defaultOrg as Id<"organizations">).eq("windowKey", W1))
+      .first();
+    if (!row) throw new Error("expected W1 rollup");
+    await ctx.db.patch(row._id, {
+      byProduct: [...row.byProduct, { product: "lainnya", leads: 1, closings: 0, leadOrders: 1, revenue: 0, discount: 0, cod: 0, transfer: 0 }],
+    });
+  });
+  const readers = await import("./rollupReaders");
+  const args = { startAt: w1Start, endAt: w1End, minLeads: 1 };
+  const raw = await t.run(async (ctx) => readers.productDifficultyFromRaw(ctx, defaultOrg as Id<"organizations">, args));
+  const actual = await t.run(async (ctx) => readers.productDifficultyFromRollups(ctx, defaultOrg as Id<"organizations">, args));
+  expect(actual).toEqual(raw);
+});
+
 // ── FOLLOW-UP EFFECTIVENESS ────────────────────────────────────────────────
 
 runTest("followUpEffectivenessFromRollups matches legacy (W1)", async (t, defaultOrg) => {

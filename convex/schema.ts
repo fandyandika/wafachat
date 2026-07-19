@@ -175,11 +175,23 @@ export default defineSchema({
     delivered: v.number(),
     revenue: v.number(),
     discount: v.number(),
+    // Additive facts: optional until the Task 8 production backfill completes.
+    cod: v.optional(v.number()),
+    transfer: v.optional(v.number()),
     fuClosings: v.number(),
     fuH1: v.number(),
     fuH2: v.number(),
     fuH3: v.number(),
-    byProduct: v.array(v.object({ product: v.string(), leads: v.number(), closings: v.number() })),
+    byProduct: v.array(v.object({
+      product: v.string(),
+      leads: v.number(),
+      closings: v.number(),
+      leadOrders: v.optional(v.number()),
+      revenue: v.optional(v.number()),
+      discount: v.optional(v.number()),
+      cod: v.optional(v.number()),
+      transfer: v.optional(v.number()),
+    })),
     updatedAt: v.number(),
   })
     .index("by_org_window_cs", ["orgId", "windowKey", "csKey"])

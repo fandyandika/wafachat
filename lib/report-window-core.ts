@@ -23,3 +23,10 @@ export function windowRangeForKey(key: string): { startAt: number; endAt: number
 export function windowKeyToday(now = Date.now()): string {
   return windowKeyFor(now);
 }
+
+/** True only when both bounds are exact 16:00-WIB business-window edges. */
+export function isWindowAlignedRange(startAt: number, endAt: number): boolean {
+  if (endAt <= startAt) return false;
+  return windowRangeForKey(windowKeyFor(startAt)).startAt === startAt
+    && windowRangeForKey(windowKeyFor(endAt)).startAt === endAt;
+}

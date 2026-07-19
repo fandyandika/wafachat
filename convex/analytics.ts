@@ -2,7 +2,7 @@ import { query, internalQuery } from "./_generated/server";
 import { requireMember, requireMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct, startOfJakartaDayMs } from "./lib";
+import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct, startOfJakartaDayMs, isWindowAlignedRange } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRollups, periodReportFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
@@ -80,7 +80,7 @@ export const getCsLeaderboard = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getCsLeaderboard");
-    return args.raw ? computeCsLeaderboardRaw(ctx, orgId, args) : leaderboardFromRollups(ctx, orgId, args);
+    return args.raw || !isWindowAlignedRange(args.startAt, args.endAt) ? computeCsLeaderboardRaw(ctx, orgId, args) : leaderboardFromRollups(ctx, orgId, args);
   },
 });
 
@@ -411,6 +411,8 @@ export const getDailyReport = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getDailyReport");
-    return dailyReportFromRollups(ctx, orgId, args);
+    return isWindowAlignedRange(args.startAt, args.endAt)
+      ? dailyReportFromRollups(ctx, orgId, args)
+      : computeDailyReportRaw(ctx, orgId, args.startAt, args.endAt);
   },
 });

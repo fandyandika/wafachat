@@ -30,7 +30,9 @@ export type RollupValues = {
   fuH1: number;
   fuH2: number;
   fuH3: number;
-  byProduct: Array<{ product: string; leads: number; closings: number }>;  // leads = distinct customers per product (matches getDailyReport; getProductDifficulty reads raw)
+  cod: number;
+  transfer: number;
+  byProduct: Array<{ product: string; leads: number; closings: number; leadOrders: number; revenue: number; discount: number; cod: number; transfer: number }>;
   updatedAt: number;
 };
 
@@ -107,6 +109,8 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
   const closedCust = new Set<string>();
   let revenue = 0;
   let discount = 0;
+  let cod = 0;
+  let transfer = 0;
   let manualClosings = 0;
   let delivered = 0;
   let fuClosings = 0;
@@ -118,6 +122,8 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
     closedCust.add(normalizePhone(r.customerPhone));
     revenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
     discount += r.discount ?? 0;
+    if (r.paymentMethod === "cod") cod += 1;
+    if (r.paymentMethod === "transfer") transfer += 1;
     if (!r.sourceMessageId) manualClosings += 1;
     if (r.status === "delivered") delivered += 1;
     const touchCount = r.followUpTouchesAtClose ?? 0;
@@ -128,15 +134,16 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
   }
 
   // Per-product aggregation (leads = distinct customers to match getDailyReport)
-  const productMap = new Map<string, { leads: Set<string>; closings: Set<string> }>();
+  const productMap = new Map<string, { leads: Set<string>; closings: Set<string>; leadOrders: number; revenue: number; discount: number; cod: number; transfer: number }>();
   for (const o of orders) {
     const p = canonicalizeProduct(o.productName || o.products);
     let prod = productMap.get(p);
     if (!prod) {
-      prod = { leads: new Set(), closings: new Set() };
+      prod = { leads: new Set(), closings: new Set(), leadOrders: 0, revenue: 0, discount: 0, cod: 0, transfer: 0 };
       productMap.set(p, prod);
     }
     prod.leads.add(normalizePhone(o.customerPhone));
+    prod.leadOrders += 1;
   }
 
   for (const r of closingsList) {
@@ -145,21 +152,30 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
     const p = canonicalizeProduct(matched?.productName || matched?.products || r.packageContent);
     let prod = productMap.get(p);
     if (!prod) {
-      prod = { leads: new Set(), closings: new Set() };
+      prod = { leads: new Set(), closings: new Set(), leadOrders: 0, revenue: 0, discount: 0, cod: 0, transfer: 0 };
       productMap.set(p, prod);
     }
     prod.closings.add(r.orderIdBerdu || cphone);
+    prod.revenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
+    prod.discount += r.discount ?? 0;
+    if (r.paymentMethod === "cod") prod.cod += 1;
+    if (r.paymentMethod === "transfer") prod.transfer += 1;
   }
 
   // Build byProduct array, cap at 50 + overflow bucket
   const productsEntries = Array.from(productMap.entries())
-    .map(([product, p]) => ({ product, leads: p.leads.size, closings: p.closings.size }))
+    .map(([product, p]) => ({ product, leads: p.leads.size, closings: p.closings.size, leadOrders: p.leadOrders, revenue: p.revenue, discount: p.discount, cod: p.cod, transfer: p.transfer }))
     .filter((p) => p.leads > 0 || p.closings > 0)
     .sort((x, y) => y.leads - x.leads || x.product.localeCompare(y.product));
 
-  const byProduct: Array<{ product: string; leads: number; closings: number }> = [];
+  const byProduct: Array<{ product: string; leads: number; closings: number; leadOrders: number; revenue: number; discount: number; cod: number; transfer: number }> = [];
   let overflowLeads = 0;
   let overflowClosings = 0;
+  let overflowLeadOrders = 0;
+  let overflowRevenue = 0;
+  let overflowDiscount = 0;
+  let overflowCod = 0;
+  let overflowTransfer = 0;
 
   for (let i = 0; i < productsEntries.length; i++) {
     if (i < PRODUCT_CAP) {
@@ -167,11 +183,16 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
     } else {
       overflowLeads += productsEntries[i].leads;
       overflowClosings += productsEntries[i].closings;
+      overflowLeadOrders += productsEntries[i].leadOrders;
+      overflowRevenue += productsEntries[i].revenue;
+      overflowDiscount += productsEntries[i].discount;
+      overflowCod += productsEntries[i].cod;
+      overflowTransfer += productsEntries[i].transfer;
     }
   }
 
   if (overflowLeads > 0 || overflowClosings > 0) {
-    byProduct.push({ product: "lainnya", leads: overflowLeads, closings: overflowClosings });
+    byProduct.push({ product: "lainnya", leads: overflowLeads, closings: overflowClosings, leadOrders: overflowLeadOrders, revenue: overflowRevenue, discount: overflowDiscount, cod: overflowCod, transfer: overflowTransfer });
   }
 
   // Get most frequent csName
@@ -206,6 +227,8 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
     delivered,
     revenue,
     discount,
+    cod,
+    transfer,
     fuClosings,
     fuH1,
     fuH2,
