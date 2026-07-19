@@ -2,10 +2,9 @@ import { query, action, mutation, internalAction, internalMutation, internalQuer
 import { requireMember, requireMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { csKey, isInternalTestPhone, normalizeCsName } from "./lib";
+import { csKey, isInternalTestPhone, normalizeCsName, normalizePhone } from "./lib";
 import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
 import { internal } from "./_generated/api";
-import { followUpEffectivenessFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
 
@@ -428,9 +427,41 @@ export const getFollowUpEffectiveness = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "followUp.getFollowUpEffectiveness");
-    return followUpEffectivenessFromRollups(ctx, orgId, args);
+    return computeFollowUpEffectivenessRaw(ctx, orgId, args);
   },
 });
+
+export async function computeFollowUpEffectivenessRaw(
+  ctx: any,
+  orgId: Id<"organizations">,
+  args: { startAt: number; endAt: number; csName?: string },
+) {
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
+  const key = args.csName ? csKey(args.csName) : null;
+  const recaps = (
+    await ctx.db.query("shippingRecaps")
+      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lte("closedAt", args.endAt))
+      .collect()
+  ).filter((recap: any) => recap.status !== "cancelled" && recap.status !== "cancelled_after_export"
+    && !isInternalTestPhone(recap.customerPhone, internalPhones) && (!key || csKey(recap.csName) === key));
+  const latestByClosing = new Map<string, any>();
+  for (const recap of recaps) {
+    const closingKey = recap.orderIdBerdu || normalizePhone(recap.customerPhone);
+    const existing = latestByClosing.get(closingKey);
+    if (!existing || recap.closedAt > existing.closedAt) latestByClosing.set(closingKey, recap);
+  }
+  const closings = Array.from(latestByClosing.values());
+  const byStage = { h1: 0, h2: 0, h3: 0 };
+  let fromFollowUp = 0;
+  for (const recap of closings) {
+    const touches = recap.followUpTouchesAtClose ?? 0;
+    if (touches >= 1) fromFollowUp++;
+    if (touches === 1) byStage.h1++;
+    else if (touches === 2) byStage.h2++;
+    else if (touches >= 3) byStage.h3++;
+  }
+  return { totalClosings: closings.length, fromFollowUp, byStage };
+}
 
 // "Closing" tab: recent closings so CS can see where a lead WENT after it dropped out of the funnel
 // (PEMESANAN BERHASIL / marker → status closed → vanishes from H+1/2/3). Read-only over shippingRecaps;

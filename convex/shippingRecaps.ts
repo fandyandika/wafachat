@@ -2,10 +2,10 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { requireAdmin, requireMember, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
-import { isInternalTestPhone, csKey, canonicalizeProduct as canonicalizeProductLib, normalizeProductName as normalizeProductNameLib, windowKeyFor, isWindowAlignedRange } from "./lib";
+import { isInternalTestPhone, csKey, canonicalizeProduct as canonicalizeProductLib, normalizeProductName as normalizeProductNameLib, windowKeyFor } from "./lib";
 import { getActiveClosingPhrases } from "./closingRules";
 import { bumpForOrderDoc, bumpForRecapDoc, computeRollupRow } from "./rollups";
-import { performanceFromRaw, performanceFromRollups } from "./rollupReaders";
+import { performanceFromRaw } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
@@ -1316,9 +1316,7 @@ export const getPerformance = query({
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "shippingRecaps.getPerformance");
-    return isWindowAlignedRange(args.startAt, args.endAt)
-      ? performanceFromRollups(ctx, orgId, args)
-      : performanceFromRaw(ctx, orgId, args);
+    return performanceFromRaw(ctx, orgId, args);
   },
 });
 

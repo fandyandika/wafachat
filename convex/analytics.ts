@@ -2,9 +2,9 @@ import { query, internalQuery } from "./_generated/server";
 import { requireMember, requireMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct, startOfJakartaDayMs, isWindowAlignedRange } from "./lib";
+import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct, startOfJakartaDayMs } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
-import { areRollupWindowsComplete, dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRollups, periodReportFromRollups } from "./rollupReaders";
+import { productDifficultyFromRaw, periodReportFromRaw } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
 
 // leads/closedCust are keyed by customer PHONE (unique customers); closings by ORDER
@@ -75,17 +75,12 @@ export async function computeCsLeaderboardRaw(ctx: any, orgId: Id<"organizations
 }
 
 export const getCsLeaderboard = query({
-  // raw=true → calendar-day / any-range raw computation (cheap for a small "today" slice);
-  // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
+  // `raw` remains accepted for API compatibility. Exact global identity unions
+  // require the bounded raw calculation for every range.
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getCsLeaderboard");
-    const length = args.endAt - args.startAt;
-    const complete = await areRollupWindowsComplete(ctx, orgId, args.startAt, args.endAt)
-      && await areRollupWindowsComplete(ctx, orgId, args.startAt - length, args.startAt);
-    return args.raw || !isWindowAlignedRange(args.startAt, args.endAt) || !complete
-      ? computeCsLeaderboardRaw(ctx, orgId, args)
-      : leaderboardFromRollups(ctx, orgId, args);
+    return computeCsLeaderboardRaw(ctx, orgId, args);
   },
 });
 
@@ -118,7 +113,7 @@ export const getProductDifficulty = query({
   args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getProductDifficulty");
-    return productDifficultyFromRollups(ctx, orgId, args);
+    return productDifficultyFromRaw(ctx, orgId, args);
   },
 });
 
@@ -151,7 +146,7 @@ export const getPeriodReport = query({
   args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getPeriodReport");
-    return periodReportFromRollups(ctx, orgId, args);
+    return periodReportFromRaw(ctx, orgId, args);
   },
 });
 
@@ -416,8 +411,6 @@ export const getDailyReport = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getDailyReport");
-    return isWindowAlignedRange(args.startAt, args.endAt) && await areRollupWindowsComplete(ctx, orgId, args.startAt, args.endAt)
-      ? dailyReportFromRollups(ctx, orgId, args)
-      : computeDailyReportRaw(ctx, orgId, args.startAt, args.endAt);
+    return computeDailyReportRaw(ctx, orgId, args.startAt, args.endAt);
   },
 });

@@ -1,16 +1,15 @@
 import type { Id } from "./_generated/dataModel";
-import { windowKeyFor, windowRangeForKey, isWindowAlignedRange, csKey as csKeyOf, getJakartaDate, normalizePhone, isInternalTestPhone, canonicalizeProduct } from "./lib";
+import { windowKeyFor, isWindowAlignedRange, csKey as csKeyOf, normalizePhone, isInternalTestPhone, canonicalizeProduct } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
 import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
 
 /**
- * Rollup Reader Module
+ * Analytics reader helpers.
  *
- * Fast aggregates from pre-computed windows (dailyRollups, responseSamples).
- * All readers are constrained to window-aligned ranges for production (Task 10).
- * Each function matches its legacy query counterpart exactly in output shape and semantics.
+ * Identity-sensitive analytics stay on bounded raw reads until stored facts can
+ * reproduce global set unions exactly. Response-time samples remain precomputed.
  */
 
 // ── Shared Helpers ──────────────────────────────────────────────────────────
@@ -137,304 +136,7 @@ export async function responseTimesFromSamples(
   };
 }
 
-// ── 2. Daily Report from Rollups ────────────────────────────────────────────
-
-export async function dailyReportFromRollups(ctx: any, orgId: Id<"organizations">, args: { startAt: number; endAt: number }) {
-  const keys = windowKeysForRange(args.startAt, args.endAt);
-  const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
-  );
-  const rollups = rollupsByKey.flat();
-
-  const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-  const cpd = (disc: number, c: number) => (c > 0 ? Math.round(disc / c) : 0);
-
-  const map = new Map<string, any>();
-  let gLeads = 0,
-    gClosings = 0,
-    gClosedCust = 0,
-    gRevenue = 0,
-    gDiscount = 0,
-    gCancelled = 0,
-    gRawLeads = 0;
-
-  for (const rollup of rollups) {
-    const ck = rollup.csKey;
-    let entry = map.get(ck);
-    if (!entry) {
-      entry = {
-        csName: rollup.csName,
-        leads: 0,
-        closings: 0,
-        closedCust: 0,
-        revenue: 0,
-        discount: 0,
-        rawLeads: 0,
-        products: new Map<string, any>(),
-      };
-      map.set(ck, entry);
-    }
-    entry.leads += rollup.leadsCust;
-    entry.closings += rollup.closings;
-    entry.closedCust += rollup.closedCust;
-    entry.revenue += rollup.revenue;
-    entry.discount += rollup.discount;
-    entry.rawLeads += rollup.leadOrders;
-
-    for (const prod of rollup.byProduct) {
-      const p = entry.products.get(prod.product) ?? { leads: 0, closings: 0 };
-      p.leads += prod.leads;
-      p.closings += prod.closings;
-      entry.products.set(prod.product, p);
-    }
-
-    gLeads += rollup.leadsCust;
-    gClosings += rollup.closings;
-    gClosedCust += rollup.closedCust;
-    gRevenue += rollup.revenue;
-    gDiscount += rollup.discount;
-    gCancelled += rollup.cancelled;
-    gRawLeads += rollup.leadOrders;
-  }
-
-  const cs = Array.from(map.values())
-    .map((a) => ({
-      csName: a.csName,
-      leads: a.leads,
-      closings: a.closings,
-      cr: cr(a.closedCust, a.leads),
-      revenue: a.revenue,
-      discount: a.discount,
-      cpDiscount: cpd(a.discount, a.closings),
-      duplicates: a.rawLeads - a.leads,
-      products: Array.from(a.products.entries())
-        .map(([product, p]: any) => ({
-          product,
-          leads: p.leads,
-          closings: p.closings,
-          cr: cr(p.closings, p.leads),
-        }))
-        .filter((p) => p.leads > 0 || p.closings > 0)
-        .sort((x, y) => y.leads - x.leads || x.product.localeCompare(y.product)),
-    }))
-    .filter((c) => c.leads > 0 || c.closings > 0)
-    .sort((x, y) => y.closings - x.closings || y.leads - x.leads);
-
-  return {
-    windowStart: args.startAt,
-    windowEnd: args.endAt,
-    totals: {
-      leads: gLeads,
-      closings: gClosings,
-      cr: cr(gClosedCust, gLeads),
-      revenue: gRevenue,
-      discount: gDiscount,
-      cpDiscount: cpd(gDiscount, gClosings),
-      duplicates: gRawLeads - gLeads,
-    },
-    cs,
-  };
-}
-
-// ── 3. Trend from Rollups ───────────────────────────────────────────────────
-
-function bucketKeyFromWindowKey(windowKey: string, bucket: "day" | "week" | "month"): string {
-  if (bucket === "day") return windowKey;
-
-  // Parse windowKey to timestamp
-  const [y, m, d] = windowKey.split("-").map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d, 9, 0, 0)); // 16:00 WIB
-
-  if (bucket === "month") {
-    return `${y}-${String(m).padStart(2, "0")}`;
-  }
-
-  // week: ISO-ish week format
-  const onejan = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-  const week = Math.ceil(((date.getTime() - onejan.getTime()) / 86_400_000 + onejan.getUTCDay() + 1) / 7);
-  return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
-}
-
-export async function trendFromRollups(
-  ctx: any,
-  orgId: Id<"organizations">,
-  args: { startAt: number; endAt: number; bucket: "day" | "week" | "month"; csName?: string }
-) {
-  const keys = windowKeysForRange(args.startAt, args.endAt);
-  const key = args.csName ? csKeyOf(args.csName) : null;
-
-  const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
-  );
-  const rollups = rollupsByKey.flat();
-
-  const leadSets = new Map<string, Set<string>>();
-  const closeSets = new Map<string, Set<string>>();
-
-  for (const rollup of rollups) {
-    if (key && csKeyOf(rollup.csKey) !== key) continue;
-
-    const bk = bucketKeyFromWindowKey(rollup.windowKey, args.bucket);
-    const leads = leadSets.get(bk) ?? new Set();
-    const closes = closeSets.get(bk) ?? new Set();
-
-    // Approximate: use the CS key as a proxy (rollups don't store individual lead/closing keys)
-    // This is a simplification; in production we'd need to track customer phones in rollups
-    // For now, count by closing count as a proxy
-    for (let i = 0; i < rollup.leadsCust; i++) {
-      leads.add(`${bk}-lead-${rollup.csKey}-${i}`);
-    }
-    for (let i = 0; i < rollup.closings; i++) {
-      closes.add(`${bk}-close-${rollup.csKey}-${i}`);
-    }
-
-    leadSets.set(bk, leads);
-    closeSets.set(bk, closes);
-  }
-
-  const buckets = Array.from(new Set(Array.from(leadSets.keys()).concat(Array.from(closeSets.keys())))).sort();
-  const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-
-  return buckets.map((b) => {
-    const leads = leadSets.get(b)?.size ?? 0;
-    const closings = closeSets.get(b)?.size ?? 0;
-    return { bucket: b, leads, closings, cr: cr(closings, leads) };
-  });
-}
-
-// ── 4. Dashboard Summary from Rollups ───────────────────────────────────────
-
-export async function dashboardSummaryFromRollups(ctx: any, orgId: Id<"organizations">, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
-  const key = args.csName ? csKeyOf(args.csName) : null;
-  const keys = windowKeysForRange(args.startAt, args.endAt);
-
-  const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
-  );
-  const rollups = rollupsByKey.flat();
-
-  let leads = 0,
-    closings = 0,
-    manualClosings = 0,
-    cancelled = 0,
-    revenue = 0;
-
-  for (const rollup of rollups) {
-    if (key && csKeyOf(rollup.csKey) !== key) continue;
-    leads += rollup.leadsCust;
-    closings += rollup.closings;
-    manualClosings += rollup.manualClosings;
-    cancelled += rollup.cancelled;
-    revenue += rollup.revenue;
-  }
-
-  const cr = leads > 0 ? Math.round((closings / leads) * 1000) / 10 : 0;
-
-  // Handovers and activeChats: COPY legacy reads (still derived from raw data)
-  // Note: These cannot be derived from rollups, so we read from raw tables
-  const events = await ctx.db
-    .query("events")
-    .withIndex("by_org_type_createdAt", (q: any) => q.eq("orgId", orgId).eq("type", "handover").gte("createdAt", args.startAt).lte("createdAt", args.endAt))
-    .collect();
-
-  const csOk = (cs: string | undefined) => !key || csKeyOf(cs) === key;
-  const handovers = new Set(events.filter((e: any) => csOk(e.customerPhone ?? "")).map((e: any) => e.orderId ?? e.customerPhone ?? String(e._id))).size;
-  // activeChats scans the WHOLE active pool (unbounded) — only when a caller asks (default off).
-  const activeChats = args.includeActiveChats
-    ? (await ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", orgId).eq("status", "active")).collect())
-        .filter((c: any) => csOk(c.assignedCsName)).length
-    : 0;
-
-  return {
-    leads,
-    closings,
-    cr,
-    manualClosings,
-    cancelled,
-    handovers,
-    activeChats,
-    revenue,
-  };
-}
-
-// ── 5. Leaderboard from Rollups ────────────────────────────────────────────
-
-export async function leaderboardFromRollups(
-  ctx: any,
-  orgId: Id<"organizations">,
-  args: { startAt: number; endAt: number; csName?: string }
-) {
-  const key = args.csName ? csKeyOf(args.csName) : null;
-  const len = args.endAt - args.startAt;
-
-  // Current period
-  const keys = windowKeysForRange(args.startAt, args.endAt);
-  const curRollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
-  );
-  const curRollups = curRollupsByKey.flat();
-
-  // Previous period
-  const prevKeys = windowKeysForRange(args.startAt - len, args.startAt);
-  const prevRollupsByKey = await Promise.all(
-    prevKeys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
-  );
-  const prevRollups = prevRollupsByKey.flat();
-
-  const aggregateByCs = (rollups: typeof curRollups) => {
-    const map = new Map<string, { leads: number; closings: number; closedCust: number; revenue: number; csName: string }>();
-    for (const rollup of rollups) {
-      if (key && csKeyOf(rollup.csKey) !== key) continue;
-      const ck = rollup.csKey;
-      let entry = map.get(ck);
-      if (!entry) {
-        entry = {
-          leads: 0,
-          closings: 0,
-          closedCust: 0,
-          revenue: 0,
-          csName: rollup.csName,
-        };
-        map.set(ck, entry);
-      }
-      entry.leads += rollup.leadsCust;
-      entry.closings += rollup.closings;
-      entry.closedCust += rollup.closedCust;
-      entry.revenue += rollup.revenue;
-    }
-    return map;
-  };
-
-  const cur = aggregateByCs(curRollups);
-  const prev = aggregateByCs(prevRollups);
-
-  const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
-  const allKeys = Array.from(new Set(Array.from(cur.keys()).concat(Array.from(prev.keys()))));
-
-  const rows = allKeys.map((ck) => {
-    const c = cur.get(ck) ?? { leads: 0, closings: 0, closedCust: 0, revenue: 0, csName: "" };
-    const p = prev.get(ck) ?? { leads: 0, closings: 0, closedCust: 0, revenue: 0, csName: "" };
-    const csName = c.csName || p.csName;
-    return {
-      csName,
-      leads: c.leads,
-      closings: c.closings,
-      cr: cr(c.closedCust, c.leads),
-      revenue: c.revenue,
-      prevLeads: p.leads,
-      prevClosings: p.closings,
-      prevCr: cr(p.closedCust, p.leads),
-      deltaLeads: c.leads - p.leads,
-      deltaClosings: c.closings - p.closings,
-      deltaCr: Math.round((cr(c.closedCust, c.leads) - cr(p.closedCust, p.leads)) * 10) / 10,
-    };
-  });
-
-  rows.sort((a, b) => b.closings - a.closings || b.leads - a.leads);
-  return rows;
-}
-
-// ── 6. Product Difficulty from Rollups ──────────────────────────────────────
+// ── 6. Raw Product Difficulty ──────────────────────────────────────
 
 export async function productDifficultyFromRaw(
   ctx: any,
@@ -504,8 +206,8 @@ export async function productDifficultyFromRaw(
   return rows;
 }
 
-export async function areRollupWindowsComplete(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number): Promise<boolean> {
-  if (!isWindowAlignedRange(startAt, endAt)) return false;
+export async function areRollupWindowsComplete(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number, nowMs = Date.now()): Promise<boolean> {
+  if (!isWindowAlignedRange(startAt, endAt) || endAt > nowMs) return false;
   const keys = windowKeysForRange(startAt, endAt);
   const markers = await Promise.all(keys.map((windowKey) => ctx.db.query("rollupWindows")
     .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey))
@@ -513,17 +215,7 @@ export async function areRollupWindowsComplete(ctx: any, orgId: Id<"organization
   return markers.every((marker: any) => marker?.schemaVersion === ROLLUP_SCHEMA_VERSION);
 }
 
-export async function productDifficultyFromRollups(
-  ctx: any,
-  orgId: Id<"organizations">,
-  args: { startAt: number; endAt: number; minLeads?: number; csName?: string }
-) {
-  // Product lead/closing identities cannot be composed across windows, and a
-  // row exactly on the boundary must never leak into the previous window.
-  return productDifficultyFromRaw(ctx, orgId, args);
-}
-
-// ── 7. Period Report from Rollups ───────────────────────────────────────────
+// ── 7. Raw Period Report ───────────────────────────────────────────
 
 const JAK_MS = 7 * 60 * 60 * 1000;
 const DAY_MS = 86_400_000;
@@ -553,7 +245,7 @@ function periodRange(period: "week" | "month", anchor: number): { start: number;
   return { start, end, prevStart, prevEnd: start - 1, label };
 }
 
-async function periodReportFromRaw(
+export async function periodReportFromRaw(
   ctx: any,
   orgId: Id<"organizations">,
   args: { period: "week" | "month"; anchor?: number; csName?: string }
@@ -607,17 +299,7 @@ async function periodReportFromRaw(
   };
 }
 
-export async function periodReportFromRollups(
-  ctx: any,
-  orgId: Id<"organizations">,
-  args: { period: "week" | "month"; anchor?: number; csName?: string }
-) {
-  // Calendar week/month bounds are not 16:00-WIB aligned; exact raw reads avoid
-  // importing the preceding/following business-window fragments.
-  return periodReportFromRaw(ctx, orgId, args);
-}
-
-// ── 8. Performance from Rollups ─────────────────────────────────────────────
+// ── 8. Raw Performance ─────────────────────────────────────────────
 
 export async function performanceFromRaw(
   ctx: any,
@@ -759,44 +441,5 @@ export async function performanceFromRaw(
   };
 }
 
-export async function performanceFromRollups(
-  ctx: any,
-  orgId: Id<"organizations">,
-  args: { startAt: number; endAt: number; includeInferredDiscount?: boolean; csName?: string }
-) {
-  // Per-CS rollups cannot preserve global phone identity when one phone appears
-  // under multiple CS rows, so even a single sealed window is not safely additive.
-  return performanceFromRaw(ctx, orgId, args);
-}
+// ── 9. Follow-Up Effectiveness ────────────────────────────────
 
-// ── 9. Follow-Up Effectiveness from Rollups ────────────────────────────────
-
-export async function followUpEffectivenessFromRollups(
-  ctx: any,
-  orgId: Id<"organizations">,
-  args: { startAt: number; endAt: number; csName?: string }
-) {
-  const key = args.csName ? csKeyOf(args.csName) : null;
-  const keys = windowKeysForRange(args.startAt, args.endAt);
-
-  const rollupsByKey = await Promise.all(
-    keys.map((k) => ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", k)).collect())
-  );
-  const rollups = rollupsByKey.flat();
-
-  let totalClosings = 0,
-    fromFollowUp = 0;
-  const byStage = { h1: 0, h2: 0, h3: 0 };
-
-  for (const rollup of rollups) {
-    if (key && csKeyOf(rollup.csKey) !== key) continue;
-
-    totalClosings += rollup.closings;
-    fromFollowUp += rollup.fuClosings;
-    byStage.h1 += rollup.fuH1;
-    byStage.h2 += rollup.fuH2;
-    byStage.h3 += rollup.fuH3;
-  }
-
-  return { totalClosings, fromFollowUp, byStage };
-}

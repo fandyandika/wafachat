@@ -66,6 +66,53 @@ test("getCsLeaderboard previous period includes the row at exactly startAt minus
   expect(rows[0].prevLeads).toBe(1);
 });
 
+test("getCsLeaderboard preserves global phone identity across complete windows", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "leaderboard-union-admin", role: "admin", name: "Admin", email: "leaderboard-union@w" });
+  const orgId = await seedOrg(t);
+  const first = windowRangeForKey("2026-06-01");
+  const second = windowRangeForKey("2026-06-02");
+  await t.run(async (ctx) => {
+    for (const [orderId, createdAt] of [["LB-UNION-1", first.startAt + 1], ["LB-UNION-2", second.startAt + 1]] as const) {
+      await ctx.db.insert("orders", { orgId, ...ordBase, orderId, customerPhone: "6281777111111", assignedCsName: "CS A", productName: "Q", createdAt, updatedAt: createdAt });
+    }
+  });
+  for (const key of ["2026-05-30", "2026-05-31", "2026-06-01", "2026-06-02"]) {
+    await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: key });
+  }
+
+  const args = { startAt: first.startAt, endAt: second.endAt };
+  const expected = await t.run(async (ctx) => (await import("./analytics")).computeCsLeaderboardRaw(ctx, orgId, args));
+  const actual = await asAdmin.query(api.analytics.getCsLeaderboard, args);
+  expect(actual).toEqual(expected);
+  expect(actual[0].leads).toBe(1);
+});
+
+test("getCsLeaderboard keeps a complete but active aligned window raw", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "leaderboard-live-admin", role: "admin", name: "Admin", email: "leaderboard-live@w" });
+  const orgId = await seedOrg(t);
+  const now = Date.now();
+  const current = windowRangeForKey(windowKeyFor(now));
+  const previousKey = windowKeyFor(current.startAt - 1);
+  await t.run(async (ctx) => ctx.db.insert("orders", {
+    orgId, ...ordBase, orderId: "LB-LIVE-BEFORE", customerPhone: "6281777222201", assignedCsName: "CS A", productName: "Q",
+    createdAt: current.startAt + 1, updatedAt: current.startAt + 1,
+  }));
+  await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: previousKey });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: windowKeyFor(now) });
+  await t.run(async (ctx) => ctx.db.insert("orders", {
+    orgId, ...ordBase, orderId: "LB-LIVE-AFTER", customerPhone: "6281777222202", assignedCsName: "CS A", productName: "Q",
+    createdAt: now, updatedAt: now,
+  }));
+
+  const args = { startAt: current.startAt, endAt: current.endAt };
+  const expected = await t.run(async (ctx) => (await import("./analytics")).computeCsLeaderboardRaw(ctx, orgId, args));
+  const actual = await asAdmin.query(api.analytics.getCsLeaderboard, args);
+  expect(actual).toEqual(expected);
+  expect(actual[0].leads).toBe(2);
+});
+
 test("getProductDifficulty: per-product CR asc, minLeads filter", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
@@ -177,6 +224,46 @@ test("getDailyReport: per-CS×product, discount, CP diskon, duplicates", async (
   expect(r.totals.closings).toBe(2);
   expect(r.totals.discount).toBe(40000);
   expect(r.totals.cpDiscount).toBe(20000);
+});
+
+test("getDailyReport preserves global phone identity across CS rows", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "daily-union-admin", role: "admin", name: "Admin", email: "daily-union@w" });
+  const orgId = await seedOrg(t);
+  const range = windowRangeForKey("2026-06-03");
+  await t.run(async (ctx) => {
+    for (const [orderId, assignedCsName, createdAt] of [["DAILY-UNION-A", "CS A", range.startAt + 1], ["DAILY-UNION-B", "CS B", range.startAt + 2]] as const) {
+      await ctx.db.insert("orders", { orgId, ...ordBase, orderId, customerPhone: "6281777333333", assignedCsName, productName: "Q", createdAt, updatedAt: createdAt });
+    }
+  });
+  await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: "2026-06-03" });
+
+  const expected = await t.run(async (ctx) => (await import("./analytics")).computeDailyReportRaw(ctx, orgId, range.startAt, range.endAt));
+  const actual = await asAdmin.query(api.analytics.getDailyReport, range);
+  expect(actual).toEqual(expected);
+  expect(actual.totals.leads).toBe(1);
+});
+
+test("getDailyReport keeps a complete but active aligned window raw", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "daily-live-admin", role: "admin", name: "Admin", email: "daily-live@w" });
+  const orgId = await seedOrg(t);
+  const now = Date.now();
+  const range = windowRangeForKey(windowKeyFor(now));
+  await t.run(async (ctx) => ctx.db.insert("orders", {
+    orgId, ...ordBase, orderId: "DAILY-LIVE-BEFORE", customerPhone: "6281777444401", assignedCsName: "CS A", productName: "Q",
+    createdAt: range.startAt + 1, updatedAt: range.startAt + 1,
+  }));
+  await t.mutation(internal.rollups.recomputeWindow, { orgId, windowKey: windowKeyFor(now) });
+  await t.run(async (ctx) => ctx.db.insert("orders", {
+    orgId, ...ordBase, orderId: "DAILY-LIVE-AFTER", customerPhone: "6281777444402", assignedCsName: "CS A", productName: "Q",
+    createdAt: now, updatedAt: now,
+  }));
+
+  const expected = await t.run(async (ctx) => (await import("./analytics")).computeDailyReportRaw(ctx, orgId, range.startAt, range.endAt));
+  const actual = await asAdmin.query(api.analytics.getDailyReport, range);
+  expect(actual).toEqual(expected);
+  expect(actual.totals.leads).toBe(2);
 });
 
 test("getDailyReport: per-CS totals match getCsLeaderboard (no drift)", async () => {

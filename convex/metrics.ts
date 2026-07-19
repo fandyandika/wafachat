@@ -3,7 +3,6 @@ import { requireAdminOrg, requireMember, requireMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
-import { dashboardSummaryFromRollups, trendFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
 
 export async function computeDashboardSummaryRaw(ctx: QueryCtx, orgId: Id<"organizations">, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
@@ -56,12 +55,12 @@ export async function computeDashboardSummaryRaw(ctx: QueryCtx, orgId: Id<"organ
 }
 
 export const getDashboardSummary = query({
-  // raw=true → calendar-day / any-range raw computation (cheap for a small "today" slice);
-  // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
+  // `raw` remains accepted for API compatibility. Exact global identity unions
+  // require the bounded raw calculation for every range.
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()), includeActiveChats: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "metrics.getDashboardSummary");
-    return args.raw ? computeDashboardSummaryRaw(ctx, orgId, args) : dashboardSummaryFromRollups(ctx, orgId, args);
+    return computeDashboardSummaryRaw(ctx, orgId, args);
   },
 });
 
@@ -82,9 +81,41 @@ export const getTrend = query({
     bucket: v.union(v.literal("day"), v.literal("week"), v.literal("month")), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "metrics.getTrend");
-    return trendFromRollups(ctx, orgId, args);
+    return computeTrendRaw(ctx, orgId, args);
   },
 });
+
+export async function computeTrendRaw(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  args: { startAt: number; endAt: number; bucket: "day" | "week" | "month"; csName?: string },
+) {
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
+  const key = args.csName ? csKey(args.csName) : null;
+  const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
+  const orders = (
+    await ctx.db.query("orders").withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt)).collect()
+  ).filter((order) => !isInternalTestPhone(order.customerPhone, internalPhones) && csOk(order.assignedCsName));
+  const recaps = (
+    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lt("closedAt", args.endAt)).collect()
+  ).filter((recap) => recap.status !== "cancelled" && recap.status !== "cancelled_after_export"
+    && !isInternalTestPhone(recap.customerPhone, internalPhones) && csOk(recap.csName));
+
+  const buckets = new Map<string, { leads: Set<string>; closings: Set<string> }>();
+  const getBucket = (timestamp: number) => {
+    const name = bucketKey(timestamp, args.bucket);
+    const value = buckets.get(name) ?? { leads: new Set<string>(), closings: new Set<string>() };
+    buckets.set(name, value);
+    return value;
+  };
+  for (const order of orders) getBucket(order.createdAt).leads.add(normalizePhone(order.customerPhone));
+  for (const recap of recaps) getBucket(recap.closedAt).closings.add(recap.orderIdBerdu || normalizePhone(recap.customerPhone));
+  return Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([bucket, value]) => {
+    const leads = value.leads.size;
+    const closings = value.closings.size;
+    return { bucket, leads, closings, cr: leads > 0 ? Math.round((closings / leads) * 1000) / 10 : 0 };
+  });
+}
 
 export const getDuplicateOrders = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
