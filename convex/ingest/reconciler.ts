@@ -20,7 +20,7 @@ export function computeGaps(counters: number[], min: number | null, max: number 
 }
 
 type PreparedReconcileRun = { gaps: number[]; nextCounter: number };
-type ReconcileCommit = { nextCounter: number; unresolvedCounters: number[] };
+type ReconcileCommit = { nextCounter: number; unresolvedCounters: number[]; probeCursor?: number };
 
 // Processing can return `{ status: "skipped" }` without throwing. Keep every
 // requested counter through the commit; only its exact DB lookup may clear it.
@@ -29,12 +29,13 @@ export async function reconcilePreparedGaps(
   deps: {
     fetchDetail: (counter: number) => Promise<unknown | null>;
     processDetail: (counter: number, detail: unknown) => Promise<unknown>;
-    commit: (args: { nextCounter: number; unresolvedCounters: number[] }) => Promise<ReconcileCommit>;
+    commit: (args: { nextCounter: number; unresolvedCounters: number[]; probeCursor: number }) => Promise<ReconcileCommit>;
     onFailure: (counter: number, error: unknown) => Promise<void>;
   },
 ) {
-  const requestedCounters = [...new Set(run.gaps)].sort((a, b) => a - b);
-  for (const counter of requestedCounters.slice(0, 50)) {
+  const requestedCounters = [...new Set(run.gaps)];
+  const attemptedCounters = requestedCounters.slice(0, 50);
+  for (const counter of attemptedCounters) {
     try {
       const detail = await deps.fetchDetail(counter);
       if (detail) await deps.processDetail(counter, detail);
@@ -45,6 +46,9 @@ export async function reconcilePreparedGaps(
   const committed = await deps.commit({
     nextCounter: run.nextCounter,
     unresolvedCounters: requestedCounters,
+    probeCursor: attemptedCounters.length > 0
+      ? attemptedCounters[attemptedCounters.length - 1] + 1
+      : 1,
   });
   return {
     ...committed,

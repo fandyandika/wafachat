@@ -44,6 +44,7 @@ export default defineSchema({
     datePrefix: v.string(),
     nextCounter: v.number(),
     unresolvedCounters: v.array(v.number()),
+    probeCursor: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_org_datePrefix", ["orgId", "datePrefix"]),
 

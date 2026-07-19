@@ -61,4 +61,24 @@ describe("reconcilePreparedGaps", () => {
     const retry = await t.query(internal.ingest.reconcileState.prepareReconcileRun, { orgId, datePrefix: "260719" });
     expect(retry).toEqual({ gaps: [3], nextCounter: 4 });
   });
+
+  test("advances the durable probe cursor after only the attempted page", async () => {
+    const fetched: number[] = [];
+    let committed: any;
+    await reconcilePreparedGaps(
+      { gaps: Array.from({ length: 120 }, (_, index) => index + 1), nextCounter: 121 },
+      {
+        fetchDetail: async (counter) => { fetched.push(counter); return null; },
+        processDetail: async () => null,
+        commit: async (args) => {
+          committed = args;
+          return { nextCounter: args.nextCounter, unresolvedCounters: args.unresolvedCounters };
+        },
+        onFailure: async () => {},
+      },
+    );
+    expect(fetched).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+    expect(committed.probeCursor).toBe(51);
+    expect(committed.unresolvedCounters).toHaveLength(120);
+  });
 });

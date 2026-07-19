@@ -221,3 +221,41 @@ test("stale commits do not resurrect resolved gaps or skip the first over-capaci
   expect(safeAfterDelete.nextCounter).toBe(MAX_UNRESOLVED_COUNTERS + 1);
   expect(safeAfterDelete.unresolvedCounters).toEqual(initial);
 });
+
+test("durable rotation attempts gaps after the first 50 and exposes later tail gaps", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedState(t, orgId, 121, Array.from({ length: 120 }, (_, index) => index + 1));
+
+  const first = await t.query(internal.ingest.reconcileState.prepareReconcileRun, { orgId, datePrefix: "260719" });
+  expect(first.gaps.slice(0, 50)).toEqual(Array.from({ length: 50 }, (_, index) => index + 1));
+  await t.mutation(internal.ingest.reconcileState.commitReconcileRun, {
+    orgId, datePrefix: "260719", nextCounter: first.nextCounter,
+    unresolvedCounters: first.gaps, probeCursor: 51,
+  });
+
+  const second = await t.query(internal.ingest.reconcileState.prepareReconcileRun, { orgId, datePrefix: "260719" });
+  expect(second.gaps.slice(0, 50)).toEqual(Array.from({ length: 50 }, (_, index) => index + 51));
+  for (let counter = 51; counter <= 100; counter++) await insertOrder(t, orgId, counter);
+  await t.mutation(internal.ingest.reconcileState.commitReconcileRun, {
+    orgId, datePrefix: "260719", nextCounter: second.nextCounter,
+    unresolvedCounters: second.gaps, probeCursor: 101,
+  });
+
+  const third = await t.query(internal.ingest.reconcileState.prepareReconcileRun, { orgId, datePrefix: "260719" });
+  expect(third.gaps.slice(0, 20)).toEqual(Array.from({ length: 20 }, (_, index) => index + 101));
+  for (let counter = 101; counter <= 120; counter++) await insertOrder(t, orgId, counter);
+  await t.mutation(internal.ingest.reconcileState.commitReconcileRun, {
+    orgId, datePrefix: "260719", nextCounter: third.nextCounter,
+    unresolvedCounters: third.gaps, probeCursor: 31,
+  });
+
+  await insertOrder(t, orgId, 125);
+  const tail = await t.query(internal.ingest.reconcileState.prepareReconcileRun, { orgId, datePrefix: "260719" });
+  expect(tail.nextCounter).toBe(126);
+  expect(tail.gaps.slice(0, 50)).toEqual([
+    ...Array.from({ length: 20 }, (_, index) => index + 31),
+    121, 122, 123, 124,
+    ...Array.from({ length: 26 }, (_, index) => index + 1),
+  ]);
+});

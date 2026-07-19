@@ -31,6 +31,13 @@ function cappedSorted(counters: Iterable<number>): number[] {
   return sortedCounters(counters).slice(0, MAX_UNRESOLVED_COUNTERS);
 }
 
+function rotateCounters(counters: number[], probeCursor: number): number[] {
+  if (counters.length === 0) return [];
+  const start = counters.findIndex((counter) => counter >= probeCursor);
+  if (start <= 0) return counters;
+  return [...counters.slice(start), ...counters.slice(0, start)];
+}
+
 // nextCounter is the lowest counter that is not known present or persisted in
 // unresolvedCounters. Never advance past a missing counter that did not fit.
 function gapsAndCursor(presentCounters: number[], start: number, end: number, capacity: number) {
@@ -89,7 +96,10 @@ export const prepareReconcileRun = internalQuery({
     // A full unresolved set consumes all durable gap capacity. Do not read a
     // new tail until a point-check has freed a slot for its first missing row.
     if (stillUnresolved.length === MAX_UNRESOLVED_COUNTERS) {
-      return { gaps: stillUnresolved, nextCounter: Math.max(state.nextCounter, 1) };
+      return {
+        gaps: rotateCounters(stillUnresolved, state.probeCursor ?? 1),
+        nextCounter: Math.max(state.nextCounter, 1),
+      };
     }
 
     const tailRows = await ctx.db
@@ -114,7 +124,7 @@ export const prepareReconcileRun = internalQuery({
       );
 
     return {
-      gaps: [...stillUnresolved, ...tail.gaps],
+      gaps: rotateCounters(sortedCounters([...stillUnresolved, ...tail.gaps]), state.probeCursor ?? 1),
       nextCounter: tail.nextCounter,
     };
   },
@@ -126,6 +136,7 @@ export const commitReconcileRun = internalMutation({
     datePrefix: v.string(),
     nextCounter: v.number(),
     unresolvedCounters: v.array(v.number()),
+    probeCursor: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -153,13 +164,14 @@ export const commitReconcileRun = internalMutation({
     const nextCounter = firstUnpersisted === undefined
       ? Math.max(existing?.nextCounter ?? 1, requestedNext)
       : Math.min(Math.max(existing?.nextCounter ?? 1, requestedNext), firstUnpersisted);
-    const patch = { nextCounter, unresolvedCounters, updatedAt: Date.now() };
+    const probeCursor = args.probeCursor ?? existing?.probeCursor ?? 1;
+    const patch = { nextCounter, unresolvedCounters, probeCursor, updatedAt: Date.now() };
 
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {
       await ctx.db.insert("reconcileStates", { orgId: args.orgId, datePrefix: args.datePrefix, ...patch });
     }
-    return { nextCounter, unresolvedCounters };
+    return { nextCounter, unresolvedCounters, probeCursor };
   },
 });
