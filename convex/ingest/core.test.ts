@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
 
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
@@ -204,6 +205,42 @@ test("lead.created attribution: csConfigs.berduStaffIds overrides the baked defa
     const orders = await ctx.db.query("orders").collect();
     const order = orders.find((o) => o.orderId.includes("2607110001"));
     expect(order?.assignedCsName).toBe("Sari"); // registry won, not baked "Aisyah"
+  });
+});
+
+test("lead.created attribution: baked staff map is tenant-1 only", async () => {
+  const t = convexTest(schema);
+  const defaultOrgId = await seedOrg(t);
+  const otherOrgId = await t.run((ctx: any) => ctx.db.insert("organizations", {
+    slug: "tenant-two", name: "Tenant Two", createdAt: 1, updatedAt: 1,
+  })) as Id<"organizations">;
+  const rawBody = (id: string, phone: string) => JSON.stringify({ order: {
+    id, assigned_to_staff: "B-1apQSy",
+    products: [{ name: "Quran Mapping", price: 100000, count: 1 }],
+    shipping_address: { phone, firstName: "Budi", address: "Jl. X", district: "Y", city: "Z" },
+  } });
+
+  const defaultEventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}",
+    rawBody: rawBody("2607111001", "6281234510001"), signatureOk: true, orgId: defaultOrgId,
+  });
+  const otherEventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "berdu-tenant-two", kind: "lead.created", rawHeaders: "{}",
+    rawBody: rawBody("2607111002", "6281234510002"), signatureOk: true, orgId: otherOrgId,
+  });
+  await t.mutation(internal.ingest.core.processEvent, { eventId: defaultEventId });
+  await t.mutation(internal.ingest.core.processEvent, { eventId: otherEventId });
+
+  await t.run(async (ctx: any) => {
+    const defaultOrder = await ctx.db.query("orders")
+      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", defaultOrgId))
+      .unique();
+    const otherOrder = await ctx.db.query("orders")
+      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", otherOrgId))
+      .unique();
+    expect(defaultOrder?.assignedCsName).toBe("Aisyah");
+    expect(otherOrder?.assignedCsName).toBe("Staff B-1apQSy");
+    expect(otherOrder?.assignedCsName).not.toBe("Aisyah");
   });
 });
 

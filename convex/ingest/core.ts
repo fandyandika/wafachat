@@ -7,6 +7,7 @@ import { parseKirimdevWebhook } from "./kirimdevAdapter";
 import { parseBerduOrderDetail, DEFAULT_BERDU_STAFF_MAP } from "./berduAdapter";
 import { upsertOrderCore } from "../state";
 import { resolveAgent } from "../agents";
+import { getDefaultOrgId } from "../orgs";
 
 /** @deprecated B2a — use resolveAgent({ phoneNumberId }) from ../agents. */
 export async function resolveCsByPhoneNumberId(ctx: any, orgId: Id<"organizations">, phoneNumberId: string | undefined) {
@@ -14,13 +15,16 @@ export async function resolveCsByPhoneNumberId(ctx: any, orgId: Id<"organization
   return (await resolveAgent(ctx, orgId, { phoneNumberId }))?.csName;
 }
 
-// Build the Berdu staffId -> CS-name map from the csConfigs registry; fall back to
-// the baked tenant-#1 map while no config row carries berduStaffIds (pre-seed).
+// Build the Berdu staffId -> CS-name map from this org's active registry. The baked
+// pre-seed map belongs only to tenant #1; other unconfigured orgs stay neutral so
+// the adapter surfaces `Staff <id>` instead of leaking tenant-1 staff names.
 export async function resolveBerduStaffMap(ctx: any, orgId: Id<"organizations">): Promise<Record<string, string>> {
   const configs = await ctx.db.query("csConfigs").withIndex("by_org_active", (q: any) => q.eq("orgId", orgId).eq("isActive", true)).collect();
   const map: Record<string, string> = {};
   for (const c of configs) for (const id of c.berduStaffIds ?? []) map[id] = c.csName;
-  return Object.keys(map).length > 0 ? map : DEFAULT_BERDU_STAFF_MAP;
+  if (Object.keys(map).length > 0) return map;
+  const defaultOrgId = await getDefaultOrgId(ctx);
+  return defaultOrgId != null && String(defaultOrgId) === String(orgId) ? DEFAULT_BERDU_STAFF_MAP : {};
 }
 
 type ProcessOutcome =
