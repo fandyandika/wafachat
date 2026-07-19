@@ -4,6 +4,7 @@ import { ConvexHttpClient } from 'convex/browser';
 import { api } from '@/convex/_generated/api';
 import { verifySession } from '@/lib/auth-jwt';
 import { signConvexToken } from '@/lib/convex-token';
+import { bucketResponseTimeRange } from '@/lib/response-time-cache';
 
 // On-demand fetch for response-time stats. getResponseTimes scans the whole messages
 // table for the window, and was live-subscribed on Dashboard/Performance/Laporan — so
@@ -42,7 +43,8 @@ export async function POST(req: NextRequest) {
   const csName = typeof body?.csName === 'string' && body.csName.length > 0 ? body.csName : undefined;
 
   try {
-    const data = await getResponseTimesCached(startAt, endAt, csName);
+    const bucketedRange = bucketResponseTimeRange(startAt, endAt);
+    const data = await getResponseTimesCached(bucketedRange.startAt, bucketedRange.endAt, csName);
     return NextResponse.json({ ok: true, data });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message || 'failed' }, { status: 500 });
