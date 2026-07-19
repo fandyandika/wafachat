@@ -174,7 +174,7 @@ Jangkar nilai: *"1 closing tambahan per hari sudah membayar langganan sebulan."*
 | Ketergantungan BSP (akses/harga berubah) | Multi-BSP sejak awal; jalur Meta Tech Provider |
 | Scope creep ke inbox/automation | **Disiplin positioning**: selama kita scoreboard, kita sendirian di lapangan; begitu jadi inbox, kita lawan raksasa |
 | Format closing beragam antar tenant | Closing-rule builder + AI parsing (premium) |
-| Biaya Convex membengkak di skala | Arsitektur rollup (baca murah) + opsi migrasi Postgres pasca-revenue |
+| Biaya Convex membengkak di skala | Fakta additive via rollup; union identitas non-composable tetap raw-exact dengan range/cap fail-loud (bukan penjumlahan distinct aproksimatif) + opsi migrasi Postgres pasca-revenue |
 | Fitur gamifikasi memicu burnout CS | Prinsip yang sudah dipelajari: speed = gerbang SOP bukan balapan; kompetisi lewat kualitas (CR); copy kalem |
 | Data sensitif lintas tenant | Auth per-function + orgId di semua query + audit log (Fase 0–1) |
 

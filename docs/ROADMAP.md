@@ -15,9 +15,9 @@ Deferred items. Pull from here when needed.
 
 1. **Convex correctness baseline** — fix the two date-dependent tests; full suite green.
 2. **Low-risk I/O wins** — indexed health snapshot, reusable response-time cache buckets, incremental Berdu reconciliation.
-3. **Follow-up/lifecycle efficiency** — direction index and org-scoped pagination.
+3. **Follow-up/lifecycle efficiency** — direction index, four-page durable lifecycle workers, scheduled continuations, and tenant-isolated scheduling.
 4. **Analytics safety completion** — additive sealed facts remain rollup-backed; non-composable identity unions remain exact raw with half-open 35-day/900-row fail-loud bounds. No additive distinct approximation.
-5. **Ingestion tuning** — indexed agent resolution while preserving raw capture/replay.
+5. **Ingestion tuning** — indexed agent resolution, platform-wide resumable provider-claim migration, and fail-closed legacy registry caps while preserving raw capture/replay.
 6. **24-hour production comparison** — target ≤135 MB/day at comparable traffic, stretch ≤115 MB/day.
 7. **PWA project** — installable app shell, new branded icons, safe update flow, static/offline fallback only; authenticated Convex data is never cached by the service worker.
 8. **SaaS platform continuation** — B4 per-org timezone/cutoff, encrypted `tenantIntegrations`, onboarding/field mapper, connector presets, billing, Sentry/audit/export.
@@ -27,7 +27,7 @@ Deferred items. Pull from here when needed.
 - ✅ Brand identity and favicon/app icons.
 - ✅ Organization spine, required `orgId`, tenant-isolated indexes/readers, tenant provisioning core, JWT org validation.
 - ✅ Universal capture-first ingestion and daily rollup foundation.
-- 🟡 Convex I/O remediation and deterministic test baseline — current work.
+- 🟡 Convex I/O remediation — local implementation/release gates green; production migration, deploy, parity run, and 24-hour measurement remain.
 - ⬜ PWA/mobile installability — next standalone project.
 - ⬜ Per-org timezone and daily cutoff (B4).
 - ⬜ Per-org encrypted integration credentials and reconciler/connectors.

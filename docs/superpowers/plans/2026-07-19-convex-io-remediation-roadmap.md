@@ -379,9 +379,9 @@ Compute these values from the order and recap slices already loaded by `computeR
 - Enforce `[startAt,endAt)`, a 35-day public range, a 900-row per-source exact cap, and a 100-lookup fallback cap. Exceeding a cap fails loudly and asks the caller to narrow the range.
 - Keep response-time samples precomputed and marker-gated rollup facts available for composable readers; never mix whole-window rollup totals with partial raw details.
 
-- [ ] **Step 4: Backfill and enforce**
+- [ ] **Step 4: Backfill and prove v2 completeness**
 
-Deploy optional fields, run the existing bounded rollup backfill/true-up across retained windows, verify `debugRollupParity` has zero mismatches, then flip the new fields to required in a separate commit.
+Deploy optional fields, run the existing bounded rollup backfill/true-up across retained windows, and verify `debugRollupParity` has zero mismatches plus a v2 marker for every retained window. Do not flip fields to required or route identity-sensitive readers to additive rollups in this release; either change needs a later, separately verified schema/cutover wave.
 
 - [ ] **Step 5: Verify and commit**
 
@@ -469,7 +469,13 @@ Expected: all commands exit zero.
 
 - [ ] **Step 2: Deploy schema/code in migration-safe order**
 
-Deploy additive indexes and optional fields first. Run bounded backfill/parity checks. Only then deploy required-field enforcement and reader cutover.
+1. Deploy additive indexes, optional `probeCursor`/v2 rollup facts, and code that remains compatible with absent migration facts.
+2. Run `agents:seedKeysForAllOrganizations` until it reports `complete: true`, `organizationEnumerationComplete: true`, and no failed organizations. The public `seedKeys` wrapper remains tenant-derived; the internal driver is the only platform-wide path.
+3. Recompute/true-up every retained 16:00-WIB rollup window. Require v2 completeness markers and zero `debugRollupParity` mismatches before treating the rollup set as healthy.
+4. Keep identity-sensitive distinct metrics on exact raw `[startAt,endAt)` readers with the documented 35-day/900-row/100-fallback caps. This release has no additive distinct reader cutover and no required-field flip.
+5. After deploy, verify scheduled lifecycle continuations drain and reconciliation cursors rotate. Then collect the 24-hour I/O comparison.
+
+Rollback is code-first: revert the application/functions while leaving additive indexes, optional fields, provider claims, markers, and durable cursors in place. Those records are backward-compatible and preserve retry progress. Never roll back to the cross-tenant response-time principal/cache behavior or remove fail-closed tenant/registry checks.
 
 - [ ] **Step 3: Record 24-hour production results**
 
