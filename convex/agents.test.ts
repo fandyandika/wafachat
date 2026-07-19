@@ -83,6 +83,23 @@ test("resolveAgent: canonical-key and legacy fallbacks stay inside the requested
   });
 });
 
+test("resolveAgent: legacy no-key fallback returns only the requested org's matching row", async () => {
+  const t = convexTest(schema);
+  const orgA = await seedOrg(t);
+  const orgB = await t.run((ctx: any) => ctx.db.insert("organizations", {
+    slug: "other", name: "Other Org", createdAt: 1, updatedAt: 1,
+  })) as Id<"organizations">;
+  const agentA = await seedAgent(t, orgA, { key: undefined });
+  const agentB = await seedAgent(t, orgB, { key: undefined });
+
+  await t.run(async (ctx: any) => {
+    const result = await resolveAgent(ctx, orgB, { name: "CS Aisyah" });
+    expect(result?.agentId).toEqual(agentB);
+    expect(result?.agentId).not.toEqual(agentA);
+    expect(result?.csName).toBe("Aisyah");
+  });
+});
+
 test("seedKeys: idempotent — stamps key=csKey(csName) + nameAliases=[] only where missing", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);

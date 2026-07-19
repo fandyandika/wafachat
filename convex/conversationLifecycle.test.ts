@@ -198,24 +198,35 @@ test("resolveBatch: long alternating history uses the latest inbound when decidi
   });
 });
 
-test("resolveBatch: processes each org-scoped active and handover page without one status starving the other", async () => {
+test("cronArchiveSweep: keeps sweeping after one status reaches its terminal page", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
+  const activeIds: Id<"conversations">[] = [];
   let handoverId: Id<"conversations">;
-  for (let i = 0; i < 25; i++) {
-    await t.run((ctx) => ctx.db.insert("conversations", { orgId, ...conv(`O-ACTIVE-${i}`, `6283${i}`) }));
-  }
   await t.run(async (ctx) => {
+    for (let i = 0; i < 26; i++) {
+      activeIds.push(await ctx.db.insert("conversations", {
+        orgId, ...conv(`O-ACTIVE-${i}`, `6283${i}`),
+      }));
+    }
     handoverId = await ctx.db.insert("conversations", {
       orgId, ...conv("O-HANDOVER", "628399", { status: "handover" as const }),
     });
   });
 
-  const active = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, status: "active", dryRun: false, now, orgId });
-  const handover = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, status: "handover", dryRun: false, now, orgId });
-  expect(active.considered + handover.considered).toBe(26);
-  expect(active.closedStale + handover.closedStale).toBe(26);
+  const result = await t.action(internal.conversationLifecycle.cronArchiveSweep, {});
+
+  expect(result).toEqual({
+    considered: 27,
+    closedWon: 0,
+    closedMarker: 0,
+    closedStale: 27,
+    dryRun: false,
+  });
   await t.run(async (ctx) => {
+    const activeConversations = await Promise.all(activeIds.map((id) => ctx.db.get(id)));
+    expect(activeConversations).toHaveLength(26);
+    expect(activeConversations.every((conversation) => conversation?.status === "closed")).toBe(true);
     expect((await ctx.db.get(handoverId))?.status).toBe("closed");
   });
 });

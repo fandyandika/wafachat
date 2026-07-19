@@ -93,18 +93,30 @@ async function sweep(ctx: { runMutation: any }, orgId: any, dryRun: boolean): Pr
   const now = Date.now();
   let activeCursor: string | null = null;
   let handoverCursor: string | null = null;
-  let isDone = false;
+  let activeDone = false;
+  let handoverDone = false;
   let considered = 0;
   let closedWon = 0;
   let closedMarker = 0;
   let closedStale = 0;
   // Hard cap on iterations as a runaway guard (25 * 800 = 20k conversations).
-  for (let i = 0; i < 800 && !isDone; i++) {
-    const active: any = await ctx.runMutation(internal.conversationLifecycle.resolveBatch, { cursor: activeCursor, status: "active", dryRun, now, orgId });
-    const handover: any = await ctx.runMutation(internal.conversationLifecycle.resolveBatch, { cursor: handoverCursor, status: "handover", dryRun, now, orgId });
-    activeCursor = active.continueCursor;
-    handoverCursor = handover.continueCursor;
-    isDone = active.isDone && handover.isDone;
+  for (let i = 0; i < 800 && !(activeDone && handoverDone); i++) {
+    const active: any = activeDone
+      ? { considered: 0, closedWon: 0, closedMarker: 0, closedStale: 0 }
+      : await ctx.runMutation(internal.conversationLifecycle.resolveBatch, { cursor: activeCursor, status: "active", dryRun, now, orgId });
+    const handover: any = handoverDone
+      ? { considered: 0, closedWon: 0, closedMarker: 0, closedStale: 0 }
+      : await ctx.runMutation(internal.conversationLifecycle.resolveBatch, { cursor: handoverCursor, status: "handover", dryRun, now, orgId });
+    if (!activeDone) {
+      const activeMutations = active.closedWon + active.closedMarker + active.closedStale;
+      activeCursor = !dryRun && activeMutations > 0 ? null : active.continueCursor;
+      activeDone = active.isDone;
+    }
+    if (!handoverDone) {
+      const handoverMutations = handover.closedWon + handover.closedMarker + handover.closedStale;
+      handoverCursor = !dryRun && handoverMutations > 0 ? null : handover.continueCursor;
+      handoverDone = handover.isDone;
+    }
     considered += active.considered + handover.considered;
     closedWon += active.closedWon + handover.closedWon;
     closedMarker += active.closedMarker + handover.closedMarker;
