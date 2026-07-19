@@ -73,8 +73,8 @@ export default defineSchema({
 
   lifecycleSweepStates: defineTable({
     orgId: v.id("organizations"),
-    activeAfterCreationTime: v.optional(v.number()),
-    handoverAfterCreationTime: v.optional(v.number()),
+    activeCursor: v.optional(v.string()),
+    handoverCursor: v.optional(v.string()),
     activeDone: v.boolean(),
     handoverDone: v.boolean(),
     nextStatus: v.union(v.literal("active"), v.literal("handover")),

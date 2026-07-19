@@ -44,14 +44,14 @@ async function scanAndProcessStatus(
   options: { dryRun: boolean; now: number; status?: "active" | "handover" },
 ) {
   const ids: Id<"conversations">[] = [];
-  let afterCreationTime: number | undefined;
+  let cursor: string | undefined;
   let isDone = false;
   while (!isDone) {
     const page: any = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-      afterCreationTime, status: options.status ?? "active", orgId,
+      cursor, status: options.status ?? "active", orgId,
     });
     ids.push(...page.ids);
-    afterCreationTime = page.nextAfterCreationTime;
+    cursor = page.continueCursor;
     isDone = page.isDone;
   }
   const totals = { closedWon: 0, closedMarker: 0, closedStale: 0 };
@@ -360,7 +360,7 @@ test("processConversationIds accepts and closes a normal 25-ID batch", async () 
   });
 });
 
-test("scanOpenBatch keyset is stable when an unscanned row's updatedAt changes", async () => {
+test("scanOpenBatch manual cursor is stable when an unscanned row's updatedAt changes", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
   const ids = await t.run(async (ctx) => {
@@ -378,7 +378,7 @@ test("scanOpenBatch keyset is stable when an unscanned row's updatedAt changes",
   expect(first.ids).toHaveLength(25);
   await t.run((ctx) => ctx.db.patch(ids[29], { updatedAt: now - 20 * DAY }));
   const second = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-    afterCreationTime: first.nextAfterCreationTime, status: "active", orgId,
+    cursor: first.continueCursor, status: "active", orgId,
   });
 
   const scanned = [...first.ids, ...second.ids];
@@ -407,14 +407,14 @@ test("a handover-to-active transition missed between status scans is closed by t
     status: "handover", orgId,
   });
   const scannedIds = [...firstActive.ids];
-  let afterCreationTime = firstActive.nextAfterCreationTime;
+  let cursor = firstActive.continueCursor;
   let isDone = firstActive.isDone;
   while (!isDone) {
     const page = await t.query(internal.conversationLifecycle.scanOpenBatch, {
-      afterCreationTime, status: "active", orgId,
+      cursor, status: "active", orgId,
     });
     scannedIds.push(...page.ids);
-    afterCreationTime = page.nextAfterCreationTime;
+    cursor = page.continueCursor;
     isDone = page.isDone;
   }
   expect(handover.ids).not.toContain(transitionedId);
@@ -464,6 +464,13 @@ test("persisted keyset progress resumes past a retained prefix and resets after 
   };
 
   const first = await conversationLifecycle.sweep(productionCtx, orgId, false, 1);
+  const persistedAfterFirst = await t.run((ctx) => ctx.db
+    .query("lifecycleSweepStates")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique());
+  const activeCursor = (persistedAfterFirst as any)?.activeCursor;
+  expect(activeCursor).toBeTypeOf("string");
+  expect(JSON.parse(activeCursor)).toHaveLength(4); // orgId, status, _creationTime, _id
   const preview = await conversationLifecycle.sweep(productionCtx, orgId, true, 1);
   const second = await conversationLifecycle.sweep(productionCtx, orgId, false, 1);
   const third = await conversationLifecycle.sweep(productionCtx, orgId, false, 1);

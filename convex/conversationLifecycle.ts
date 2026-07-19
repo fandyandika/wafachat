@@ -12,6 +12,8 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdminOrg } from "./authz";
 import { messageHasDoneMarker } from "./followUpMath";
+import { paginator } from "convex-helpers/server/pagination";
+import schema from "./schema";
 
 // 5 days — same ceiling the follow-up funnel uses (followUpMath). Past this, a silent lead is dead.
 export const ARCHIVE_AFTER_MS = 5 * 24 * 60 * 60 * 1000;
@@ -63,27 +65,24 @@ async function closeReason(
   return now - ref > ARCHIVE_AFTER_MS ? "stale" : null;
 }
 
-// Phase 1 uses an immutable creation-time keyset; processed rows may leave the status index safely.
+// convex-helpers serializes the full index key [orgId, status, _creationTime, _id]. The final _id
+// makes equal-creation-time rows unique, and the manual cursor remains valid if earlier rows leave
+// the status index after apply.
 export const scanOpenBatch = internalQuery({
   args: {
-    afterCreationTime: v.optional(v.number()),
+    cursor: v.optional(v.string()),
     status: v.union(v.literal("active"), v.literal("handover")),
     orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
-    const rows = await ctx.db
+    const page = await paginator(ctx.db, schema)
       .query("conversations")
-      .withIndex("by_org_status", (q: any) => {
-        const statusRange = q.eq("orgId", args.orgId).eq("status", args.status);
-        return args.afterCreationTime === undefined
-          ? statusRange
-          : statusRange.gt("_creationTime", args.afterCreationTime);
-      })
-      .take(BATCH);
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", args.status))
+      .paginate({ cursor: args.cursor ?? null, numItems: BATCH });
     return {
-      ids: rows.map((conversation) => conversation._id),
-      nextAfterCreationTime: rows.at(-1)?._creationTime ?? args.afterCreationTime,
-      isDone: rows.length < BATCH,
+      ids: page.page.map((conversation) => conversation._id),
+      continueCursor: page.continueCursor,
+      isDone: page.isDone,
     };
   },
 });
@@ -100,8 +99,8 @@ export const commitSweepState = internalMutation({
   args: {
     orgId: v.id("organizations"),
     reset: v.boolean(),
-    activeAfterCreationTime: v.optional(v.number()),
-    handoverAfterCreationTime: v.optional(v.number()),
+    activeCursor: v.optional(v.string()),
+    handoverCursor: v.optional(v.string()),
     activeDone: v.boolean(),
     handoverDone: v.boolean(),
     nextStatus: v.union(v.literal("active"), v.literal("handover")),
@@ -117,8 +116,8 @@ export const commitSweepState = internalMutation({
     }
     const value = {
       orgId: args.orgId,
-      activeAfterCreationTime: args.activeAfterCreationTime,
-      handoverAfterCreationTime: args.handoverAfterCreationTime,
+      activeCursor: args.activeCursor,
+      handoverCursor: args.handoverCursor,
       activeDone: args.activeDone,
       handoverDone: args.handoverDone,
       nextStatus: args.nextStatus,
@@ -177,9 +176,9 @@ export async function sweep(
   const saved: any = dryRun
     ? null
     : await ctx.runQuery(internal.conversationLifecycle.getSweepState, { orgId });
-  const after: Record<"active" | "handover", number | undefined> = {
-    active: saved?.activeAfterCreationTime,
-    handover: saved?.handoverAfterCreationTime,
+  const cursors: Record<"active" | "handover", string | undefined> = {
+    active: saved?.activeCursor,
+    handover: saved?.handoverCursor,
   };
   const done: Record<"active" | "handover", boolean> = {
     active: saved?.activeDone ?? false,
@@ -192,8 +191,8 @@ export async function sweep(
   let closedMarker = 0;
   let closedStale = 0;
 
-  // The budget is TOTAL pages across both statuses. Each page is applied before its immutable
-  // creation-time boundary can advance. Durable progress is committed only after every selected
+  // The budget is TOTAL pages across both statuses. Each page is applied before its immutable,
+  // full-index-key cursor can advance. Durable progress is committed only after every selected
   // page succeeds, so action retries are idempotent and never skip unapplied rows.
   // A status transition that lands behind a saved boundary remains open until both streams reach
   // terminal and the state resets; the following cycle catches it without an unbounded extra scan.
@@ -203,7 +202,7 @@ export async function sweep(
       ? (nextStatus === "active" ? "handover" : "active")
       : nextStatus;
     const page: any = await ctx.runQuery(internal.conversationLifecycle.scanOpenBatch, {
-      afterCreationTime: after[status], status, orgId,
+      cursor: cursors[status], status, orgId,
     });
     const result: any = await ctx.runMutation(internal.conversationLifecycle.processConversationIds, {
       ids: page.ids, dryRun, now, orgId,
@@ -213,7 +212,7 @@ export async function sweep(
     closedWon += result.closedWon;
     closedMarker += result.closedMarker;
     closedStale += result.closedStale;
-    after[status] = page.nextAfterCreationTime;
+    cursors[status] = page.continueCursor;
     done[status] = page.isDone;
     nextStatus = status === "active" ? "handover" : "active";
   }
@@ -222,8 +221,8 @@ export async function sweep(
     await ctx.runMutation(internal.conversationLifecycle.commitSweepState, {
       orgId,
       reset: done.active && done.handover,
-      activeAfterCreationTime: after.active,
-      handoverAfterCreationTime: after.handover,
+      activeCursor: cursors.active,
+      handoverCursor: cursors.handover,
       activeDone: done.active,
       handoverDone: done.handover,
       nextStatus,
