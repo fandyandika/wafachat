@@ -1223,6 +1223,23 @@ test("response samples publish only after a multi-page generation is complete", 
     .query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 100_000 });
   expect(response.overall.firstReplyCount).toBe(1);
   expect(response.cs[0].ongoingCount).toBe(40);
+
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "6281222000001", order_id: "SAMPLE-PAGES", customerName: "Samples",
+    csName: "Sample Agent", role: "customer", direction: "inbound", content: "live in",
+    messageType: "text", createdAt: t0 + 90_000,
+  });
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "6281222000001", order_id: "SAMPLE-PAGES", customerName: "Samples",
+    csName: "Sample Agent", role: "cs", direction: "outbound", content: "live out",
+    messageType: "text", createdAt: t0 + 91_000,
+  });
+  const liveResponse = await t.withIdentity({ subject: "sample-admin", role: "admin", name: "Admin", email: "sample@w" })
+    .query(api.responseTime.getResponseTimes, { startAt: t0, endAt: t0 + 100_000 });
+  expect(liveResponse.cs[0].ongoingCount).toBe(41);
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("responseSamples").collect()).toHaveLength(0);
+  });
 });
 
 async function parityFixture() {
