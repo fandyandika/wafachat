@@ -68,8 +68,8 @@ export const prepareReconcileRun = internalQuery({
       .unique();
 
     if (!state) {
-      // Bootstrap once for this WIB date. Later invocations never revisit this
-      // range; the cursor makes their read begin at the last observed counter.
+      // Bootstrap one bounded order-ID page. Later invocations continue from
+      // nextCounter, so even the first run stays below the transaction read cap.
       const rows = await ctx.db
         .query("orders")
         .withIndex("by_org_orderId", (q: any) =>
@@ -77,7 +77,7 @@ export const prepareReconcileRun = internalQuery({
             .gte("orderId", orderIdFor(args.datePrefix, 0))
             .lte("orderId", orderIdFor(args.datePrefix, MAX_COUNTER)),
         )
-        .collect();
+        .take(MAX_TAIL_ORDERS_PER_RUN);
       const counters = rows
         .map((row: any) => counterFromOrderId(row.orderId, args.datePrefix))
         .filter((counter: number | null): counter is number => counter !== null);

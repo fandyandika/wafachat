@@ -39,6 +39,44 @@ async function insertOrder(t: any, orgId: any, counter: number) {
   );
 }
 
+async function insertOrders(t: any, orgId: any, counters: number[]) {
+  await t.run(async (ctx: any) => {
+    for (const counter of counters) {
+      await ctx.db.insert("orders", {
+        orgId,
+        orderId: `O-260719${String(counter).padStart(6, "0")}`,
+        customerPhone: "628111111111",
+        customerName: "Customer",
+        assignedCsName: "Risma",
+        productName: "Product",
+        products: "Product",
+        productsSubtotal: "1000",
+        shippingCost: "0",
+        total: "1000",
+        shippingAddress: "",
+        shippingDistrict: "",
+        shippingCity: "",
+        source: "berdu" as const,
+        aiEligible: false,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+    }
+  });
+}
+
+test("bootstrap reconciliation advances in a bounded page before discovering a later gap", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await insertOrders(t, orgId, [...Array.from({ length: 500 }, (_, index) => index + 1), 502]);
+
+  const first = await t.query(internal.ingest.reconcileState.prepareReconcileRun, {
+    orgId, datePrefix: "260719",
+  });
+
+  expect(first).toEqual({ gaps: [], nextCounter: 501 });
+});
+
 async function seedState(t: any, orgId: any, nextCounter: number, unresolvedCounters: number[]) {
   await t.run((ctx: any) =>
     ctx.db.insert("reconcileStates", {

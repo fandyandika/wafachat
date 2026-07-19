@@ -130,7 +130,7 @@ export async function resolveAgent(
   // 2) Berdu staff id (order attribution)
   if (q.berduStaffId) {
     const rows = await getActiveRows();
-    if (!rows) return null;
+    if (!rows) throw new Error(`active agent registry exceeds ${ACTIVE_AGENT_REGISTRY_LIMIT}; complete provider migration`);
     const hit = rows.find((r: any) => (r.berduStaffIds ?? []).includes(q.berduStaffId));
     if (hit) return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
   }
@@ -140,7 +140,7 @@ export async function resolveAgent(
     const n = normName(q.name);
     if (n.length > 0) {
       const rows = await getActiveRows();
-      if (!rows) return null;
+      if (!rows) throw new Error(`active agent registry exceeds ${ACTIVE_AGENT_REGISTRY_LIMIT}; complete provider migration`);
       const hit =
         rows.find((r: any) => normName(r.csName) === n) ??
         rows.find((r: any) => (r.nameAliases ?? []).some((a: string) => normName(a) === n)) ??
@@ -311,6 +311,7 @@ type ProviderDriverResult = {
   continuingOrganizations: number;
   failedOrganizations: string[];
   complete: boolean;
+  organizationEnumerationComplete: boolean;
   scheduledDriverContinuation: boolean;
 };
 
@@ -335,7 +336,8 @@ export const seedKeysForAllOrganizations = internalAction({
     }
     return {
       ...result,
-      complete: page.isDone,
+      complete: page.isDone && result.continuingOrganizations === 0 && result.failedOrganizations.length === 0,
+      organizationEnumerationComplete: page.isDone,
       scheduledDriverContinuation: !page.isDone,
     };
   },

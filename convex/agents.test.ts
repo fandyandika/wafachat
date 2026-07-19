@@ -457,9 +457,18 @@ test("platform provider migration schedules resumable work for every organizatio
       completedOrganizations: 0,
       continuingOrganizations: 2,
       failedOrganizations: [],
-      complete: true,
+      complete: false,
+      organizationEnumerationComplete: true,
     });
     await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const final = await t.action(internal.agents.seedKeysForAllOrganizations, {});
+    expect(final).toMatchObject({
+      completedOrganizations: 2,
+      continuingOrganizations: 0,
+      failedOrganizations: [],
+      complete: true,
+      organizationEnumerationComplete: true,
+    });
     await t.run(async (ctx: any) => {
       for (const orgId of [orgA, orgB]) {
         expect((await ctx.db.query("providerNumberBackfillRuns")
@@ -486,8 +495,10 @@ test("resolveAgent fails closed for array-based staff and alias claims above the
   }
 
   await t.run(async (ctx: any) => {
-    expect(await resolveAgent(ctx, orgId, { berduStaffId: "SPECIAL-STAFF" })).toBeNull();
-    expect(await resolveAgent(ctx, orgId, { name: "Special Alias" })).toBeNull();
+    await expect(resolveAgent(ctx, orgId, { berduStaffId: "SPECIAL-STAFF" }))
+      .rejects.toThrow(/registry exceeds 50/i);
+    await expect(resolveAgent(ctx, orgId, { name: "Special Alias" }))
+      .rejects.toThrow(/registry exceeds 50/i);
   });
 });
 

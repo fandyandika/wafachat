@@ -10,6 +10,7 @@
 
 import type * as agents from "../agents.js";
 import type * as analytics from "../analytics.js";
+import type * as analyticsBounds from "../analyticsBounds.js";
 import type * as auth from "../auth.js";
 import type * as authz from "../authz.js";
 import type * as autoFollowUp from "../autoFollowUp.js";
@@ -55,6 +56,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   agents: typeof agents;
   analytics: typeof analytics;
+  analyticsBounds: typeof analyticsBounds;
   auth: typeof auth;
   authz: typeof authz;
   autoFollowUp: typeof autoFollowUp;
