@@ -63,3 +63,12 @@
 - Removed the misleading default-active wrapper behavior and updated the historical efficiency note to name the lifecycle sweep rather than the removed API.
 - Verification: `rtk rg` audit — zero repository references; ingest core + Berdu adapter + agents + focused Task 5 suites — 76 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
 - Commit: `133f9d1` — `refactor: remove unsafe lifecycle batch cursor`.
+
+## Final P1 hardening — bounded apply and immutable scan order
+
+- Strict TDD red showed the apply mutation accepted and processed 26 IDs, silently tolerated a duplicate ID, and lost one of 30 scanned rows when an unscanned conversation's `updatedAt` moved behind the first-page cursor.
+- `processConversationIds` now rejects more than 25 IDs and rejects duplicate IDs before reading or patching any conversation. Coverage includes both rejection cases and a normal 25-ID batch that closes successfully.
+- Added `conversations.by_org_status` on `(orgId, status)`. `scanOpenBatch` now uses this index, whose remaining order is Convex's immutable creation-time order, so message-ingestion updates cannot move open rows across page cursors. The regression backdates row 30 between pages and still observes all 30 original IDs exactly once.
+- Index audit found no name conflict: the new name appears only in its conversations-schema declaration and lifecycle scanner. `rtk npx convex codegen` completed schema bundling, binding generation, and its TypeScript check without generated-file changes.
+- Verification: ingest core + Berdu adapter + agents + focused Task 5 suites — 80 passed; `rtk npx tsc --noEmit -p convex` — no errors; `rtk git diff --check` — clean.
+- Commit: `afceb3d` — `fix: harden lifecycle scan and apply batches`.
