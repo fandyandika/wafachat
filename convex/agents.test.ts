@@ -21,6 +21,19 @@ async function seedAgent(t: any, orgId: any, over: Record<string, unknown> = {})
   }));
 }
 
+async function runSeedKeysToCompletion(asAdmin: any, maxCalls = 12) {
+  let totalSeeded = 0;
+  let calls = 0;
+  let result: any;
+  do {
+    result = await asAdmin.mutation(api.agents.seedKeys, {});
+    totalSeeded += result.seeded;
+    calls++;
+  } while (!result.done && calls < maxCalls);
+  expect(result.done).toBe(true);
+  return { totalSeeded, calls };
+}
+
 test("resolveAgent: matches by phoneNumberId, berduStaffId, current csName, alias, csKey — with priority", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
@@ -123,6 +136,42 @@ test("resolveAgent: same-org scalar provider ID collisions remain unresolved", a
   });
 });
 
+test("resolveAgent: a unique active scalar stays fast and resolves in an org larger than the legacy cap", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "target", csName: "Target", key: "target",
+      nameAliases: [], berduStaffIds: [], providerNumberId: "PHONE-FAST", providerNumberIds: [],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    for (let i = 0; i < 51; i++) {
+      await ctx.db.insert("csConfigs", {
+        orgId, normalizedName: `extra-${i}`, csName: `Extra ${i}`, key: `extra-${i}`,
+        nameAliases: [], berduStaffIds: [], providerNumberIds: [],
+        orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+        isActive: true, createdAt: i + 2, updatedAt: 1,
+      });
+    }
+  });
+
+  await t.run(async (ctx: any) => {
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-FAST" }))?.csName).toBe("Target");
+  });
+});
+
+test("resolveAgent: an inactive duplicate scalar neither blocks the active scalar nor creates ambiguity", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedAgent(t, orgId, { csName: "Current", normalizedName: "current", key: "current", providerNumberId: "PHONE-ACTIVE", providerNumberIds: [] });
+  await seedAgent(t, orgId, { csName: "Retired", normalizedName: "retired", key: "retired", providerNumberId: "PHONE-ACTIVE", providerNumberIds: [], isActive: false, berduStaffIds: [] });
+
+  await t.run(async (ctx: any) => {
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-ACTIVE" }))?.csName).toBe("Current");
+  });
+});
+
 test("resolveAgent: duplicate legacy provider IDs remain unresolved", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
@@ -153,6 +202,31 @@ test("resolveAgent: bounded legacy provider lookup refuses an oversized org regi
   });
 });
 
+test("resolveAgent: inactive rows do not consume the active legacy fallback cap", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    for (let i = 0; i < 51; i++) {
+      await ctx.db.insert("csConfigs", {
+        orgId, normalizedName: `retired-${i}`, csName: `Retired ${i}`, key: `retired-${i}`,
+        nameAliases: [], berduStaffIds: [], providerNumberIds: [],
+        orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+        isActive: false, createdAt: i + 1, updatedAt: 1,
+      });
+    }
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "legacy", csName: "Legacy", key: "legacy",
+      nameAliases: [], berduStaffIds: [], providerNumberIds: ["PHONE-LEGACY-ACTIVE"],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: 100, updatedAt: 1,
+    });
+  });
+
+  await t.run(async (ctx: any) => {
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-LEGACY-ACTIVE" }))?.csName).toBe("Legacy");
+  });
+});
+
 test("resolveAgent: legacy no-key fallback returns only the requested org's matching row", async () => {
   const t = convexTest(schema);
   const orgA = await seedOrg(t);
@@ -178,10 +252,10 @@ test("seedKeys: idempotently backfills scalar provider IDs only from unambiguous
   await seedAgent(t, orgId, { csName: "Multi", normalizedName: "multi", key: "multi", nameAliases: [], berduStaffIds: [], providerNumberIds: ["PHONE-ONE", "PHONE-TWO"] });
   await seedAgent(t, orgId, { csName: "Duplicate", normalizedName: "duplicate", key: "duplicate", nameAliases: [], berduStaffIds: [], providerNumberIds: ["1197250776802755"] });
   const asAdmin = t.withIdentity(ADMIN);
-  const r1 = await asAdmin.mutation(api.agents.seedKeys, {});
-  expect(r1.seeded).toBe(2);
-  const r2 = await asAdmin.mutation(api.agents.seedKeys, {});
-  expect(r2.seeded).toBe(0);
+  const firstRun = await runSeedKeysToCompletion(asAdmin);
+  expect(firstRun.totalSeeded).toBe(2);
+  const secondRun = await runSeedKeysToCompletion(asAdmin);
+  expect(secondRun.totalSeeded).toBe(0);
   await t.run(async (ctx: any) => {
     const rows = await ctx.db.query("csConfigs").collect();
     for (const row of rows) { expect(row.key).toBeDefined(); expect(row.nameAliases).toBeDefined(); }
@@ -189,6 +263,31 @@ test("seedKeys: idempotently backfills scalar provider IDs only from unambiguous
     expect(rows.find((row: any) => row.csName === "Risma")?.providerNumberId).toBe("433364286526515");
     expect(rows.find((row: any) => row.csName === "Multi")?.providerNumberId).toBeUndefined();
     expect(rows.find((row: any) => row.csName === "Duplicate")?.providerNumberId).toBeUndefined();
+  });
+});
+
+test("seedKeys: durable scan/apply pagination advances through more than 51 active configs", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    for (let i = 0; i < 52; i++) {
+      await ctx.db.insert("csConfigs", {
+        orgId, normalizedName: `agent-${i}`, csName: `Agent ${i}`, key: `agent-${i}`,
+        nameAliases: [], berduStaffIds: [], providerNumberIds: [`PHONE-${i}`],
+        orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+        isActive: true, createdAt: i + 1, updatedAt: 1,
+      });
+    }
+  });
+  const result = await runSeedKeysToCompletion(t.withIdentity(ADMIN));
+  expect(result.calls).toBeGreaterThan(2);
+
+  await t.run(async (ctx: any) => {
+    const rows = await ctx.db.query("csConfigs")
+      .withIndex("by_org_active", (q: any) => q.eq("orgId", orgId).eq("isActive", true))
+      .collect();
+    expect(rows).toHaveLength(52);
+    expect(rows.every((row: any) => row.providerNumberId === row.providerNumberIds[0])).toBe(true);
   });
 });
 

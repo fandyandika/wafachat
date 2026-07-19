@@ -55,7 +55,8 @@ export const listOrgsInternal = internalQuery({
 
 const B1_TABLES = [
   "orders", "shippingRecaps", "messages", "conversations", "customers", "events",
-  "csConfigs", "ingestEvents", "ingestSources", "dailyRollups", "responseSamples",
+  "csConfigs", "providerNumberBackfillRuns", "providerNumberBackfillClaims",
+  "ingestEvents", "ingestSources", "dailyRollups", "responseSamples",
   "alertState", "settings", "closingRules", "orgSettings", "users",
 ] as const;
 const tableValidator = v.union(
@@ -66,6 +67,8 @@ const tableValidator = v.union(
   v.literal("customers"),
   v.literal("events"),
   v.literal("csConfigs"),
+  v.literal("providerNumberBackfillRuns"),
+  v.literal("providerNumberBackfillClaims"),
   v.literal("ingestEvents"),
   v.literal("ingestSources"),
   v.literal("dailyRollups"),

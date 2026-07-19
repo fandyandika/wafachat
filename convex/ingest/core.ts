@@ -82,9 +82,6 @@ export async function processCapturedEvent(
     if (p.direction !== "inbound" && p.direction !== "outbound") return { status: "skipped", skipReason: "invalid direction" };
     if (p.role !== "customer" && p.role !== "cs" && p.role !== "ai") return { status: "skipped", skipReason: "invalid role" };
     const sourceMessageType = p.messageType ?? "text";
-    if (sourceMessageType !== "text" && sourceMessageType !== "image" && sourceMessageType !== "template" && sourceMessageType !== "button") {
-      return { status: "skipped", skipReason: "invalid messageType" };
-    }
     const result = await appendMessageCore(ctx, {
       phone: String(p.phone), role: p.role, direction: p.direction,
       // Generic messages historically normalize to text. Keep that contract so the existing

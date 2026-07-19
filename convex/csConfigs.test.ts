@@ -103,15 +103,17 @@ test("setProviderNumberIds synchronizes scalar after a backfill and clears it fo
       .unique();
     expect(aisyah?.providerNumberId).toBe("PHONE-NEW");
   });
-  await asAdmin.mutation(api.csConfigs.setProviderNumberIds, { csName: "Aisyah", providerNumberIds: ["PHONE-SHARED"] });
+  await expect(asAdmin.mutation(api.csConfigs.setProviderNumberIds, {
+    csName: "Aisyah", providerNumberIds: ["PHONE-SHARED"],
+  })).rejects.toThrow(/providerNumberId/);
 
   await t.run(async (ctx: any) => {
     const aisyah = await ctx.db.query("csConfigs")
       .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "aisyah"))
       .unique();
-    expect(aisyah?.providerNumberIds).toEqual(["PHONE-SHARED"]);
-    expect(aisyah?.providerNumberId).toBeUndefined();
-    expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-SHARED" })).toBeNull();
+    expect(aisyah?.providerNumberIds).toEqual(["PHONE-NEW"]);
+    expect(aisyah?.providerNumberId).toBe("PHONE-NEW");
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-SHARED" }))?.csName).toBe("Risma");
   });
 });
 
@@ -131,4 +133,77 @@ test("upsert rejects a same-org scalar provider ID collision", async () => {
     csName: "Risma", providerNumberId: "PHONE-SHARED",
     orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true, isActive: true,
   })).rejects.toThrow(/providerNumberId/);
+});
+
+test("upsert scalar replacement synchronizes legacy aliases so the old ID stops resolving", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "aisyah", csName: "Aisyah", providerNumberId: "PHONE-OLD", providerNumberIds: ["PHONE-OLD"],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: 1, updatedAt: 1,
+    });
+  });
+
+  await t.withIdentity(ADMIN).mutation(api.csConfigs.upsert, {
+    csName: "Aisyah", providerNumberId: "PHONE-NEW",
+    orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true, isActive: true,
+  });
+
+  await t.run(async (ctx: any) => {
+    const row = await ctx.db.query("csConfigs")
+      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "aisyah"))
+      .unique();
+    expect(row?.providerNumberIds).toEqual(["PHONE-NEW"]);
+    expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-OLD" })).toBeNull();
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-NEW" }))?.csName).toBe("Aisyah");
+  });
+});
+
+test("upsert accepts an explicitly synchronized provider alias array", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "aisyah", csName: "Aisyah", providerNumberId: "PHONE-OLD", providerNumberIds: ["PHONE-OLD"],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: 1, updatedAt: 1,
+    });
+  });
+
+  await t.withIdentity(ADMIN).mutation(api.csConfigs.upsert, {
+    csName: "Aisyah", providerNumberId: "PHONE-NEW", providerNumberIds: ["PHONE-NEW"],
+    orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true, isActive: true,
+  });
+
+  await t.run(async (ctx: any) => {
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-NEW" }))?.csName).toBe("Aisyah");
+  });
+});
+
+test("upsert rejects activating an inactive config whose provider claim collides with an active config", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "current", csName: "Current", providerNumberId: "PHONE-SHARED", providerNumberIds: ["PHONE-SHARED"],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "retired", csName: "Retired", providerNumberId: "PHONE-SHARED", providerNumberIds: ["PHONE-SHARED"],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: false, createdAt: 2, updatedAt: 1,
+    });
+  });
+
+  await expect(t.withIdentity(ADMIN).mutation(api.csConfigs.upsert, {
+    csName: "Retired",
+    orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true, isActive: true,
+  })).rejects.toThrow(/providerNumberId/);
+
+  await t.run(async (ctx: any) => {
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-SHARED" }))?.csName).toBe("Current");
+  });
 });

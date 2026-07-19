@@ -130,6 +130,7 @@ export const upsert = mutation({
     csPhone: v.optional(v.string()),
     provider: v.optional(v.string()),
     providerNumberId: v.optional(v.string()),
+    providerNumberIds: v.optional(v.array(v.string())),
     orderAutomationEnabled: v.boolean(),
     aiAssistantEnabled: v.boolean(),
     reportingEnabled: v.boolean(),
@@ -144,13 +145,35 @@ export const upsert = mutation({
       .query("csConfigs")
       .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
-    if (
-      args.providerNumberId &&
-      !await canAssignProviderNumberId(ctx, orgId, args.providerNumberId, existing?._id)
-    ) {
-      throw new Error(`providerNumberId is already assigned or cannot be proven unique: ${args.providerNumberId}`);
+    const scalarExplicit = Object.prototype.hasOwnProperty.call(args, "providerNumberId");
+    const aliasesExplicit = Object.prototype.hasOwnProperty.call(args, "providerNumberIds");
+    let providerNumberId = scalarExplicit ? args.providerNumberId : existing?.providerNumberId;
+    let providerNumberIds = aliasesExplicit ? args.providerNumberIds : existing?.providerNumberIds;
+    if (aliasesExplicit) {
+      const candidate = providerNumberIds?.length === 1 ? providerNumberIds[0] : undefined;
+      if (scalarExplicit && args.providerNumberId !== candidate) {
+        throw new Error("providerNumberId must match a singleton providerNumberIds array");
+      }
+      providerNumberId = candidate;
+    } else if (scalarExplicit) {
+      providerNumberIds = providerNumberId ? [providerNumberId] : [];
     }
-    const payload = { ...args, normalizedName, updatedAt: now };
+    if (args.isActive) {
+      for (const claim of new Set([providerNumberId, ...(providerNumberIds ?? [])])) {
+        if (claim && !await canAssignProviderNumberId(ctx, orgId, claim, existing?._id)) {
+          throw new Error(`providerNumberId is already assigned or cannot be proven unique: ${claim}`);
+        }
+      }
+    }
+    const { providerNumberId: _scalar, providerNumberIds: _aliases, ...rest } = args;
+    const shouldWriteProviderIds = scalarExplicit || aliasesExplicit || Boolean(existing);
+    const payload = {
+      ...rest,
+      normalizedName,
+      updatedAt: now,
+      providerNumberId: shouldWriteProviderIds ? providerNumberId : undefined,
+      providerNumberIds: shouldWriteProviderIds ? providerNumberIds : undefined,
+    };
 
     if (existing) {
       await ctx.db.patch(existing._id, payload);
@@ -176,9 +199,14 @@ export const setProviderNumberIds = mutation({
       .unique();
     if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
     const candidate = args.providerNumberIds.length === 1 ? args.providerNumberIds[0] : undefined;
-    const providerNumberId = candidate && await canAssignProviderNumberId(ctx, orgId, candidate, existing._id)
-      ? candidate
-      : undefined;
+    if (existing.isActive) {
+      for (const claim of new Set(args.providerNumberIds)) {
+        if (claim && !await canAssignProviderNumberId(ctx, orgId, claim, existing._id)) {
+          throw new Error(`providerNumberId is already assigned or cannot be proven unique: ${claim}`);
+        }
+      }
+    }
+    const providerNumberId = candidate;
     await ctx.db.patch(existing._id, { providerNumberIds: args.providerNumberIds, providerNumberId, updatedAt: Date.now() });
     return { success: true, csName: args.csName, providerNumberIds: args.providerNumberIds };
   },
