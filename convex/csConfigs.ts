@@ -3,7 +3,7 @@ import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizeCsName, csKey } from "./lib";
-import { canAssignProviderNumberId } from "./agents";
+import { canAssignProviderNumberId, syncProviderNumberClaims } from "./agents";
 
 export type CsFeatureConfig = {
   csName: string;
@@ -56,6 +56,14 @@ function defaultForName(csName: string): CsFeatureConfig {
     reportingEnabled: true,
     isActive: true,
   };
+}
+
+function activeProviderClaims(isActive: boolean, providerNumberId?: string, providerNumberIds?: string[]): Set<string> {
+  return new Set(isActive ? [providerNumberId, ...(providerNumberIds ?? [])].filter((id): id is string => Boolean(id)) : []);
+}
+
+function sameClaims(left: Set<string>, right: Set<string>): boolean {
+  return left.size === right.size && Array.from(left).every((claim) => right.has(claim));
 }
 
 export async function getCsFeatureConfig(ctx: { db: any }, orgId: Id<"organizations">, csName: string): Promise<CsFeatureConfig> {
@@ -158,9 +166,14 @@ export const upsert = mutation({
     } else if (scalarExplicit) {
       providerNumberIds = providerNumberId ? [providerNumberId] : [];
     }
-    if (args.isActive) {
-      for (const claim of new Set([providerNumberId, ...(providerNumberIds ?? [])])) {
-        if (claim && !await canAssignProviderNumberId(ctx, orgId, claim, existing?._id)) {
+    const previousClaims = activeProviderClaims(
+      existing?.isActive ?? false, existing?.providerNumberId, existing?.providerNumberIds,
+    );
+    const nextClaims = activeProviderClaims(args.isActive, providerNumberId, providerNumberIds);
+    const ownershipChanged = !sameClaims(previousClaims, nextClaims);
+    if (ownershipChanged) {
+      for (const claim of nextClaims) {
+        if (!await canAssignProviderNumberId(ctx, orgId, claim, existing?._id)) {
           throw new Error(`providerNumberId is already assigned or cannot be proven unique: ${claim}`);
         }
       }
@@ -177,10 +190,16 @@ export const upsert = mutation({
 
     if (existing) {
       await ctx.db.patch(existing._id, payload);
+      if (ownershipChanged) {
+        await syncProviderNumberClaims(ctx, orgId, existing._id, args.isActive, providerNumberId, providerNumberIds);
+      }
       return { success: true, action: "updated", csName: args.csName };
     }
 
-    await ctx.db.insert("csConfigs", { ...payload, createdAt: now, orgId });
+    const configId = await ctx.db.insert("csConfigs", { ...payload, createdAt: now, orgId });
+    if (ownershipChanged) {
+      await syncProviderNumberClaims(ctx, orgId, configId, args.isActive, providerNumberId, providerNumberIds);
+    }
     return { success: true, action: "inserted", csName: args.csName };
   },
 });
@@ -199,15 +218,21 @@ export const setProviderNumberIds = mutation({
       .unique();
     if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
     const candidate = args.providerNumberIds.length === 1 ? args.providerNumberIds[0] : undefined;
-    if (existing.isActive) {
-      for (const claim of new Set(args.providerNumberIds)) {
-        if (claim && !await canAssignProviderNumberId(ctx, orgId, claim, existing._id)) {
+    const previousClaims = activeProviderClaims(existing.isActive, existing.providerNumberId, existing.providerNumberIds);
+    const nextClaims = activeProviderClaims(existing.isActive, candidate, args.providerNumberIds);
+    const ownershipChanged = !sameClaims(previousClaims, nextClaims);
+    if (ownershipChanged) {
+      for (const claim of nextClaims) {
+        if (!await canAssignProviderNumberId(ctx, orgId, claim, existing._id)) {
           throw new Error(`providerNumberId is already assigned or cannot be proven unique: ${claim}`);
         }
       }
     }
     const providerNumberId = candidate;
     await ctx.db.patch(existing._id, { providerNumberIds: args.providerNumberIds, providerNumberId, updatedAt: Date.now() });
+    if (ownershipChanged) {
+      await syncProviderNumberClaims(ctx, orgId, existing._id, existing.isActive, providerNumberId, args.providerNumberIds);
+    }
     return { success: true, csName: args.csName, providerNumberIds: args.providerNumberIds };
   },
 });
@@ -272,6 +297,7 @@ export const deleteCsConfig = mutation({
       .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizeCsName(args.csName)))
       .unique();
     if (!stored) return { ok: false as const, error: "tidak ada config tersimpan (mungkin CS bawaan — pakai toggle Aktif)" };
+    await syncProviderNumberClaims(ctx, orgId, stored._id, false);
     await ctx.db.delete(stored._id);
     return { ok: true as const };
   },

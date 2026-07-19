@@ -161,6 +161,24 @@ test("resolveAgent: same-org scalar provider ID collisions remain unresolved", a
   });
 });
 
+test("resolveAgent: an active scalar cannot win over another active legacy-array claimant", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedAgent(t, orgId, {
+    csName: "Scalar", normalizedName: "scalar", key: "scalar",
+    providerNumberId: "PHONE-CROSS-SHAPE", providerNumberIds: ["PHONE-CROSS-SHAPE"],
+  });
+  await seedAgent(t, orgId, {
+    csName: "Legacy", normalizedName: "legacy", key: "legacy", berduStaffIds: [],
+    providerNumberId: undefined, providerNumberIds: ["PHONE-CROSS-SHAPE"],
+  });
+  await runSeedKeysToCompletion(t.withIdentity(ADMIN));
+
+  await t.run(async (ctx: any) => {
+    expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-CROSS-SHAPE" })).toBeNull();
+  });
+});
+
 test("resolveAgent: a unique active scalar stays fast and resolves in an org larger than the legacy cap", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
@@ -181,8 +199,53 @@ test("resolveAgent: a unique active scalar stays fast and resolves in an org lar
     }
   });
 
+  await runSeedKeysToCompletion(t.withIdentity(ADMIN));
+
   await t.run(async (ctx: any) => {
     expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-FAST" }))?.csName).toBe("Target");
+  });
+});
+
+test("resolveAgent: completed indexed claims resolve every unique alias in a large org", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedAgent(t, orgId, {
+    csName: "Multi", normalizedName: "multi", key: "multi", berduStaffIds: [],
+    providerNumberId: undefined, providerNumberIds: ["PHONE-MULTI-A", "PHONE-MULTI-B"],
+  });
+  for (let i = 0; i < 51; i++) {
+    await seedAgent(t, orgId, {
+      csName: `Extra ${i}`, normalizedName: `extra-${i}`, key: `extra-${i}`,
+      providerNumberId: undefined, providerNumberIds: [], berduStaffIds: [], createdAt: i + 2,
+    });
+  }
+  await runSeedKeysToCompletion(t.withIdentity(ADMIN));
+
+  await t.run(async (ctx: any) => {
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-MULTI-A" }))?.csName).toBe("Multi");
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-MULTI-B" }))?.csName).toBe("Multi");
+  });
+});
+
+test("resolveAgent: an incomplete claim migration stays fail-closed above the legacy proof cap", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedAgent(t, orgId, {
+    csName: "Target", normalizedName: "target", key: "target",
+    providerNumberId: "PHONE-INCOMPLETE", providerNumberIds: ["PHONE-INCOMPLETE"],
+  });
+  for (let i = 0; i < 51; i++) {
+    await seedAgent(t, orgId, {
+      csName: `Extra ${i}`, normalizedName: `extra-${i}`, key: `extra-${i}`,
+      providerNumberId: undefined, providerNumberIds: [], berduStaffIds: [], createdAt: i + 2,
+    });
+  }
+  await t.withIdentity(ADMIN).mutation(api.agents.seedKeys, {});
+
+  await t.run(async (ctx: any) => {
+    expect(await resolveAgent(ctx, orgId, {
+      phoneNumberId: "PHONE-INCOMPLETE", berduStaffId: "B-1apQSy", name: "Target",
+    })).toBeNull();
   });
 });
 
@@ -294,6 +357,12 @@ test("seedKeys: idempotently backfills scalar provider IDs only from unambiguous
     expect(rows.find((row: any) => row.csName === "Risma")?.providerNumberId).toBe("433364286526515");
     expect(rows.find((row: any) => row.csName === "Multi")?.providerNumberId).toBeUndefined();
     expect(rows.find((row: any) => row.csName === "Duplicate")?.providerNumberId).toBeUndefined();
+    const run = await ctx.db.query("providerNumberBackfillRuns")
+      .withIndex("by_org", (q: any) => q.eq("orgId", orgId)).unique();
+    expect(run?.phase).toBe("complete");
+    const claims = await ctx.db.query("providerNumberBackfillClaims")
+      .withIndex("by_org_run", (q: any) => q.eq("orgId", orgId).eq("runId", run!._id)).collect();
+    expect(claims.length).toBeGreaterThan(0);
   });
 });
 

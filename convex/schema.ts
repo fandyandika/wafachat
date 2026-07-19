@@ -103,6 +103,7 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_org", ["orgId"])
     .index("by_org_key", ["orgId", "key"])
     .index("by_org_normalizedName", ["orgId", "normalizedName"])
     .index("by_org_providerNumberId", ["orgId", "providerNumberId"])
@@ -110,7 +111,8 @@ export default defineSchema({
 
   providerNumberBackfillRuns: defineTable({
     orgId: v.id("organizations"),
-    phase: v.union(v.literal("scan"), v.literal("apply"), v.literal("cleanup")),
+    phase: v.union(v.literal("scan"), v.literal("apply"), v.literal("cleanup"), v.literal("complete")),
+    version: v.optional(v.number()),
     cursor: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -124,7 +126,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_org_run_providerNumberId", ["orgId", "runId", "providerNumberId"])
-    .index("by_org_run", ["orgId", "runId"]),
+    .index("by_org_run", ["orgId", "runId"])
+    .index("by_org_run_agent", ["orgId", "runId", "agentId"]),
 
   // ── Ingestion API (Fase 1) ────────────────────────────────────────────────
   // Capture-first: every inbound webhook is stored raw BEFORE processing, so a

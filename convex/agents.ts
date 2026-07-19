@@ -17,12 +17,26 @@ export type ResolvedAgent = { key: string; csName: string; agentId: Id<"csConfig
 
 const normName = (s: string) => s.trim().toLowerCase();
 export const PROVIDER_NUMBER_ID_REGISTRY_LIMIT = 50;
+const PROVIDER_CLAIM_VERSION = 2;
+const MAX_PROVIDER_IDS_PER_AGENT = 100;
 
-async function getActiveScalarMatches(ctx: { db: any }, orgId: Id<"organizations">, providerNumberId: string) {
-  return ctx.db
-    .query("csConfigs")
-    .withIndex("by_org_providerNumberId", (q: any) => q.eq("orgId", orgId).eq("providerNumberId", providerNumberId))
-    .filter((q: any) => q.eq(q.field("isActive"), true))
+function providerClaims(providerNumberId?: string, providerNumberIds?: string[]): string[] {
+  return Array.from(new Set([providerNumberId, ...(providerNumberIds ?? [])].filter((id): id is string => Boolean(id))));
+}
+
+async function getClaimRun(ctx: { db: any }, orgId: Id<"organizations">) {
+  return ctx.db.query("providerNumberBackfillRuns")
+    .withIndex("by_org", (q: any) => q.eq("orgId", orgId)).unique();
+}
+
+function claimRunIsComplete(run: any): boolean {
+  return run?.version === PROVIDER_CLAIM_VERSION && run.phase === "complete";
+}
+
+async function getIndexedClaims(ctx: { db: any }, orgId: Id<"organizations">, runId: Id<"providerNumberBackfillRuns">, providerNumberId: string) {
+  return ctx.db.query("providerNumberBackfillClaims")
+    .withIndex("by_org_run_providerNumberId", (q: any) =>
+      q.eq("orgId", orgId).eq("runId", runId).eq("providerNumberId", providerNumberId))
     .take(2);
 }
 
@@ -34,15 +48,39 @@ async function getBoundedActiveLegacyRegistry(ctx: { db: any }, orgId: Id<"organ
   return rows.length > PROVIDER_NUMBER_ID_REGISTRY_LIMIT ? null : rows;
 }
 
-/** A scalar write is safe only when the bounded tenant registry proves no other row claims it. */
+/** Validate an active ownership claim through the durable index, or a bounded pre-migration proof. */
 export async function canAssignProviderNumberId(
   ctx: { db: any }, orgId: Id<"organizations">, providerNumberId: string, exceptId?: Id<"csConfigs">,
 ): Promise<boolean> {
-  const scalarMatches = await getActiveScalarMatches(ctx, orgId, providerNumberId);
-  if (scalarMatches.some((row: any) => row._id !== exceptId)) return false;
+  const run = await getClaimRun(ctx, orgId);
+  if (claimRunIsComplete(run)) {
+    const claims = await getIndexedClaims(ctx, orgId, run._id, providerNumberId);
+    return !claims.some((claim: any) => claim.agentId !== exceptId);
+  }
   const rows = await getBoundedActiveLegacyRegistry(ctx, orgId);
   return rows !== null && !rows.some((row: any) =>
-    row._id !== exceptId && (row.providerNumberIds ?? []).includes(providerNumberId));
+    row._id !== exceptId && providerClaims(row.providerNumberId, row.providerNumberIds).includes(providerNumberId));
+}
+
+/** Keep durable active claims synchronized in the same transaction as the csConfig write. */
+export async function syncProviderNumberClaims(
+  ctx: { db: any }, orgId: Id<"organizations">, agentId: Id<"csConfigs">,
+  isActive: boolean, providerNumberId?: string, providerNumberIds?: string[],
+): Promise<void> {
+  const run = await getClaimRun(ctx, orgId);
+  if (!run || run.version !== PROVIDER_CLAIM_VERSION) return;
+  const existing = await ctx.db.query("providerNumberBackfillClaims")
+    .withIndex("by_org_run_agent", (q: any) => q.eq("orgId", orgId).eq("runId", run._id).eq("agentId", agentId))
+    .take(MAX_PROVIDER_IDS_PER_AGENT + 1);
+  if (existing.length > MAX_PROVIDER_IDS_PER_AGENT) throw new Error("too many existing provider claims for agent");
+  const desired = isActive ? providerClaims(providerNumberId, providerNumberIds) : [];
+  if (desired.length > MAX_PROVIDER_IDS_PER_AGENT) throw new Error(`providerNumberIds exceeds ${MAX_PROVIDER_IDS_PER_AGENT}`);
+  for (const claim of existing) await ctx.db.delete(claim._id);
+  for (const claim of desired) {
+    await ctx.db.insert("providerNumberBackfillClaims", {
+      orgId, runId: run._id, providerNumberId: claim, agentId, createdAt: Date.now(),
+    });
+  }
 }
 
 export async function resolveAgent(
@@ -61,24 +99,29 @@ export async function resolveAgent(
   const keyOf = (r: any): string => r.key ?? csKey(r.csName); // pre-seed fallback
   // 1) provider phone_number_id (KirimDev message attribution)
   if (q.phoneNumberId) {
-    // Fast path: exact tenant+provider index, active-only. A unique scalar resolves without
-    // touching the org registry; inactive stale rows do not count as claimants.
-    const scalarMatches = await getActiveScalarMatches(ctx, orgId, q.phoneNumberId);
-    if (scalarMatches.length > 1) return null;
-    if (scalarMatches.length === 1) {
-      const hit = scalarMatches[0];
-      return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
+    const run = await getClaimRun(ctx, orgId);
+    if (claimRunIsComplete(run)) {
+      const claims = await getIndexedClaims(ctx, orgId, run._id, q.phoneNumberId);
+      if (claims.length > 1) return null;
+      if (claims.length === 1) {
+        const hit = await ctx.db.get(claims[0].agentId);
+        if (!hit || !hit.isActive || !providerClaims(hit.providerNumberId, hit.providerNumberIds).includes(q.phoneNumberId)) {
+          return null;
+        }
+        return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
+      }
+    } else {
+      // Until the durable claim migration completes, prove the whole active registry is bounded.
+      const registry = await getBoundedActiveLegacyRegistry(ctx, orgId);
+      if (!registry) return null;
+      const matches = registry.filter((row: any) =>
+        providerClaims(row.providerNumberId, row.providerNumberIds).includes(q.phoneNumberId!));
+      if (matches.length === 1) {
+        const hit = matches[0];
+        return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
+      }
+      if (matches.length > 1) return null;
     }
-
-    // Migration-only fallback: only zero active scalar matches reach this bounded active scan.
-    const registry = await getBoundedActiveLegacyRegistry(ctx, orgId);
-    if (!registry) return null;
-    const matches = registry.filter((row: any) => (row.providerNumberIds ?? []).includes(q.phoneNumberId));
-    if (matches.length === 1) {
-      const hit = matches[0];
-      return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
-    }
-    if (matches.length > 1) return null;
   }
   // 2) Berdu staff id (order attribution)
   if (q.berduStaffId) {
@@ -119,40 +162,49 @@ export async function canonicalizeCs(
 
 const SEED_BATCH = 50;
 
-// Durable three-phase migration. Repeated calls resume the saved paginator cursor: scan builds
-// active legacy claims, apply point-proves uniqueness and writes scalars, cleanup removes claims.
+// Durable claim migration. Cleanup restarts old/transient runs, scan synchronizes every active
+// scalar+alias claim, apply backfills safe singleton scalars, and complete remains as proof state.
 export const seedKeys = mutation({
   args: {},
   handler: async (ctx) => {
     const { orgId } = await requireAdminOrg(ctx, "agents.seedKeys");
-    let run = await ctx.db.query("providerNumberBackfillRuns")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+    let run = await getClaimRun(ctx, orgId);
     if (!run) {
       const now = Date.now();
       const runId = await ctx.db.insert("providerNumberBackfillRuns", {
-        orgId, phase: "scan", createdAt: now, updatedAt: now,
+        orgId, phase: "cleanup", version: PROVIDER_CLAIM_VERSION, createdAt: now, updatedAt: now,
       });
       run = await ctx.db.get(runId);
     }
     if (!run) throw new Error("provider backfill run creation failed");
+    if (run.version !== PROVIDER_CLAIM_VERSION) {
+      await ctx.db.patch(run._id, {
+        phase: "cleanup", version: PROVIDER_CLAIM_VERSION, cursor: undefined, updatedAt: Date.now(),
+      });
+      run = await ctx.db.get(run._id);
+      if (!run) throw new Error("provider backfill run upgrade failed");
+    }
+
+    if (run.phase === "complete") return { seeded: 0, phase: "complete" as const, done: true };
 
     if (run.phase === "cleanup") {
       const claims = await ctx.db.query("providerNumberBackfillClaims")
         .withIndex("by_org_run", (q) => q.eq("orgId", orgId).eq("runId", run!._id))
         .take(SEED_BATCH);
       for (const claim of claims) await ctx.db.delete(claim._id);
-      const done = claims.length < SEED_BATCH;
-      if (done) await ctx.db.delete(run._id);
-      return { seeded: 0, phase: "cleanup" as const, done };
+      if (claims.length < SEED_BATCH) {
+        await ctx.db.patch(run._id, { phase: "scan", cursor: undefined, updatedAt: Date.now() });
+        return { seeded: 0, phase: "scan" as const, done: false };
+      }
+      return { seeded: 0, phase: "cleanup" as const, done: false };
     }
 
-    const activeOnly = run.phase === "apply";
-    const page = await paginator(ctx.db, schema)
-      .query("csConfigs")
-      .withIndex("by_org_active", (q) => activeOnly
-        ? q.eq("orgId", orgId).eq("isActive", true)
-        : q.eq("orgId", orgId))
-      .paginate({ cursor: run.cursor ?? null, numItems: SEED_BATCH });
+    const configs = paginator(ctx.db, schema).query("csConfigs");
+    const page = run.phase === "apply"
+      ? await configs.withIndex("by_org_active", (q) => q.eq("orgId", orgId).eq("isActive", true))
+        .paginate({ cursor: run.cursor ?? null, numItems: SEED_BATCH })
+      : await configs.withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .paginate({ cursor: run.cursor ?? null, numItems: SEED_BATCH });
     let seeded = 0;
 
     if (run.phase === "scan") {
@@ -164,14 +216,9 @@ export const seedKeys = mutation({
           await ctx.db.patch(row._id, { ...patch, updatedAt: Date.now() });
           seeded++;
         }
-        if (row.isActive) {
-          for (const providerNumberId of new Set(row.providerNumberIds ?? [])) {
-            if (!providerNumberId) continue;
-            await ctx.db.insert("providerNumberBackfillClaims", {
-              orgId, runId: run._id, providerNumberId, agentId: row._id, createdAt: Date.now(),
-            });
-          }
-        }
+        await syncProviderNumberClaims(
+          ctx, orgId, row._id, row.isActive, row.providerNumberId, row.providerNumberIds,
+        );
       }
       await ctx.db.patch(run._id, page.isDone
         ? { phase: "apply", cursor: undefined, updatedAt: Date.now() }
@@ -188,16 +235,15 @@ export const seedKeys = mutation({
         .withIndex("by_org_run_providerNumberId", (q) =>
           q.eq("orgId", orgId).eq("runId", run!._id).eq("providerNumberId", candidate))
         .take(2);
-      const scalarMatches = await getActiveScalarMatches(ctx, orgId, candidate);
-      if (claims.length === 1 && claims[0].agentId === row._id && scalarMatches.length === 0) {
+      if (claims.length === 1 && claims[0].agentId === row._id) {
         await ctx.db.patch(row._id, { providerNumberId: candidate, updatedAt: Date.now() });
         seeded++;
       }
     }
     await ctx.db.patch(run._id, page.isDone
-      ? { phase: "cleanup", cursor: undefined, updatedAt: Date.now() }
+      ? { phase: "complete", cursor: undefined, updatedAt: Date.now() }
       : { cursor: page.continueCursor, updatedAt: Date.now() });
-    return { seeded, phase: page.isDone ? "cleanup" as const : "apply" as const, done: false };
+    return { seeded, phase: page.isDone ? "complete" as const : "apply" as const, done: page.isDone };
   },
 });
 
