@@ -2,7 +2,7 @@ import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import schema from "../schema";
 import { internal } from "../_generated/api";
-import { shouldAlert } from "./monitor";
+import { runHealthChecksByOrg, shouldAlert } from "./monitor";
 
 // 2026-07-08 10:00 WIB == 03:00 UTC
 const WORK_HOURS = Date.UTC(2026, 6, 8, 3, 0, 0);
@@ -31,6 +31,25 @@ describe("shouldAlert (pure)", () => {
   });
 });
 
+describe("per-organization health loop", () => {
+  test("logs a failed organization and continues with later organizations", async () => {
+    const visited: string[] = [];
+    const failures: Array<{ slug: string; message: string }> = [];
+
+    await runHealthChecksByOrg(
+      [{ name: "Org A", slug: "org-a" }, { name: "Org B", slug: "org-b" }],
+      async (org) => {
+        visited.push(org.slug);
+        if (org.slug === "org-a") throw new Error("snapshot unavailable");
+      },
+      (org, error) => failures.push({ slug: org.slug, message: (error as Error).message }),
+    );
+
+    expect(visited).toEqual(["org-a", "org-b"]);
+    expect(failures).toEqual([{ slug: "org-a", message: "snapshot unavailable" }]);
+  });
+});
+
 describe("health snapshot + cooldown", () => {
   test("snapshot isolates each organization and finds message events past unrelated kinds", async () => {
     const t = convexTest(schema);
@@ -38,8 +57,6 @@ describe("health snapshot + cooldown", () => {
       t.run((ctx: any) => ctx.db.insert("organizations", { slug: "org-a", name: "Org A", createdAt: 1, updatedAt: 1 })),
       t.run((ctx: any) => ctx.db.insert("organizations", { slug: "org-b", name: "Org B", createdAt: 1, updatedAt: 1 })),
     ]) as any[];
-    const nowMs = Date.now();
-
     const processedMessage = await t.mutation(internal.ingest.events.captureEvent, {
       orgId: orgA, sourceKey: "a", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true,
     });
@@ -64,6 +81,12 @@ describe("health snapshot + cooldown", () => {
       orgId: orgB, sourceKey: "b", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true,
     });
     await t.mutation(internal.ingest.events.markFailed, { eventId: orgBFailure, error: "b" });
+    const nowMs = Date.now();
+    const futureFailure = await t.mutation(internal.ingest.events.captureEvent, {
+      orgId: orgA, sourceKey: "a", kind: "message.event", rawHeaders: "{}", rawBody: "{}", signatureOk: true,
+    });
+    await t.mutation(internal.ingest.events.markFailed, { eventId: futureFailure, error: "future" });
+    await t.run((ctx: any) => ctx.db.patch(futureFailure, { receivedAt: nowMs + 60_000 }));
 
     const [snapA, snapB] = await Promise.all([
       t.query(internal.ingest.monitor.getHealthSnapshot, { orgId: orgA, nowMs }),

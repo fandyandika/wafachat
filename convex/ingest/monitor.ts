@@ -23,6 +23,24 @@ export function shouldAlert(snap: HealthSnapshot, nowMs: number) {
   };
 }
 
+export type HealthOrg = { name: string; slug: string };
+
+export async function runHealthChecksByOrg<T extends HealthOrg>(
+  orgs: readonly T[],
+  checkOrg: (org: T) => Promise<void>,
+  reportFailure: (org: T, error: unknown) => void = (org, error) => {
+    console.error(`[ingest-monitor] health check failed for ${org.name} (${org.slug}):`, error);
+  },
+) {
+  for (const org of orgs) {
+    try {
+      await checkOrg(org);
+    } catch (error) {
+      reportFailure(org, error);
+    }
+  }
+}
+
 export const getHealthSnapshot = internalQuery({
   args: { orgId: v.id("organizations"), nowMs: v.number() },
   handler: async (ctx, args): Promise<HealthSnapshot> => {
@@ -35,7 +53,8 @@ export const getHealthSnapshot = internalQuery({
     const failed = await ctx.db
       .query("ingestEvents")
       .withIndex("by_org_status_receivedAt", (q) =>
-        q.eq("orgId", args.orgId).eq("status", "failed").gte("receivedAt", args.nowMs - SPIKE_WINDOW_MS))
+        q.eq("orgId", args.orgId).eq("status", "failed")
+          .gte("receivedAt", args.nowMs - SPIKE_WINDOW_MS).lte("receivedAt", args.nowMs))
       .collect();
     return {
       lastProcessedMessageAt: lastMsg?.processedAt ?? lastMsg?.receivedAt ?? null,
@@ -78,7 +97,7 @@ export const checkHealth = internalAction({
   handler: async (ctx) => {
     const nowMs = Date.now();
     const orgs = await ctx.runQuery(internal.orgs.listOrgsInternal, {});
-    for (const org of orgs) {
+    await runHealthChecksByOrg(orgs, async (org) => {
       const snap = await ctx.runQuery(internal.ingest.monitor.getHealthSnapshot, { orgId: org._id, nowMs });
       const alerts = shouldAlert(snap, nowMs);
       const orgLabel = `${org.name} (${org.slug})`;
@@ -106,6 +125,6 @@ export const checkHealth = internalAction({
           );
         }
       }
-    }
+    });
   },
 });
