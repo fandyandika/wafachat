@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "../schema";
 import { internal } from "../_generated/api";
+import { MAX_UNRESOLVED_COUNTERS } from "./reconcileState";
 
 async function seedOrg(t: any) {
   return t.run((ctx: any) =>
@@ -33,6 +34,18 @@ async function insertOrder(t: any, orgId: any, counter: number) {
       source: "berdu" as const,
       aiEligible: false,
       createdAt: 1,
+      updatedAt: 1,
+    }),
+  );
+}
+
+async function seedState(t: any, orgId: any, nextCounter: number, unresolvedCounters: number[]) {
+  await t.run((ctx: any) =>
+    ctx.db.insert("reconcileStates", {
+      orgId,
+      datePrefix: "260719",
+      nextCounter,
+      unresolvedCounters,
       updatedAt: 1,
     }),
   );
@@ -92,4 +105,56 @@ test("prepareReconcileRun advances through new tails and heals a late order", as
       .unique(),
   );
   expect(state?.unresolvedCounters).toEqual([]);
+});
+
+test("bootstrap stops the cursor at the first gap that does not fit in durable state", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await insertOrder(t, orgId, 1);
+  await insertOrder(t, orgId, 1_001);
+
+  const run = await t.query(internal.ingest.reconcileState.prepareReconcileRun, {
+    orgId,
+    datePrefix: "260719",
+  });
+
+  expect(run.gaps).toEqual(Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 2));
+  expect(run.nextCounter).toBe(MAX_UNRESOLVED_COUNTERS + 2);
+});
+
+test("incremental sparse tail stops before gaps beyond remaining durable capacity", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedState(t, orgId, 1, []);
+  await insertOrder(t, orgId, 1_001);
+
+  const run = await t.query(internal.ingest.reconcileState.prepareReconcileRun, {
+    orgId,
+    datePrefix: "260719",
+  });
+
+  expect(run.gaps).toEqual(Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 1));
+  expect(run.nextCounter).toBe(MAX_UNRESOLVED_COUNTERS + 1);
+});
+
+test("a full unresolved set only advances after a healed gap makes room", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedState(t, orgId, MAX_UNRESOLVED_COUNTERS + 1, Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 1));
+  await insertOrder(t, orgId, 1_001);
+
+  const blocked = await t.query(internal.ingest.reconcileState.prepareReconcileRun, {
+    orgId,
+    datePrefix: "260719",
+  });
+  expect(blocked.gaps).toEqual(Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 1));
+  expect(blocked.nextCounter).toBe(MAX_UNRESOLVED_COUNTERS + 1);
+
+  await insertOrder(t, orgId, 1);
+  const progressed = await t.query(internal.ingest.reconcileState.prepareReconcileRun, {
+    orgId,
+    datePrefix: "260719",
+  });
+  expect(progressed.gaps).toEqual(Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 2));
+  expect(progressed.nextCounter).toBe(MAX_UNRESOLVED_COUNTERS + 2);
 });
