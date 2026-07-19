@@ -158,3 +158,30 @@ test("a full unresolved set only advances after a healed gap makes room", async 
   expect(progressed.gaps).toEqual(Array.from({ length: MAX_UNRESOLVED_COUNTERS }, (_, i) => i + 2));
   expect(progressed.nextCounter).toBe(MAX_UNRESOLVED_COUNTERS + 2);
 });
+
+test("commit retains an unparseable fetched gap until its order is actually present", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+
+  const committed = await t.mutation(internal.ingest.reconcileState.commitReconcileRun, {
+    orgId,
+    datePrefix: "260719",
+    nextCounter: 4,
+    unresolvedCounters: [3],
+  });
+  expect(committed.unresolvedCounters).toEqual([3]);
+
+  const absent = await t.run((ctx: any) =>
+    ctx.db
+      .query("orders")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "O-260719000003"))
+      .unique(),
+  );
+  expect(absent).toBeNull();
+
+  const retry = await t.query(internal.ingest.reconcileState.prepareReconcileRun, {
+    orgId,
+    datePrefix: "260719",
+  });
+  expect(retry).toEqual({ gaps: [3], nextCounter: 4 });
+});

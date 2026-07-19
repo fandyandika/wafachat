@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildBerduAuth, computeGaps, wibDatePrefix } from "./reconciler";
+import { buildBerduAuth, computeGaps, gapsPendingDatabaseVerification, wibDatePrefix } from "./reconciler";
 import { hmacBase64 } from "./signature";
 
 describe("computeGaps", () => {
@@ -24,5 +24,14 @@ describe("buildBerduAuth", () => {
     const { authHeader } = await buildBerduAuth("app1", "sec1", "key1", 1783442989);
     const expectedSig = await hmacBase64("key1", "app1:1783442989:sec1");
     expect(authHeader).toBe(`app1.1783442989.${expectedSig}`);
+  });
+});
+
+describe("gapsPendingDatabaseVerification", () => {
+  test("keeps a non-throwing skipped process result pending for the commit lookup", () => {
+    const processOutcome = { status: "skipped", reason: "unparseable order detail" };
+
+    expect(processOutcome.status).toBe("skipped");
+    expect(gapsPendingDatabaseVerification([3])).toEqual([3]);
   });
 });

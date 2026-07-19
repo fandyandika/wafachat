@@ -19,6 +19,12 @@ export function computeGaps(counters: number[], min: number | null, max: number 
   return gaps;
 }
 
+// Processing can return `{ status: "skipped" }` without throwing. Only the
+// commit mutation's exact `(orgId, orderId)` lookup may clear a requested gap.
+export function gapsPendingDatabaseVerification(gaps: Iterable<number>): number[] {
+  return [...new Set(gaps)].sort((a, b) => a - b);
+}
+
 export async function buildBerduAuth(appId: string, appSecret: string, hmacKey: string, nowSec: number) {
   const signature = await hmacBase64(hmacKey, `${appId}:${nowSec}:${appSecret}`);
   return { authHeader: `${appId}.${nowSec}.${signature}` };
@@ -57,8 +63,7 @@ export const runReconcile = internalAction({
     if (!orgId) return;
     const datePrefix = wibDatePrefix(Date.now());
     const run = await ctx.runQuery(internal.ingest.reconcileState.prepareReconcileRun, { datePrefix, orgId });
-    const unresolvedCounters = new Set(run.gaps);
-    let healed = 0;
+    const unresolvedCounters = gapsPendingDatabaseVerification(run.gaps);
     for (const c of run.gaps.slice(0, 50)) { // external detail-fetch cap per cron run
       let eventId: Id<"ingestEvents"> | undefined;
       try {
@@ -71,8 +76,6 @@ export const runReconcile = internalAction({
           orgId,
         });
         await ctx.runMutation(internal.ingest.core.processEvent, { eventId });
-        unresolvedCounters.delete(c);
-        healed++;
       } catch (e) {
         // An individual fetch/process failure must not prevent the state commit:
         // the counter remains unresolved and is retried by a later cron run.
@@ -85,12 +88,13 @@ export const runReconcile = internalAction({
         console.warn(`[reconciler] ${datePrefix}/${c} failed: ${(e as Error).message}`);
       }
     }
-    await ctx.runMutation(internal.ingest.reconcileState.commitReconcileRun, {
+    const committed = await ctx.runMutation(internal.ingest.reconcileState.commitReconcileRun, {
       orgId,
       datePrefix,
       nextCounter: run.nextCounter,
-      unresolvedCounters: [...unresolvedCounters],
+      unresolvedCounters,
     });
+    const healed = run.gaps.filter((counter) => !committed.unresolvedCounters.includes(counter)).length;
     if (run.gaps.length > 0) console.log(`[reconciler] ${datePrefix}: ${run.gaps.length} gaps, ${healed} healed`);
   },
 });
