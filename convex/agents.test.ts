@@ -125,6 +125,28 @@ test("resolveAgent: scalar provider IDs stay tenant-scoped and legacy arrays sti
   });
 });
 
+test("resolveAgent: a genuine phone miss continues to supplied staff ID and then name", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await seedAgent(t, orgId, {
+    csName: "Staff Match", normalizedName: "staff match", key: "staff-match",
+    providerNumberId: undefined, providerNumberIds: [], berduStaffIds: ["STAFF-MATCH"],
+  });
+  await seedAgent(t, orgId, {
+    csName: "Name Match", normalizedName: "name match", key: "name-match",
+    providerNumberId: undefined, providerNumberIds: [], berduStaffIds: [],
+  });
+
+  await t.run(async (ctx: any) => {
+    expect((await resolveAgent(ctx, orgId, {
+      phoneNumberId: "PHONE-MISSING", berduStaffId: "STAFF-MATCH", name: "Name Match",
+    }))?.csName).toBe("Staff Match");
+    expect((await resolveAgent(ctx, orgId, {
+      phoneNumberId: "PHONE-MISSING", name: "Name Match",
+    }))?.csName).toBe("Name Match");
+  });
+});
+
 test("resolveAgent: same-org scalar provider ID collisions remain unresolved", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
@@ -133,6 +155,9 @@ test("resolveAgent: same-org scalar provider ID collisions remain unresolved", a
 
   await t.run(async (ctx: any) => {
     expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-DUPLICATE" })).toBeNull();
+    expect(await resolveAgent(ctx, orgId, {
+      phoneNumberId: "PHONE-DUPLICATE", berduStaffId: "B-1apQSy", name: "Aisyah",
+    })).toBeNull();
   });
 });
 
@@ -180,6 +205,9 @@ test("resolveAgent: duplicate legacy provider IDs remain unresolved", async () =
 
   await t.run(async (ctx: any) => {
     expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-DUPLICATE" })).toBeNull();
+    expect(await resolveAgent(ctx, orgId, {
+      phoneNumberId: "PHONE-DUPLICATE", berduStaffId: "B-1apQSy", name: "Aisyah",
+    })).toBeNull();
   });
 });
 
@@ -199,6 +227,9 @@ test("resolveAgent: bounded legacy provider lookup refuses an oversized org regi
 
   await t.run(async (ctx: any) => {
     expect(await resolveAgent(ctx, orgId, { phoneNumberId: "PHONE-CAPPED" })).toBeNull();
+    expect(await resolveAgent(ctx, orgId, {
+      phoneNumberId: "PHONE-CAPPED", berduStaffId: "STAFF-0", name: "Agent 0",
+    })).toBeNull();
   });
 });
 

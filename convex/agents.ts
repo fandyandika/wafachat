@@ -78,7 +78,7 @@ export async function resolveAgent(
       const hit = matches[0];
       return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
     }
-    return null;
+    if (matches.length > 1) return null;
   }
   // 2) Berdu staff id (order attribution)
   if (q.berduStaffId) {

@@ -80,3 +80,16 @@ test("backfillOrgId/orgIdCoverage: cursor-paging contract over already-stamped r
   expect(r2.patched).toBe(0);
   expect(r2.done).toBe(true);
 });
+
+test("legacy B1 orgId tools reject tables whose schema already requires orgId", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity(ADMIN);
+  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+
+  await expect(asAdmin.mutation(api.orgs.backfillOrgId, {
+    table: "providerNumberBackfillRuns" as any,
+  })).rejects.toThrow();
+  await expect(asAdmin.query(api.orgs.orgIdCoverage, {
+    table: "providerNumberBackfillClaims" as any,
+  })).rejects.toThrow();
+});
