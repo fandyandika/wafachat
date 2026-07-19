@@ -161,3 +161,61 @@ test("resolveBatch: outbound 'PESANAN COD DIPROSES' -> closedMarker (COD won lea
     expect((await ctx.db.get(cId))!.status).toBe("closed");
   });
 });
+
+test("resolveBatch: long alternating history uses the latest inbound when deciding stale", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  let cId: Id<"conversations">;
+  const latestInboundAt = now - 6 * DAY;
+  await t.run(async (ctx) => {
+    cId = await ctx.db.insert("conversations", { orgId, ...conv("O-LONG-STALE", "62824") });
+    await ctx.db.insert("orders", { orgId, ...order("O-LONG-STALE", "62824") });
+  });
+  for (let i = 0; i < 122; i++) {
+    const direction = i % 2 === 0 ? "inbound" as const : "outbound" as const;
+    await t.run((ctx) => ctx.db.insert("messages", { orgId, ...(direction === "inbound"
+      ? inbound(cId, "O-LONG-STALE", "62824", now - 12 * DAY + i * HOUR)
+      : outbound(cId, "O-LONG-STALE", "62824", now - 12 * DAY + i * HOUR, "x")) }));
+  }
+  await t.run(async (ctx) => {
+    await ctx.db.insert("messages", { orgId, ...inbound(cId, "O-LONG-STALE", "62824", latestInboundAt) });
+    await ctx.db.insert("messages", { orgId, ...outbound(cId, "O-LONG-STALE", "62824", latestInboundAt + HOUR, "still silent") });
+  });
+
+  await t.run(async (ctx) => {
+    const latestInbound = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", cId).eq("direction", "inbound"))
+      .order("desc")
+      .first();
+    expect(latestInbound?.createdAt).toBe(latestInboundAt);
+  });
+
+  const r = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, dryRun: false, now, orgId });
+  expect(r.closedStale).toBe(1);
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(cId))?.status).toBe("closed");
+  });
+});
+
+test("resolveBatch: processes each org-scoped active and handover page without one status starving the other", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  let handoverId: Id<"conversations">;
+  for (let i = 0; i < 25; i++) {
+    await t.run((ctx) => ctx.db.insert("conversations", { orgId, ...conv(`O-ACTIVE-${i}`, `6283${i}`) }));
+  }
+  await t.run(async (ctx) => {
+    handoverId = await ctx.db.insert("conversations", {
+      orgId, ...conv("O-HANDOVER", "628399", { status: "handover" as const }),
+    });
+  });
+
+  const active = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, status: "active", dryRun: false, now, orgId });
+  const handover = await t.mutation(internal.conversationLifecycle.resolveBatch, { cursor: null, status: "handover", dryRun: false, now, orgId });
+  expect(active.considered + handover.considered).toBe(26);
+  expect(active.closedStale + handover.closedStale).toBe(26);
+  await t.run(async (ctx) => {
+    expect((await ctx.db.get(handoverId))?.status).toBe("closed");
+  });
+});

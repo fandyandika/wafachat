@@ -17,10 +17,14 @@ const normName = (s: string) => s.trim().toLowerCase();
 
 export async function resolveAgent(
   ctx: { db: any },
+  orgId: Id<"organizations">,
   q: { name?: string; berduStaffId?: string; phoneNumberId?: string },
 ): Promise<ResolvedAgent | null> {
   if (!q.name && !q.berduStaffId && !q.phoneNumberId) return null;
-  const rows = await ctx.db.query("csConfigs").collect(); // small registry (~6 rows)
+  const rows = await ctx.db
+    .query("csConfigs")
+    .withIndex("by_org_active", (q: any) => q.eq("orgId", orgId).eq("isActive", true))
+    .collect();
   const keyOf = (r: any): string => r.key ?? csKey(r.csName); // pre-seed fallback
   // 1) provider phone_number_id (KirimDev message attribution)
   if (q.phoneNumberId) {
@@ -40,7 +44,8 @@ export async function resolveAgent(
       const hit =
         rows.find((r: any) => normName(r.csName) === n) ??
         rows.find((r: any) => (r.nameAliases ?? []).some((a: string) => normName(a) === n)) ??
-        rows.find((r: any) => csKey(q.name!) === keyOf(r));
+        await ctx.db.query("csConfigs").withIndex("by_org_key", (ix: any) => ix.eq("orgId", orgId).eq("key", csKey(q.name!))).first() ??
+        rows.find((r: any) => r.key == null && csKey(q.name!) === csKey(r.csName));
       if (hit) return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
     }
   }
@@ -50,10 +55,11 @@ export async function resolveAgent(
 /** Stamp-site helper: canonical {csName,key} for a raw name; never null. */
 export async function canonicalizeCs(
   ctx: { db: any },
+  orgId: Id<"organizations">,
   rawName: string | undefined,
 ): Promise<{ csName: string; key: string }> {
   const raw = rawName ?? "";
-  const hit = raw.trim() ? await resolveAgent(ctx, { name: raw }) : null;
+  const hit = raw.trim() ? await resolveAgent(ctx, orgId, { name: raw }) : null;
   return hit ? { csName: hit.csName, key: hit.key } : { csName: raw, key: csKey(raw) };
 }
 

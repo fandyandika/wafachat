@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { resolveAgent, canonicalizeCs } from "./agents";
+import type { Id } from "./_generated/dataModel";
 
 const ADMIN = { subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" };
 
@@ -25,14 +26,14 @@ test("resolveAgent: matches by phoneNumberId, berduStaffId, current csName, alia
   const orgId = await seedOrg(t);
   const agentId = await seedAgent(t, orgId);
   await t.run(async (ctx: any) => {
-    expect((await resolveAgent(ctx, { phoneNumberId: "1197250776802755" }))?.key).toBe("aisyah");
-    expect((await resolveAgent(ctx, { berduStaffId: "B-1apQSy" }))?.csName).toBe("Aisyah");
-    expect((await resolveAgent(ctx, { name: "Aisyah" }))?.key).toBe("aisyah");        // current csName
-    expect((await resolveAgent(ctx, { name: "  cs aisyah " }))?.key).toBe("aisyah");  // alias, case/trim-insensitive
-    expect((await resolveAgent(ctx, { name: "CS AISYAH" }))?.key).toBe("aisyah");     // csKey(name)==key
-    expect((await resolveAgent(ctx, { name: "Aisyah" }))?.agentId).toEqual(agentId);
-    expect(await resolveAgent(ctx, { name: "Bambang" })).toBeNull();                  // miss = discovery
-    expect(await resolveAgent(ctx, {})).toBeNull();
+    expect((await resolveAgent(ctx, orgId, { phoneNumberId: "1197250776802755" }))?.key).toBe("aisyah");
+    expect((await resolveAgent(ctx, orgId, { berduStaffId: "B-1apQSy" }))?.csName).toBe("Aisyah");
+    expect((await resolveAgent(ctx, orgId, { name: "Aisyah" }))?.key).toBe("aisyah");        // current csName
+    expect((await resolveAgent(ctx, orgId, { name: "  cs aisyah " }))?.key).toBe("aisyah");  // alias, case/trim-insensitive
+    expect((await resolveAgent(ctx, orgId, { name: "CS AISYAH" }))?.key).toBe("aisyah");     // csKey(name)==key
+    expect((await resolveAgent(ctx, orgId, { name: "Aisyah" }))?.agentId).toEqual(agentId);
+    expect(await resolveAgent(ctx, orgId, { name: "Bambang" })).toBeNull();                  // miss = discovery
+    expect(await resolveAgent(ctx, orgId, {})).toBeNull();
   });
 });
 
@@ -42,8 +43,8 @@ test("resolveAgent: post-rename, the CURRENT csName returns the OLD immutable ke
   // renamed agent: display "Ayesha", key stays "aisyah", old name kept as alias
   await seedAgent(t, orgId, { csName: "Ayesha", nameAliases: ["Aisyah"], normalizedName: "ayesha" });
   await t.run(async (ctx: any) => {
-    expect((await resolveAgent(ctx, { name: "Ayesha" }))?.key).toBe("aisyah");  // csName-match (csKey("Ayesha") != "aisyah"!)
-    expect((await resolveAgent(ctx, { name: "Aisyah" }))?.key).toBe("aisyah");  // old name via alias
+    expect((await resolveAgent(ctx, orgId, { name: "Ayesha" }))?.key).toBe("aisyah");  // csName-match (csKey("Ayesha") != "aisyah"!)
+    expect((await resolveAgent(ctx, orgId, { name: "Aisyah" }))?.key).toBe("aisyah");  // old name via alias
   });
 });
 
@@ -52,7 +53,7 @@ test("resolveAgent: row without key falls back to csKey(csName) matching", async
   const orgId = await seedOrg(t);
   await seedAgent(t, orgId, { key: undefined, nameAliases: undefined });
   await t.run(async (ctx: any) => {
-    const hit = await resolveAgent(ctx, { name: "CS Aisyah" }); // csKey("CS Aisyah")=="aisyah"==csKey(csName)
+    const hit = await resolveAgent(ctx, orgId, { name: "CS Aisyah" }); // csKey("CS Aisyah")=="aisyah"==csKey(csName)
     expect(hit?.key).toBe("aisyah");
     expect(hit?.csName).toBe("Aisyah");
   });
@@ -63,10 +64,22 @@ test("canonicalizeCs: hit returns registry canonical form; miss falls back to ra
   const orgId = await seedOrg(t);
   await seedAgent(t, orgId);
   await t.run(async (ctx: any) => {
-    expect(await canonicalizeCs(ctx, "cs aisyah")).toEqual({ csName: "Aisyah", key: "aisyah" });
-    expect(await canonicalizeCs(ctx, "Bambang")).toEqual({ csName: "Bambang", key: "bambang" });
-    expect(await canonicalizeCs(ctx, "")).toEqual({ csName: "", key: "" });
-    expect(await canonicalizeCs(ctx, undefined)).toEqual({ csName: "", key: "" });
+    expect(await canonicalizeCs(ctx, orgId, "cs aisyah")).toEqual({ csName: "Aisyah", key: "aisyah" });
+    expect(await canonicalizeCs(ctx, orgId, "Bambang")).toEqual({ csName: "Bambang", key: "bambang" });
+    expect(await canonicalizeCs(ctx, orgId, "")).toEqual({ csName: "", key: "" });
+    expect(await canonicalizeCs(ctx, orgId, undefined)).toEqual({ csName: "", key: "" });
+  });
+});
+
+test("resolveAgent: canonical-key and legacy fallbacks stay inside the requested org", async () => {
+  const t = convexTest(schema);
+  const orgA = await seedOrg(t);
+  const orgB = await t.run((ctx: any) => ctx.db.insert("organizations", { slug: "other", name: "Other Org", createdAt: 1, updatedAt: 1 })) as Id<"organizations">;
+  await seedAgent(t, orgA, { csName: "Alfa", normalizedName: "alfa", key: "shared", providerNumberIds: ["PHONE-SHARED"] });
+  await seedAgent(t, orgB, { csName: "Beta", normalizedName: "beta", key: "shared", providerNumberIds: ["PHONE-SHARED"], berduStaffIds: [] });
+  await t.run(async (ctx: any) => {
+    expect((await resolveAgent(ctx, orgB, { name: "CS Shared" }))?.csName).toBe("Beta");
+    expect((await resolveAgent(ctx, orgB, { phoneNumberId: "PHONE-SHARED" }))?.csName).toBe("Beta");
   });
 });
 

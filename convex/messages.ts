@@ -217,7 +217,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     const activeMs = Math.round(businessMinutesBetween(conversation.rtPendingInboundAt, createdAt) * 60_000);
     const deltaMs = activeMs > 0 ? activeMs : createdAt - conversation.rtPendingInboundAt;
     const rawCsName = conversation.assignedCsName ?? args.csName ?? "Unknown";
-    const canon = await canonicalizeCs(ctx, rawCsName);
+    const canon = await canonicalizeCs(ctx, args.orgId, rawCsName);
     const csName = canon.csName;
     const csKeyValue = canon.key;
 
@@ -292,9 +292,8 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
         // Feature #10: record follow-up touches that preceded this closing.
         const lastInbound = await ctx.db
           .query("messages")
-          .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversation._id))
+          .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", conversation._id).eq("direction", "inbound"))
           .order("desc")
-          .filter((q: any) => q.eq(q.field("direction"), "inbound"))
           .first();
         const touchCount = await countFollowUpTouchesBeforeTime(ctx, conversation._id, lastInbound?.createdAt ?? null, createdAt);
         await ctx.db.patch(result.recapId, { followUpTouchesAtClose: touchCount });

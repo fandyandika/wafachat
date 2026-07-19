@@ -367,7 +367,7 @@ export const upsertFromN8n = internalMutation({
     }, orgId);
 
     const rawResolvedCsName = args.csName || order?.assignedCsName || conversation?.assignedCsName || "";
-    const canonCs = await canonicalizeCs(ctx, rawResolvedCsName);
+    const canonCs = await canonicalizeCs(ctx, orgId, rawResolvedCsName);
     const resolvedCsName = canonCs.csName;
     const status: RecapStatus = existing?.status === "exported"
       ? "needs_review"
@@ -468,7 +468,7 @@ export const createFromPanelClosing = mutation({
     }
 
     const rawResolvedCsName = args.csName || order?.assignedCsName || conversation?.assignedCsName || "";
-    const canonCs = await canonicalizeCs(ctx, rawResolvedCsName);
+    const canonCs = await canonicalizeCs(ctx, orgId, rawResolvedCsName);
     const resolvedCsName = canonCs.csName;
     const panelFlags: string[] = order ? ["MANUAL_CLOSING"] : ["MANUAL_CLOSING", "NO_ORDER_DATA"];
     if (!resolvedCsName) panelFlags.push("NO_CS_DATA");
@@ -1152,7 +1152,7 @@ export const importBerduVerifiedRows = internalMutation({
           : "ready";
       const flags = unique([...(existing?.flags ?? []).filter((flag) => flag !== "MISSING_ORDER_CONTEXT"), "BERDU_VERIFIED"]);
       const rawImportCsName = row.csName || order?.assignedCsName || conversation?.assignedCsName || "";
-      const canonImport = await canonicalizeCs(ctx, rawImportCsName);
+      const canonImport = await canonicalizeCs(ctx, orgId, rawImportCsName);
       const payload = {
         orderIdBerdu,
         conversationId: conversation?._id,
@@ -1328,7 +1328,7 @@ export const backfillCsNameByOrderIds = mutation({
     const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.backfillCsNameByOrderIds");
     const now = Date.now();
     const results: Array<{ orderId: string; recap: string; order: string; conversation: string }> = [];
-    const canonBf = await canonicalizeCs(ctx, args.csName);
+    const canonBf = await canonicalizeCs(ctx, orgId, args.csName);
 
     for (const rawId of args.orderIds) {
       const orderId = normalizeOrderId(rawId);
@@ -1387,7 +1387,7 @@ export const renameCsName = mutation({
     // B2a: route the hard rename target through the registry so a bulk merge into a
     // registered agent lands on that agent's canonical name+key (unregistered target
     // = same as before: {to, csKey(to)}). Resolve once — `to` is constant.
-    const canonTo = await canonicalizeCs(ctx, args.to);
+    const canonTo = await canonicalizeCs(ctx, orgId, args.to);
     let orders = 0;
     for (const o of await ctx.db.query("orders").collect().then((all) => all.filter((x) => String(x.orgId) === String(orgId)))) {
       if (o.assignedCsName === args.from) {

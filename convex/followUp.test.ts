@@ -114,6 +114,49 @@ test("getFollowUpCandidates: stage-2 (H+2) after a post-window touch (manual or 
   expect(r.stage1.length).toBe(0);
 });
 
+test("long alternating history keeps the latest inbound, post-window outbound touch, and H+2 candidacy", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
+  let convId: any;
+  const orderId = "O-LONG-HISTORY";
+  const phone = "628155";
+  const lastInboundAt = now - 50 * HOUR;
+  const touchAt = now - 25 * HOUR;
+
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId, customerPhone: phone });
+    await ctx.db.insert("orders", { orgId, ...orderBase, orderId, customerPhone: phone });
+    // This deliberately exceeds the lifecycle marker scan and the former direction-filtered reads.
+    for (let i = 0; i < 122; i++) {
+      const direction = i % 2 === 0 ? "inbound" as const : "outbound" as const;
+      await ctx.db.insert("messages", { orgId, ...msg(convId, orderId, phone, direction, now - 200 * HOUR + i * HOUR) });
+    }
+    await ctx.db.insert("messages", { orgId, ...msg(convId, orderId, phone, "inbound", lastInboundAt) });
+    await ctx.db.insert("messages", { orgId, ...msg(convId, orderId, phone, "outbound", lastInboundAt + HOUR) });
+    await ctx.db.insert("messages", { orgId, ...msg(convId, orderId, phone, "outbound", touchAt) });
+  });
+
+  await t.run(async (ctx) => {
+    const latestInbound = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", convId).eq("direction", "inbound"))
+      .order("desc")
+      .first();
+    const touches = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", convId).eq("direction", "outbound").gt("createdAt", lastInboundAt + 24 * HOUR))
+      .collect();
+    expect(latestInbound?.createdAt).toBe(lastInboundAt);
+    expect(touches.map((m: any) => m.createdAt)).toEqual([touchAt]);
+  });
+
+  const candidates = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  expect(candidates.stage2.find((c) => c.orderId === orderId)).toMatchObject({ lastInboundAt, touchAts: [touchAt] });
+  const candidacy = await t.query(internal.followUp.candidacyFor, { conversationId: convId, nowOverride: now });
+  expect(candidacy?.eligible).toBe(2);
+});
+
 test("getFollowUpCandidates: ANTI-DOUBLE — a fresh manual-via-WABA touch drops the lead from H+1", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });

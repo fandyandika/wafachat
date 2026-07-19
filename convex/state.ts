@@ -114,7 +114,7 @@ export const createTestConversation = mutation({
     const { orgId } = await requireAdminOrg(ctx, "state.createTestConversation");
     const now = Date.now();
     const phone = normalizePhone(args.phone);
-    const canonTest = await canonicalizeCs(ctx, args.csName ?? "CS Aisyah");
+    const canonTest = await canonicalizeCs(ctx, orgId, args.csName ?? "CS Aisyah");
     const productName = args.productName ?? "Test Product";
     const orderId = `TEST-${phone}-${Date.now()}`;
     const csConfig = await getCsFeatureConfig(ctx, orgId, canonTest.csName);
@@ -246,7 +246,7 @@ export async function upsertOrderCore(
     orgId: Id<"organizations">;
   },
 ) {
-  const canon = await canonicalizeCs(ctx, args.csName);
+  const canon = await canonicalizeCs(ctx, args.orgId, args.csName);
   const now = Date.now();
   const phone = normalizePhone(args.phone);
   const orderId = args.order_id || makeOrderKey({ phone, productName: args.productName });

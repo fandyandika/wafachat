@@ -29,32 +29,37 @@ async function hasDoneMarker(ctx: { db: any }, conversationId: any): Promise<boo
   return msgs.some((m: any) => messageHasDoneMarker(m.content ?? "", m.direction));
 }
 
-// Process one page of conversations: close the WON + STALE ones (unless dryRun). Returns a cursor.
-// Paginates the FULL table (default order, unaffected by the status patch) and skips already-closed
-// rows, so the cursor stays stable while we mutate `status`.
+// Process one page from one open-status index: close the WON + STALE ones (unless dryRun).
+// The sweep advances active and handover independently, so a busy status cannot starve the other.
 export const resolveBatch = internalMutation({
-  args: { cursor: v.union(v.string(), v.null()), dryRun: v.boolean(), now: v.number(), orgId: v.id("organizations") },
+  args: {
+    cursor: v.union(v.string(), v.null()),
+    status: v.optional(v.union(v.literal("active"), v.literal("handover"))),
+    dryRun: v.boolean(), now: v.number(), orgId: v.id("organizations"),
+  },
   handler: async (ctx, args) => {
-    const page = await ctx.db.query("conversations").paginate({ cursor: args.cursor, numItems: BATCH });
+    const status = args.status ?? "active";
+    const page = await ctx.db
+      .query("conversations")
+      .withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", args.orgId).eq("status", status))
+      .paginate({ cursor: args.cursor, numItems: BATCH });
     let closedWon = 0;
     let closedMarker = 0;
     let closedStale = 0;
     let considered = 0;
     for (const c of page.page) {
-      if (String(c.orgId) !== String(args.orgId)) continue; // org-filter during pagination
-      if (c.status === "closed") continue;
       considered++;
       // WON: a recap for this order. For an order-less "manual:" thread, fall back to ANY recap for
       // this customer's phone (a buyer's side-thread isn't a fresh lead). Real orders stay by-order
       // only, so a repeat customer's NEW order is never falsely closed by an OLD recap.
       let recap = await ctx.db
         .query("shippingRecaps")
-        .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", c.orgId).eq("orderIdBerdu", c.orderId))
+        .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", args.orgId).eq("orderIdBerdu", c.orderId))
         .first();
       if (!recap && String(c.orderId).startsWith("manual:")) {
         recap = await ctx.db
           .query("shippingRecaps")
-          .withIndex("by_org_customerPhone", (q) => q.eq("orgId", c.orgId).eq("customerPhone", c.customerPhone))
+          .withIndex("by_org_customerPhone", (q) => q.eq("orgId", args.orgId).eq("customerPhone", c.customerPhone))
           .first();
       }
       let reason: "won" | "marker" | "stale" | null = null;
@@ -65,9 +70,8 @@ export const resolveBatch = internalMutation({
       } else {
         const lastInbound = await ctx.db
           .query("messages")
-          .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id))
+          .withIndex("by_conversation_direction_createdAt", (q) => q.eq("conversationId", c._id).eq("direction", "inbound"))
           .order("desc")
-          .filter((q) => q.eq(q.field("direction"), "inbound"))
           .first();
         const ref = lastInbound?.createdAt ?? c.createdAt; // customer's last message, or creation if none
         if (args.now - ref > ARCHIVE_AFTER_MS) reason = "stale";
@@ -79,7 +83,7 @@ export const resolveBatch = internalMutation({
         else closedStale++;
       }
     }
-    return { continueCursor: page.continueCursor, isDone: page.isDone, considered, closedWon, closedMarker, closedStale };
+    return { continueCursor: String(page.continueCursor), isDone: page.isDone, considered, closedWon, closedMarker, closedStale };
   },
 });
 
@@ -87,7 +91,8 @@ type SweepResult = { considered: number; closedWon: number; closedMarker: number
 
 async function sweep(ctx: { runMutation: any }, orgId: any, dryRun: boolean): Promise<SweepResult> {
   const now = Date.now();
-  let cursor: string | null = null;
+  let activeCursor: string | null = null;
+  let handoverCursor: string | null = null;
   let isDone = false;
   let considered = 0;
   let closedWon = 0;
@@ -95,13 +100,15 @@ async function sweep(ctx: { runMutation: any }, orgId: any, dryRun: boolean): Pr
   let closedStale = 0;
   // Hard cap on iterations as a runaway guard (25 * 800 = 20k conversations).
   for (let i = 0; i < 800 && !isDone; i++) {
-    const r: any = await ctx.runMutation(internal.conversationLifecycle.resolveBatch, { cursor, dryRun, now, orgId });
-    cursor = r.continueCursor;
-    isDone = r.isDone;
-    considered += r.considered;
-    closedWon += r.closedWon;
-    closedMarker += r.closedMarker;
-    closedStale += r.closedStale;
+    const active: any = await ctx.runMutation(internal.conversationLifecycle.resolveBatch, { cursor: activeCursor, status: "active", dryRun, now, orgId });
+    const handover: any = await ctx.runMutation(internal.conversationLifecycle.resolveBatch, { cursor: handoverCursor, status: "handover", dryRun, now, orgId });
+    activeCursor = active.continueCursor;
+    handoverCursor = handover.continueCursor;
+    isDone = active.isDone && handover.isDone;
+    considered += active.considered + handover.considered;
+    closedWon += active.closedWon + handover.closedWon;
+    closedMarker += active.closedMarker + handover.closedMarker;
+    closedStale += active.closedStale + handover.closedStale;
   }
   return { considered, closedWon, closedMarker, closedStale, dryRun };
 }

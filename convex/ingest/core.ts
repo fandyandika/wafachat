@@ -9,15 +9,15 @@ import { upsertOrderCore } from "../state";
 import { resolveAgent } from "../agents";
 
 /** @deprecated B2a — use resolveAgent({ phoneNumberId }) from ../agents. */
-export async function resolveCsByPhoneNumberId(ctx: any, phoneNumberId: string | undefined) {
+export async function resolveCsByPhoneNumberId(ctx: any, orgId: Id<"organizations">, phoneNumberId: string | undefined) {
   if (!phoneNumberId) return undefined;
-  return (await resolveAgent(ctx, { phoneNumberId }))?.csName;
+  return (await resolveAgent(ctx, orgId, { phoneNumberId }))?.csName;
 }
 
 // Build the Berdu staffId -> CS-name map from the csConfigs registry; fall back to
 // the baked tenant-#1 map while no config row carries berduStaffIds (pre-seed).
-export async function resolveBerduStaffMap(ctx: any): Promise<Record<string, string>> {
-  const configs = await ctx.db.query("csConfigs").collect(); // small table (~5 rows)
+export async function resolveBerduStaffMap(ctx: any, orgId: Id<"organizations">): Promise<Record<string, string>> {
+  const configs = await ctx.db.query("csConfigs").withIndex("by_org_active", (q: any) => q.eq("orgId", orgId).eq("isActive", true)).collect();
   const map: Record<string, string> = {};
   for (const c of configs) for (const id of c.berduStaffIds ?? []) map[id] = c.csName;
   return Object.keys(map).length > 0 ? map : DEFAULT_BERDU_STAFF_MAP;
@@ -39,7 +39,7 @@ export async function processCapturedEvent(
   if (event.kind === "message.event") {
     const parsed = parseKirimdevWebhook(headers, body, event.receivedAt);
     if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
-    const agent = await resolveAgent(ctx, { phoneNumberId: parsed.event.phoneNumberId });
+    const agent = await resolveAgent(ctx, event.orgId, { phoneNumberId: parsed.event.phoneNumberId });
     const csName = agent?.csName;
     const result = await appendMessageCore(ctx, {
       phone: parsed.event.phone,
@@ -57,7 +57,7 @@ export async function processCapturedEvent(
   }
 
   if (event.kind === "lead.created") {
-    const staffMap = await resolveBerduStaffMap(ctx);
+    const staffMap = await resolveBerduStaffMap(ctx, event.orgId);
     const parsed = parseBerduOrderDetail((body as any).order ?? body, staffMap);
     if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
     const e = parsed.event;

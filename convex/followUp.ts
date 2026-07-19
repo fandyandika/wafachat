@@ -20,8 +20,7 @@ async function touchInfo(ctx: any, conversationId: any, lastInboundAt: number | 
   const windowClose = lastInboundAt + WINDOW_HOURS * HOUR;
   const touches = await ctx.db
     .query("messages")
-    .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversationId).gt("createdAt", windowClose))
-    .filter((q: any) => q.eq(q.field("direction"), "outbound"))
+    .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", conversationId).eq("direction", "outbound").gt("createdAt", windowClose))
     .collect();
   const ats = (touches.map((t: any) => t.createdAt) as number[]).sort((a, b) => a - b);
   return { count: ats.length, lastAt: ats.length ? ats[ats.length - 1] : null, ats };
@@ -34,8 +33,7 @@ export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: a
   const windowClose = lastInboundAt + WINDOW_HOURS * HOUR;
   const touches = await ctx.db
     .query("messages")
-    .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversationId).gt("createdAt", windowClose).lt("createdAt", beforeTime))
-    .filter((q: any) => q.eq(q.field("direction"), "outbound"))
+    .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", conversationId).eq("direction", "outbound").gt("createdAt", windowClose).lt("createdAt", beforeTime))
     .collect();
   return touches.length;
 }
@@ -76,7 +74,7 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
       ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q: any) => q.eq("orgId", args.orgId).eq("orderIdBerdu", x.c.orderId)).first()),
     );
     const lastInbounds = await Promise.all(
-      ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", x.c._id)).order("desc").filter((q: any) => q.eq(q.field("direction"), "inbound")).first()),
+      ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", x.c._id).eq("direction", "inbound")).order("desc").first()),
     );
     const touches = await Promise.all(
       ghosted.map((x, i) => touchInfo(ctx, x.c._id, lastInbounds[i]?.createdAt ?? null)),
@@ -172,7 +170,7 @@ export const candidacyFor = internalQuery({
     const now = args.nowOverride ?? Date.now();
     const recap = await ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", c.orgId).eq("orderIdBerdu", c.orderId)).first();
     const lastMsg = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first();
-    const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first();
+    const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_direction_createdAt", (q) => q.eq("conversationId", c._id).eq("direction", "inbound")).order("desc").first();
     const order = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", c.orgId).eq("orderId", c.orderId)).first();
     const normName = normalizeCsName(c.assignedCsName);
     let cfg = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", c.orgId).eq("normalizedName", normName)).first();
@@ -181,8 +179,17 @@ export const candidacyFor = internalQuery({
     // "CS " prefix) so providerNumberId resolves regardless of how the lead was named.
     if (!cfg || !cfg.providerNumberId) {
       const k = csKey(c.assignedCsName);
-      const all = await ctx.db.query("csConfigs").collect().then((all) => all.filter((x) => String(x.orgId) === String(c.orgId)));
-      cfg = all.find((x) => csKey(x.csName) === k && x.providerNumberId) ?? cfg;
+      cfg = await ctx.db
+        .query("csConfigs")
+        .withIndex("by_org_key", (q) => q.eq("orgId", c.orgId).eq("key", k))
+        .first() ?? cfg;
+      if (!cfg?.providerNumberId) {
+        const legacy = await ctx.db
+          .query("csConfigs")
+          .withIndex("by_org_active", (q) => q.eq("orgId", c.orgId).eq("isActive", true))
+          .collect();
+        cfg = legacy.find((x) => x.key == null && csKey(x.csName) === k && x.providerNumberId) ?? cfg;
+      }
     }
     const touch = await touchInfo(ctx, c._id, lastInbound?.createdAt ?? null);
     const eligible = eligibleStage({
