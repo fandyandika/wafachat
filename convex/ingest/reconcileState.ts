@@ -60,8 +60,15 @@ async function orderExists(ctx: { db: any }, orgId: Id<"organizations">, datePre
 }
 
 export const prepareReconcileRun = internalQuery({
-  args: { orgId: v.id("organizations"), datePrefix: v.string() },
+  args: {
+    orgId: v.id("organizations"),
+    datePrefix: v.string(),
+    observedMaxCounter: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
+    const observedMaxCounter = Number.isInteger(args.observedMaxCounter)
+      ? Math.min(Math.max(args.observedMaxCounter ?? 0, 0), MAX_COUNTER)
+      : 0;
     const state = await ctx.db
       .query("reconcileStates")
       .withIndex("by_org_datePrefix", (q: any) => q.eq("orgId", args.orgId).eq("datePrefix", args.datePrefix))
@@ -81,7 +88,7 @@ export const prepareReconcileRun = internalQuery({
       const counters = rows
         .map((row: any) => counterFromOrderId(row.orderId, args.datePrefix))
         .filter((counter: number | null): counter is number => counter !== null);
-      const maxCounter = counters.length === 0 ? 0 : Math.max(...counters);
+      const maxCounter = Math.max(observedMaxCounter, counters.length === 0 ? 0 : Math.max(...counters));
       const minCounter = counters.length === 0 ? 1 : Math.min(...counters);
       const bootstrap = gapsAndCursor(counters, minCounter, maxCounter, MAX_UNRESOLVED_COUNTERS);
       return { gaps: bootstrap.gaps, nextCounter: Math.max(bootstrap.nextCounter, 1) };
@@ -113,7 +120,7 @@ export const prepareReconcileRun = internalQuery({
     const tailCounters = tailRows
       .map((row: any) => counterFromOrderId(row.orderId, args.datePrefix))
       .filter((counter: number | null): counter is number => counter !== null);
-    const tailMax = tailCounters.length === 0 ? 0 : Math.max(...tailCounters);
+    const tailMax = Math.max(observedMaxCounter, tailCounters.length === 0 ? 0 : Math.max(...tailCounters));
     const tail = tailMax === 0
       ? { gaps: [], nextCounter: Math.max(state.nextCounter, 1) }
       : gapsAndCursor(

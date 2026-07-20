@@ -11,6 +11,20 @@ export function wibDatePrefix(nowMs: number): string {
   return `${yy}${mm}${dd}`;
 }
 
+export function latestCounterForDate(rows: Array<{ id?: unknown }>, datePrefix: string): number | null {
+  const prefix = `O-${datePrefix}`;
+  let latest: number | null = null;
+  for (const row of rows) {
+    const orderId = String(row.id ?? "");
+    if (!orderId.startsWith(prefix)) continue;
+    const suffix = orderId.slice(prefix.length);
+    if (!/^\d{6}$/.test(suffix)) continue;
+    const counter = Number(suffix);
+    if (counter >= 1 && (latest === null || counter > latest)) latest = counter;
+  }
+  return latest;
+}
+
 export function computeGaps(counters: number[], min: number | null, max: number | null): number[] {
   if (min === null || max === null) return [];
   const present = new Set(counters);
@@ -81,6 +95,30 @@ export async function fetchBerduOrderDetail(orderId: string): Promise<any | null
   return res.json();
 }
 
+export async function fetchBerduLatestCounter(datePrefix: string): Promise<number | null> {
+  const appId = process.env.BERDU_APP_ID;
+  const userId = process.env.BERDU_USER_ID;
+  const appSecret = process.env.BERDU_APP_SECRET;
+  const hmacKey = process.env.BERDU_HMAC_KEY;
+  if (!appId || !userId || !appSecret || !hmacKey) return null;
+
+  try {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const { authHeader } = await buildBerduAuth(appId, appSecret, hmacKey, nowSec);
+    const url = `https://api.berdu.id/v0.0/order/list?user_id=${encodeURIComponent(userId)}`;
+    const res = await fetch(url, { headers: { Authorization: authHeader } });
+    if (!res.ok) {
+      console.warn(`[reconciler] order list -> ${res.status}`);
+      return null;
+    }
+    const body = await res.json() as { list?: Array<{ id?: unknown }> };
+    return latestCounterForDate(Array.isArray(body.list) ? body.list : [], datePrefix);
+  } catch (error) {
+    console.warn(`[reconciler] order list failed: ${(error as Error).message}`);
+    return null;
+  }
+}
+
 export const runReconcile = internalAction({
   args: {},
   handler: async (ctx) => {
@@ -93,7 +131,12 @@ export const runReconcile = internalAction({
     const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
     if (!orgId) return;
     const datePrefix = wibDatePrefix(Date.now());
-    const run = await ctx.runQuery(internal.ingest.reconcileState.prepareReconcileRun, { datePrefix, orgId });
+    const observedMaxCounter = await fetchBerduLatestCounter(datePrefix);
+    const run = await ctx.runQuery(internal.ingest.reconcileState.prepareReconcileRun, {
+      datePrefix,
+      orgId,
+      ...(observedMaxCounter === null ? {} : { observedMaxCounter }),
+    });
     const result = await reconcilePreparedGaps(run, {
       fetchDetail: (counter) => fetchBerduOrderDetail(`O-${datePrefix}${String(counter).padStart(6, "0")}`),
       processDetail: async (_counter, detail) => {

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../schema";
 import { internal } from "../_generated/api";
-import { buildBerduAuth, computeGaps, reconcilePreparedGaps, wibDatePrefix } from "./reconciler";
+import { buildBerduAuth, computeGaps, latestCounterForDate, reconcilePreparedGaps, wibDatePrefix } from "./reconciler";
 import { hmacBase64 } from "./signature";
 
 describe("computeGaps", () => {
@@ -20,6 +20,15 @@ describe("wibDatePrefix", () => {
     // 2026-07-07 18:00 UTC == 2026-07-08 01:00 WIB
     expect(wibDatePrefix(Date.UTC(2026, 6, 7, 18, 0, 0))).toBe("260708");
   });
+});
+
+test("latestCounterForDate reads the Berdu list tail for the requested WIB date", () => {
+  expect(latestCounterForDate([
+    { id: "O-260721000047" },
+    { id: "O-260720000999" },
+    { id: "O-260721000048" },
+    { id: "invalid" },
+  ], "260721")).toBe(48);
 });
 
 describe("buildBerduAuth", () => {

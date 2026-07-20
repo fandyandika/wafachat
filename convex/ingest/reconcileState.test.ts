@@ -145,6 +145,21 @@ test("prepareReconcileRun advances through new tails and heals a late order", as
   expect(state?.unresolvedCounters).toEqual([]);
 });
 
+test("source tail exposes trailing orders that never reached the webhook", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await insertOrders(t, orgId, [1, 2]);
+  await seedState(t, orgId, 3, []);
+
+  const run = await t.query(internal.ingest.reconcileState.prepareReconcileRun, {
+    orgId,
+    datePrefix: "260719",
+    observedMaxCounter: 5,
+  });
+
+  expect(run).toEqual({ gaps: [3, 4, 5], nextCounter: 6 });
+});
+
 test("bootstrap stops the cursor at the first gap that does not fit in durable state", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
