@@ -45,9 +45,6 @@ function PerformanceWork({ mode, onModeChange }: { mode: WindowMode; onModeChang
 
   const rangeArgs = useMemo(() => ({ startAt, endAt }), [startAt, endAt]);
   const leaderboardArgs = useMemo(() => ({ startAt, endAt, raw: rawMode }), [startAt, endAt, rawMode]);
-  // Trend Harian tetap window 7 hari (anchored ke endAt, bukan Date.now) walau range default
-  // "hari ini" — biar chart tetap berguna. 1 query ~2 MB.
-  const trendArgs = useMemo(() => ({ startAt: endAt - 7 * 24 * 60 * 60 * 1000, endAt, bucket: 'day' as const }), [endAt]);
   const performanceArgs = useMemo(() => ({
     startAt,
     endAt,
@@ -65,7 +62,7 @@ function PerformanceWork({ mode, onModeChange }: { mode: WindowMode; onModeChang
   );
   const trendData = useConvexSnapshotQuery<Array<{ bucket: string; leads: number; closings: number; cr: number }>>(
     api.metrics.getTrend,
-    trendArgs,
+    'skip',
   );
   const performanceData = useConvexSnapshotQuery<PerformanceData>(api.shippingRecaps.getPerformance, performanceArgs);
 
