@@ -6,21 +6,26 @@ import { appendMessageCore } from "../messages";
 import { parseKirimdevWebhook } from "./kirimdevAdapter";
 import { parseBerduOrderDetail, DEFAULT_BERDU_STAFF_MAP } from "./berduAdapter";
 import { upsertOrderCore } from "../state";
-import { resolveAgent } from "../agents";
+import { getBoundedActiveAgentRegistry, resolveAgent } from "../agents";
+import { getDefaultOrgId } from "../orgs";
 
 /** @deprecated B2a — use resolveAgent({ phoneNumberId }) from ../agents. */
-export async function resolveCsByPhoneNumberId(ctx: any, phoneNumberId: string | undefined) {
+export async function resolveCsByPhoneNumberId(ctx: any, orgId: Id<"organizations">, phoneNumberId: string | undefined) {
   if (!phoneNumberId) return undefined;
-  return (await resolveAgent(ctx, { phoneNumberId }))?.csName;
+  return (await resolveAgent(ctx, orgId, { phoneNumberId }))?.csName;
 }
 
-// Build the Berdu staffId -> CS-name map from the csConfigs registry; fall back to
-// the baked tenant-#1 map while no config row carries berduStaffIds (pre-seed).
-export async function resolveBerduStaffMap(ctx: any): Promise<Record<string, string>> {
-  const configs = await ctx.db.query("csConfigs").collect(); // small table (~5 rows)
+// Build the Berdu staffId -> CS-name map from this org's active registry. The baked
+// pre-seed map belongs only to tenant #1; other unconfigured orgs stay neutral so
+// the adapter surfaces `Staff <id>` instead of leaking tenant-1 staff names.
+export async function resolveBerduStaffMap(ctx: any, orgId: Id<"organizations">): Promise<Record<string, string>> {
+  const configs = await getBoundedActiveAgentRegistry(ctx, orgId);
+  if (!configs) return {};
   const map: Record<string, string> = {};
   for (const c of configs) for (const id of c.berduStaffIds ?? []) map[id] = c.csName;
-  return Object.keys(map).length > 0 ? map : DEFAULT_BERDU_STAFF_MAP;
+  if (Object.keys(map).length > 0) return map;
+  const defaultOrgId = await getDefaultOrgId(ctx);
+  return defaultOrgId != null && String(defaultOrgId) === String(orgId) ? DEFAULT_BERDU_STAFF_MAP : {};
 }
 
 type ProcessOutcome =
@@ -39,7 +44,7 @@ export async function processCapturedEvent(
   if (event.kind === "message.event") {
     const parsed = parseKirimdevWebhook(headers, body, event.receivedAt);
     if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
-    const agent = await resolveAgent(ctx, { phoneNumberId: parsed.event.phoneNumberId });
+    const agent = await resolveAgent(ctx, event.orgId, { phoneNumberId: parsed.event.phoneNumberId });
     const csName = agent?.csName;
     const result = await appendMessageCore(ctx, {
       phone: parsed.event.phone,
@@ -57,7 +62,7 @@ export async function processCapturedEvent(
   }
 
   if (event.kind === "lead.created") {
-    const staffMap = await resolveBerduStaffMap(ctx);
+    const staffMap = await resolveBerduStaffMap(ctx, event.orgId);
     const parsed = parseBerduOrderDetail((body as any).order ?? body, staffMap);
     if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
     const e = parsed.event;
@@ -77,9 +82,13 @@ export async function processCapturedEvent(
     if (!p.phone || !p.content || !p.externalMessageId) return { status: "skipped", skipReason: "missing phone/content/externalMessageId" };
     if (p.direction !== "inbound" && p.direction !== "outbound") return { status: "skipped", skipReason: "invalid direction" };
     if (p.role !== "customer" && p.role !== "cs" && p.role !== "ai") return { status: "skipped", skipReason: "invalid role" };
+    const sourceMessageType = p.messageType ?? "text";
     const result = await appendMessageCore(ctx, {
       phone: String(p.phone), role: p.role, direction: p.direction,
+      // Generic messages historically normalize to text. Keep that contract so the existing
+      // response-sampling branch stays stable; source type gates closing-rule I/O separately.
       content: String(p.content), messageType: "text",
+      closingSignalEligible: p.direction === "outbound" && sourceMessageType === "text",
       externalMessageId: String(p.externalMessageId),
       createdAt: typeof p.timestamp === "number" ? p.timestamp : event.receivedAt,
       csName: typeof p.csName === "string" ? p.csName : undefined,

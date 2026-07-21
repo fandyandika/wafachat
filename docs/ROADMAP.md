@@ -2,6 +2,39 @@
 
 Deferred items. Pull from here when needed.
 
+## Current execution roadmap (2026-07-19)
+
+### Baseline Convex — 18 July 2026
+
+- Database I/O: **193.2 MB/day** (74 MB reads + 16.86 MB writes shown for the largest function; dashboard total includes all functions).
+- Largest function: `ingest/core.processEvent` **90.86 MB / 47.0%**.
+- Next hot groups: response time **17.09 MB**, follow-up **17.63 MB combined**, order-counter reconciler **9.89 MB**, period report **9.30 MB**, health monitor **7.53 MB**, lifecycle **7.13 MB**.
+- Detailed implementation plan: [`docs/superpowers/plans/2026-07-19-convex-io-remediation-roadmap.md`](superpowers/plans/2026-07-19-convex-io-remediation-roadmap.md).
+
+### Ordered delivery gates
+
+1. **Convex correctness baseline** — fix the two date-dependent tests; full suite green.
+2. **Low-risk I/O wins** — indexed health snapshot, reusable response-time cache buckets, incremental Berdu reconciliation.
+3. **Follow-up/lifecycle efficiency** — direction index, four-page durable lifecycle workers, scheduled continuations, and tenant-isolated scheduling.
+4. **Analytics safety completion** — additive sealed facts remain rollup-backed; non-composable identity unions remain exact raw with half-open 35-day/900-row fail-loud bounds. No additive distinct approximation.
+5. **Ingestion tuning** — indexed agent resolution, platform-wide resumable provider-claim migration, and fail-closed legacy registry caps while preserving raw capture/replay.
+6. **24-hour production comparison** — target ≤135 MB/day at comparable traffic, stretch ≤115 MB/day.
+7. **PWA project** — installable app shell, new branded icons, safe update flow, static/offline fallback only; authenticated Convex data is never cached by the service worker.
+8. **SaaS platform continuation** — B4 per-org timezone/cutoff, encrypted `tenantIntegrations`, onboarding/field mapper, connector presets, billing, Sentry/audit/export.
+
+### SaaS readiness status
+
+- ✅ Brand identity and favicon/app icons.
+- ✅ Organization spine, required `orgId`, tenant-isolated indexes/readers, tenant provisioning core, JWT org validation.
+- ✅ Universal capture-first ingestion and daily rollup foundation.
+- 🟡 Convex I/O remediation — local implementation/release gates green; production migration, deploy, parity run, and 24-hour measurement remain.
+- ⬜ PWA/mobile installability — next standalone project.
+- ⬜ Per-org timezone and daily cutoff (B4).
+- ⬜ Per-org encrypted integration credentials and reconciler/connectors.
+- ⬜ Self-serve onboarding, field mapper, platform presets, org switcher/multi-org membership.
+- ⬜ Billing/plan gating, production observability, audit log, backup/export controls.
+- ⬜ External early access gate: three owner-controlled tenant integrations stable, onboarding documentation/video ready.
+
 ## Recently shipped (2026-06-24)
 - ✅ **Order Reconciler (gap-heal)** — n8n workflow `fFXsXmtn94tnocJu`, every 30 min + on-demand webhook `reconcile-orders`. Detects gaps in Berdu's per-day order sequence, backfills via `/order/detail` + `set_order` with the real `created_at`. Self-heals silent drops.
 - ✅ **Normalize node hardening** — order-sync now has `timeout: 10000` + 3 retries + visible `[order-sync] FAILED` logging (was a 300s hang that silently lost orders).

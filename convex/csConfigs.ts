@@ -3,6 +3,7 @@ import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizeCsName, csKey } from "./lib";
+import { canAssignProviderNumberId, syncProviderNumberClaims } from "./agents";
 
 export type CsFeatureConfig = {
   csName: string;
@@ -55,6 +56,14 @@ function defaultForName(csName: string): CsFeatureConfig {
     reportingEnabled: true,
     isActive: true,
   };
+}
+
+function activeProviderClaims(isActive: boolean, providerNumberId?: string, providerNumberIds?: string[]): Set<string> {
+  return new Set(isActive ? [providerNumberId, ...(providerNumberIds ?? [])].filter((id): id is string => Boolean(id)) : []);
+}
+
+function sameClaims(left: Set<string>, right: Set<string>): boolean {
+  return left.size === right.size && Array.from(left).every((claim) => right.has(claim));
 }
 
 export async function getCsFeatureConfig(ctx: { db: any }, orgId: Id<"organizations">, csName: string): Promise<CsFeatureConfig> {
@@ -129,6 +138,7 @@ export const upsert = mutation({
     csPhone: v.optional(v.string()),
     provider: v.optional(v.string()),
     providerNumberId: v.optional(v.string()),
+    providerNumberIds: v.optional(v.array(v.string())),
     orderAutomationEnabled: v.boolean(),
     aiAssistantEnabled: v.boolean(),
     reportingEnabled: v.boolean(),
@@ -143,21 +153,60 @@ export const upsert = mutation({
       .query("csConfigs")
       .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
-    const payload = { ...args, normalizedName, updatedAt: now };
+    const scalarExplicit = Object.prototype.hasOwnProperty.call(args, "providerNumberId");
+    const aliasesExplicit = Object.prototype.hasOwnProperty.call(args, "providerNumberIds");
+    let providerNumberId = scalarExplicit ? args.providerNumberId : existing?.providerNumberId;
+    let providerNumberIds = aliasesExplicit ? args.providerNumberIds : existing?.providerNumberIds;
+    if (aliasesExplicit) {
+      const candidate = providerNumberIds?.length === 1 ? providerNumberIds[0] : undefined;
+      if (scalarExplicit && args.providerNumberId !== candidate) {
+        throw new Error("providerNumberId must match a singleton providerNumberIds array");
+      }
+      providerNumberId = candidate;
+    } else if (scalarExplicit) {
+      providerNumberIds = providerNumberId ? [providerNumberId] : [];
+    }
+    const previousClaims = activeProviderClaims(
+      existing?.isActive ?? false, existing?.providerNumberId, existing?.providerNumberIds,
+    );
+    const nextClaims = activeProviderClaims(args.isActive, providerNumberId, providerNumberIds);
+    const ownershipChanged = !sameClaims(previousClaims, nextClaims);
+    if (ownershipChanged) {
+      for (const claim of nextClaims) {
+        if (!await canAssignProviderNumberId(ctx, orgId, claim, existing?._id)) {
+          throw new Error(`providerNumberId is already assigned or cannot be proven unique: ${claim}`);
+        }
+      }
+    }
+    const { providerNumberId: _scalar, providerNumberIds: _aliases, ...rest } = args;
+    const shouldWriteProviderIds = scalarExplicit || aliasesExplicit || Boolean(existing);
+    const payload = {
+      ...rest,
+      normalizedName,
+      updatedAt: now,
+      providerNumberId: shouldWriteProviderIds ? providerNumberId : undefined,
+      providerNumberIds: shouldWriteProviderIds ? providerNumberIds : undefined,
+    };
 
     if (existing) {
       await ctx.db.patch(existing._id, payload);
+      if (ownershipChanged) {
+        await syncProviderNumberClaims(ctx, orgId, existing._id, args.isActive, providerNumberId, providerNumberIds);
+      }
       return { success: true, action: "updated", csName: args.csName };
     }
 
-    await ctx.db.insert("csConfigs", { ...payload, createdAt: now, orgId });
+    const configId = await ctx.db.insert("csConfigs", { ...payload, createdAt: now, orgId });
+    if (ownershipChanged) {
+      await syncProviderNumberClaims(ctx, orgId, configId, args.isActive, providerNumberId, providerNumberIds);
+    }
     return { success: true, action: "inserted", csName: args.csName };
   },
 });
 
 // Map a CS to one or more WABA phone_number_ids so the Ingestion API can attribute
 // messages/closings to the right CS without n8n (replaces the hardcoded n8n map).
-// Patches only providerNumberIds — preserves all other config fields.
+// Synchronizes the indexed scalar only when the replacement array has one provably unique ID.
 export const setProviderNumberIds = mutation({
   args: { csName: v.string(), providerNumberIds: v.array(v.string()) },
   handler: async (ctx, args) => {
@@ -168,7 +217,22 @@ export const setProviderNumberIds = mutation({
       .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
       .unique();
     if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
-    await ctx.db.patch(existing._id, { providerNumberIds: args.providerNumberIds, updatedAt: Date.now() });
+    const candidate = args.providerNumberIds.length === 1 ? args.providerNumberIds[0] : undefined;
+    const previousClaims = activeProviderClaims(existing.isActive, existing.providerNumberId, existing.providerNumberIds);
+    const nextClaims = activeProviderClaims(existing.isActive, candidate, args.providerNumberIds);
+    const ownershipChanged = !sameClaims(previousClaims, nextClaims);
+    if (ownershipChanged) {
+      for (const claim of nextClaims) {
+        if (!await canAssignProviderNumberId(ctx, orgId, claim, existing._id)) {
+          throw new Error(`providerNumberId is already assigned or cannot be proven unique: ${claim}`);
+        }
+      }
+    }
+    const providerNumberId = candidate;
+    await ctx.db.patch(existing._id, { providerNumberIds: args.providerNumberIds, providerNumberId, updatedAt: Date.now() });
+    if (ownershipChanged) {
+      await syncProviderNumberClaims(ctx, orgId, existing._id, existing.isActive, providerNumberId, args.providerNumberIds);
+    }
     return { success: true, csName: args.csName, providerNumberIds: args.providerNumberIds };
   },
 });
@@ -233,6 +297,7 @@ export const deleteCsConfig = mutation({
       .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizeCsName(args.csName)))
       .unique();
     if (!stored) return { ok: false as const, error: "tidak ada config tersimpan (mungkin CS bawaan — pakai toggle Aktif)" };
+    await syncProviderNumberClaims(ctx, orgId, stored._id, false);
     await ctx.db.delete(stored._id);
     return { ok: true as const };
   },

@@ -75,9 +75,6 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
     includeInferredDiscount: false,
     csName,
   }), [csName, endAt, startAt]);
-  // Trend Harian butuh beberapa hari → kunci window 7 hari (anchored ke endAt yang memoized,
-  // BUKAN Date.now) walau range default sekarang "hari ini". Tetap ringan: 1 query ~2 MB.
-  const trendArgs = useMemo(() => ({ startAt: endAt - 7 * 24 * 60 * 60 * 1000, endAt, bucket: 'day' as const }), [endAt]);
 
   const summaryData = useConvexSnapshotQuery<{
     leads: number;
@@ -98,7 +95,9 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
   }>>(api.metrics.getDuplicateOrders, filteredRangeArgs);
 
   const performanceData = useConvexSnapshotQuery<PerformanceData>(api.shippingRecaps.getPerformance, performanceArgs);
-  const trendData = useConvexSnapshotQuery<Array<{ bucket: string; leads: number; closings: number; cr: number }>>(api.metrics.getTrend, trendArgs);
+  // Temporary: raw 7-day trend exceeds the exact-read cap in production.
+  // Skip it instead of retrying an expensive query; KPI data remains live.
+  const trendData = useConvexSnapshotQuery<Array<{ bucket: string; leads: number; closings: number; cr: number }>>(api.metrics.getTrend, 'skip');
   // "Respon CS" = seberapa cepat bales chat baru → cukup 24 jam terakhir (paling relevan) dan
   // ini motong read messages paling berat (dulu ikut range 7 hari). Anchored ke endAt yang sudah
   // memoized (BUKAN Date.now()) supaya args tetap stabil — ga refetch tiap render.

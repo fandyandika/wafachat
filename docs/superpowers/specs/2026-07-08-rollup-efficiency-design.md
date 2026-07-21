@@ -84,7 +84,7 @@ Semua metrik & filter existing dipertahankan persis: exclude `isInternalTestPhon
 | `analytics.getCsLeaderboard` / `getProductDifficulty` / `getPeriodReport` / `shippingRecaps.getPerformance` | orders+recaps ×2 (current+prior) | sum rollup rows current + prior. byProduct dari field rollup. delivered dari field rollup. |
 | `followUp.getFollowUpEffectiveness` | recaps 30 hari | sum `fuClosings/fuH1/fuH2/fuH3` dari 30 row rollup. |
 
-**TIDAK diubah (YAGNI, disengaja):** `getFollowUpCandidates` (operasional real-time, sudah bounded 6 hari), `getCsDetail` (drawer on-demand, low QPS), `conversationLifecycle.resolveBatch` (background truth), semua mutation panel.
+**TIDAK diubah (YAGNI, disengaja):** `getFollowUpCandidates` (operasional real-time, sudah bounded 6 hari), `getCsDetail` (drawer on-demand, low QPS), sweep `conversationLifecycle` (background truth), semua mutation panel.
 
 ## 6. Verifikasi paritas (wajib sebelum switch)
 

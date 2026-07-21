@@ -2,15 +2,17 @@ import { query, action, mutation, internalAction, internalMutation, internalQuer
 import { requireMember, requireMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { csKey, isInternalTestPhone, normalizeCsName } from "./lib";
+import { csKey, isInternalTestPhone, normalizeCsName, normalizePhone } from "./lib";
 import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
 import { internal } from "./_generated/api";
-import { followUpEffectivenessFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
+import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
+import { getBoundedActiveAgentRegistry } from "./agents";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
+const MAX_FOLLOW_UP_ROWS = 100;
 
 // Count follow-up touches (outbound messages after the 24h window closed, relative to lastInbound).
 // Manual-via-WABA follow-ups and API sends both land here, so the funnel can't double-send a lead a
@@ -18,11 +20,10 @@ const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbou
 async function touchInfo(ctx: any, conversationId: any, lastInboundAt: number | null) {
   if (lastInboundAt == null) return { count: 0, lastAt: null as number | null, ats: [] as number[] };
   const windowClose = lastInboundAt + WINDOW_HOURS * HOUR;
-  const touches = await ctx.db
+  const touches = await collectExactBounded(ctx.db
     .query("messages")
-    .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversationId).gt("createdAt", windowClose))
-    .filter((q: any) => q.eq(q.field("direction"), "outbound"))
-    .collect();
+    .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", conversationId).eq("direction", "outbound").gt("createdAt", windowClose))
+    , "followUp touch history", MAX_FOLLOW_UP_ROWS);
   const ats = (touches.map((t: any) => t.createdAt) as number[]).sort((a, b) => a - b);
   return { count: ats.length, lastAt: ats.length ? ats[ats.length - 1] : null, ats };
 }
@@ -32,11 +33,10 @@ async function touchInfo(ctx: any, conversationId: any, lastInboundAt: number | 
 export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: any, lastInboundAt: number | null, beforeTime: number) {
   if (lastInboundAt == null) return 0;
   const windowClose = lastInboundAt + WINDOW_HOURS * HOUR;
-  const touches = await ctx.db
+  const touches = await collectExactBounded(ctx.db
     .query("messages")
-    .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversationId).gt("createdAt", windowClose).lt("createdAt", beforeTime))
-    .filter((q: any) => q.eq(q.field("direction"), "outbound"))
-    .collect();
+    .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", conversationId).eq("direction", "outbound").gt("createdAt", windowClose).lt("createdAt", beforeTime))
+    , "followUp closing touch history", MAX_FOLLOW_UP_ROWS);
   return touches.length;
 }
 
@@ -55,7 +55,7 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
     const recent = (
       await Promise.all(
         (["active", "handover"] as const).map((s) =>
-          ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", args.orgId).eq("status", s).gte("updatedAt", since)).collect(),
+          collectExactBounded(ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q: any) => q.eq("orgId", args.orgId).eq("status", s).gte("updatedAt", since)), "followUp candidates", MAX_FOLLOW_UP_ROWS),
         ),
       )
     ).flat();
@@ -76,7 +76,7 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
       ghosted.map((x) => ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q: any) => q.eq("orgId", args.orgId).eq("orderIdBerdu", x.c.orderId)).first()),
     );
     const lastInbounds = await Promise.all(
-      ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", x.c._id)).order("desc").filter((q: any) => q.eq(q.field("direction"), "inbound")).first()),
+      ghosted.map((x) => ctx.db.query("messages").withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", x.c._id).eq("direction", "inbound")).order("desc").first()),
     );
     const touches = await Promise.all(
       ghosted.map((x, i) => touchInfo(ctx, x.c._id, lastInbounds[i]?.createdAt ?? null)),
@@ -172,7 +172,7 @@ export const candidacyFor = internalQuery({
     const now = args.nowOverride ?? Date.now();
     const recap = await ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", c.orgId).eq("orderIdBerdu", c.orderId)).first();
     const lastMsg = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first();
-    const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").filter((q) => q.eq(q.field("direction"), "inbound")).first();
+    const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_direction_createdAt", (q) => q.eq("conversationId", c._id).eq("direction", "inbound")).order("desc").first();
     const order = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", c.orgId).eq("orderId", c.orderId)).first();
     const normName = normalizeCsName(c.assignedCsName);
     let cfg = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", c.orgId).eq("normalizedName", normName)).first();
@@ -181,8 +181,16 @@ export const candidacyFor = internalQuery({
     // "CS " prefix) so providerNumberId resolves regardless of how the lead was named.
     if (!cfg || !cfg.providerNumberId) {
       const k = csKey(c.assignedCsName);
-      const all = await ctx.db.query("csConfigs").collect().then((all) => all.filter((x) => String(x.orgId) === String(c.orgId)));
-      cfg = all.find((x) => csKey(x.csName) === k && x.providerNumberId) ?? cfg;
+      cfg = await ctx.db
+        .query("csConfigs")
+        .withIndex("by_org_key", (q) => q.eq("orgId", c.orgId).eq("key", k))
+        .first() ?? cfg;
+      if (!cfg?.providerNumberId) {
+        const legacy = await getBoundedActiveAgentRegistry(ctx, c.orgId);
+        if (legacy) {
+          cfg = legacy.find((x) => x.key == null && csKey(x.csName) === k && x.providerNumberId) ?? cfg;
+        }
+      }
     }
     const touch = await touchInfo(ctx, c._id, lastInbound?.createdAt ?? null);
     const eligible = eligibleStage({
@@ -321,11 +329,11 @@ export const unarchiveFollowUp = mutation({
 });
 
 export const getArchivedFollowUps = query({
-  args: { csName: v.optional(v.string()) },
+  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "followUp.getArchivedFollowUps");
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
-    const now = Date.now();
+    const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
     const since = now - 14 * DAY;
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
@@ -333,10 +341,10 @@ export const getArchivedFollowUps = query({
     // Manual archive sets status="closed" + followUpArchivedAt, so read only recently-closed
     // conversations via the index (NOT a full-table .filter().collect() scan) then keep the
     // ones that were actually archived. Bounds reads to recent closed convs.
-    const archived = await ctx.db
+    const archived = await collectExactBounded(ctx.db
       .query("conversations")
       .withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", orgId).eq("status", "closed").gte("updatedAt", since))
-      .collect();
+      , "followUp archived conversations");
 
     const filtered = archived
       .filter((c) => c.followUpArchivedAt != null)
@@ -421,9 +429,42 @@ export const getFollowUpEffectiveness = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "followUp.getFollowUpEffectiveness");
-    return followUpEffectivenessFromRollups(ctx, orgId, args);
+    return computeFollowUpEffectivenessRaw(ctx, orgId, args);
   },
 });
+
+export async function computeFollowUpEffectivenessRaw(
+  ctx: any,
+  orgId: Id<"organizations">,
+  args: { startAt: number; endAt: number; csName?: string },
+) {
+  assertPublicAnalyticsRange(args.startAt, args.endAt, "followUp.getFollowUpEffectiveness");
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
+  const key = args.csName ? csKey(args.csName) : null;
+  const recaps = (
+    await collectExactBounded(ctx.db.query("shippingRecaps")
+      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lt("closedAt", args.endAt)),
+      "followUp.getFollowUpEffectiveness recaps")
+  ).filter((recap: any) => recap.status !== "cancelled" && recap.status !== "cancelled_after_export"
+    && !isInternalTestPhone(recap.customerPhone, internalPhones) && (!key || csKey(recap.csName) === key));
+  const latestByClosing = new Map<string, any>();
+  for (const recap of recaps) {
+    const closingKey = recap.orderIdBerdu || normalizePhone(recap.customerPhone);
+    const existing = latestByClosing.get(closingKey);
+    if (!existing || recap.closedAt > existing.closedAt) latestByClosing.set(closingKey, recap);
+  }
+  const closings = Array.from(latestByClosing.values());
+  const byStage = { h1: 0, h2: 0, h3: 0 };
+  let fromFollowUp = 0;
+  for (const recap of closings) {
+    const touches = recap.followUpTouchesAtClose ?? 0;
+    if (touches >= 1) fromFollowUp++;
+    if (touches === 1) byStage.h1++;
+    else if (touches === 2) byStage.h2++;
+    else if (touches >= 3) byStage.h3++;
+  }
+  return { totalClosings: closings.length, fromFollowUp, byStage };
+}
 
 // "Closing" tab: recent closings so CS can see where a lead WENT after it dropped out of the funnel
 // (PEMESANAN BERHASIL / marker → status closed → vanishes from H+1/2/3). Read-only over shippingRecaps;
@@ -435,13 +476,17 @@ export const getClosedFollowUps = query({
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
-    const since = now - (args.sinceDays ?? 7) * DAY;
+    const sinceDays = args.sinceDays ?? 7;
+    if (!Number.isFinite(sinceDays) || sinceDays < 0 || sinceDays > 35) {
+      throw new Error("followUp.getClosedFollowUps: range exceeds 35 days");
+    }
+    const since = now - sinceDays * DAY;
     const csKeyMemo = args.csName ? csKey(args.csName) : null;
 
-    const recaps = await ctx.db
+    const recaps = await collectExactBounded(ctx.db
       .query("shippingRecaps")
-      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", since).lte("closedAt", now))
-      .collect();
+      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", since).lt("closedAt", now)),
+      "followUp.getClosedFollowUps recaps");
 
     const filtered = recaps
       .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export")

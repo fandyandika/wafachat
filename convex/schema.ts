@@ -1,6 +1,17 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+const rollupProduct = v.object({
+  product: v.string(),
+  leads: v.number(),
+  closings: v.number(),
+  leadOrders: v.number(),
+  revenue: v.number(),
+  discount: v.number(),
+  cod: v.number(),
+  transfer: v.number(),
+});
+
 export default defineSchema({
   customers: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -34,8 +45,20 @@ export default defineSchema({
   })
     .index("by_org_orderId", ["orgId", "orderId"])
     .index("by_org_customerPhone", ["orgId", "customerPhone"])
+    .index("by_org_customerPhone_createdAt", ["orgId", "customerPhone", "createdAt"])
     .index("by_org_createdAt", ["orgId", "createdAt"])
     .index("by_org_csKey_createdAt", ["orgId", "csKey", "createdAt"]),
+
+  // Per-day cursor for the Berdu safety-net reconciler. This keeps repeated
+  // cron runs to only the new order-id tail plus a bounded set of old holes.
+  reconcileStates: defineTable({
+    orgId: v.id("organizations"),
+    datePrefix: v.string(),
+    nextCounter: v.number(),
+    unresolvedCounters: v.array(v.number()),
+    probeCursor: v.optional(v.number()),
+    updatedAt: v.number(),
+  }).index("by_org_datePrefix", ["orgId", "datePrefix"]),
 
   conversations: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -56,9 +79,20 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_org_orderId", ["orgId", "orderId"])
+    .index("by_org_status", ["orgId", "status"])
     .index("by_org_status_updatedAt", ["orgId", "status", "updatedAt"])
     .index("by_org_customerPhone_updatedAt", ["orgId", "customerPhone", "updatedAt"])
     .index("by_org_assignedCsName_status", ["orgId", "assignedCsName", "status"]),
+
+  lifecycleSweepStates: defineTable({
+    orgId: v.id("organizations"),
+    activeCursor: v.optional(v.string()),
+    handoverCursor: v.optional(v.string()),
+    activeDone: v.boolean(),
+    handoverDone: v.boolean(),
+    nextStatus: v.union(v.literal("active"), v.literal("handover")),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
 
   csConfigs: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -82,9 +116,55 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_org", ["orgId"])
     .index("by_org_key", ["orgId", "key"])
     .index("by_org_normalizedName", ["orgId", "normalizedName"])
+    .index("by_org_providerNumberId", ["orgId", "providerNumberId"])
     .index("by_org_active", ["orgId", "isActive"]),
+
+  providerNumberBackfillRuns: defineTable({
+    orgId: v.id("organizations"),
+    phase: v.union(v.literal("scan"), v.literal("apply"), v.literal("cleanup"), v.literal("complete")),
+    version: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  providerNumberBackfillClaims: defineTable({
+    orgId: v.id("organizations"),
+    runId: v.id("providerNumberBackfillRuns"),
+    providerNumberId: v.string(),
+    agentId: v.id("csConfigs"),
+    createdAt: v.number(),
+  })
+    .index("by_org_run_providerNumberId", ["orgId", "runId", "providerNumberId"])
+    .index("by_org_run", ["orgId", "runId"])
+    .index("by_org_run_agent", ["orgId", "runId", "agentId"]),
+
+  providerPlatformMigrationRuns: defineTable({
+    key: v.string(),
+    status: v.union(v.literal("running"), v.literal("failed"), v.literal("complete")),
+    enumerationCursor: v.optional(v.string()),
+    enumerationComplete: v.boolean(),
+    enumeratedOrganizations: v.number(),
+    completedOrganizations: v.number(),
+    pendingOrganizations: v.number(),
+    failedOrganizations: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
+
+  providerPlatformMigrationOrganizations: defineTable({
+    runId: v.id("providerPlatformMigrationRuns"),
+    orgId: v.id("organizations"),
+    status: v.union(v.literal("pending"), v.literal("failed"), v.literal("complete")),
+    attempts: v.number(),
+    lastError: v.optional(v.string()),
+    updatedAt: v.number(),
+  })
+    .index("by_run_org", ["runId", "orgId"])
+    .index("by_run_status", ["runId", "status"]),
 
   // ── Ingestion API (Fase 1) ────────────────────────────────────────────────
   // Capture-first: every inbound webhook is stored raw BEFORE processing, so a
@@ -111,7 +191,9 @@ export default defineSchema({
     replayOf: v.optional(v.id("ingestEvents")),
   })
     .index("by_status_receivedAt", ["status", "receivedAt"])
-    .index("by_receivedAt", ["receivedAt"]),
+    .index("by_receivedAt", ["receivedAt"])
+    .index("by_org_kind_status_receivedAt", ["orgId", "kind", "status", "receivedAt"])
+    .index("by_org_status_receivedAt", ["orgId", "status", "receivedAt"]),
 
   ingestSources: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
@@ -131,7 +213,9 @@ export default defineSchema({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     alertKey: v.string(), // "silence" | "failure-spike"
     lastSentAt: v.number(),
-  }).index("by_alertKey", ["alertKey"]),
+  })
+    .index("by_alertKey", ["alertKey"])
+    .index("by_org_alertKey", ["orgId", "alertKey"]),
 
   // ── Rollup efficiency (specs/2026-07-08-rollup-efficiency-design.md) ──────
   // 1 row per (csKey, 16:00-WIB window). Recomputed-bounded on every order/recap
@@ -150,15 +234,121 @@ export default defineSchema({
     delivered: v.number(),
     revenue: v.number(),
     discount: v.number(),
+    // Additive facts: optional until the Task 8 production backfill completes.
+    cod: v.optional(v.number()),
+    transfer: v.optional(v.number()),
     fuClosings: v.number(),
     fuH1: v.number(),
     fuH2: v.number(),
     fuH3: v.number(),
-    byProduct: v.array(v.object({ product: v.string(), leads: v.number(), closings: v.number() })),
+    byProduct: v.array(v.object({
+      product: v.string(),
+      leads: v.number(),
+      closings: v.number(),
+      leadOrders: v.optional(v.number()),
+      revenue: v.optional(v.number()),
+      discount: v.optional(v.number()),
+      cod: v.optional(v.number()),
+      transfer: v.optional(v.number()),
+    })),
     updatedAt: v.number(),
   })
     .index("by_org_window_cs", ["orgId", "windowKey", "csKey"])
     .index("by_org_windowKey", ["orgId", "windowKey"]),
+
+  // Written only after a bounded recompute has reconciled every CS row. Empty
+  // windows get a marker too, so "no rows" is distinguishable from incomplete.
+  rollupWindows: defineTable({
+    orgId: v.id("organizations"),
+    windowKey: v.string(),
+    schemaVersion: v.number(),
+    completedAt: v.number(),
+    sampleRunId: v.optional(v.id("rollupMigrationRuns")),
+  }).index("by_org_windowKey", ["orgId", "windowKey"]),
+
+  rollupMigrationRuns: defineTable({
+    orgId: v.id("organizations"),
+    windowKey: v.string(),
+    phase: v.union(
+      v.literal("existing"), v.literal("orders"), v.literal("recaps"),
+      v.literal("messages"), v.literal("products"), v.literal("publish"),
+      v.literal("complete"),
+    ),
+    dirty: v.optional(v.boolean()),
+    cursor: v.optional(v.string()),
+    documentsProcessed: v.number(),
+    sampleCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_window", ["orgId", "windowKey"])
+    .index("by_org_window_phase", ["orgId", "windowKey", "phase"]),
+
+  rollupMigrationAgents: defineTable({
+    runId: v.id("rollupMigrationRuns"),
+    orgId: v.id("organizations"),
+    windowKey: v.string(),
+    csKey: v.string(),
+    csName: v.string(),
+    csNameCount: v.number(),
+    leadOrders: v.number(), leadsCust: v.number(), closings: v.number(), closedCust: v.number(),
+    cancelled: v.number(), manualClosings: v.number(), delivered: v.number(),
+    revenue: v.number(), discount: v.number(), fuClosings: v.number(), fuH1: v.number(),
+    fuH2: v.number(), fuH3: v.number(), cod: v.number(), transfer: v.number(),
+    productLeads: v.number(), productClosings: v.number(), productLeadOrders: v.number(),
+    productRevenue: v.number(), productDiscount: v.number(), productCod: v.number(),
+    productTransfer: v.number(),
+    productsFinalized: v.boolean(),
+    productCursor: v.optional(v.string()),
+    topProducts: v.optional(v.array(rollupProduct)),
+    updatedAt: v.number(),
+  })
+    .index("by_run_cs", ["runId", "csKey"])
+    .index("by_run_productsFinalized", ["runId", "productsFinalized"])
+    .index("by_run", ["runId"]),
+
+  rollupMigrationNameCounts: defineTable({
+    runId: v.id("rollupMigrationRuns"), csKey: v.string(), rawName: v.string(), count: v.number(),
+  }).index("by_run_cs_name", ["runId", "csKey", "rawName"]),
+
+  rollupMigrationProducts: defineTable({
+    runId: v.id("rollupMigrationRuns"), csKey: v.string(), product: v.string(),
+    leads: v.number(), closings: v.number(), leadOrders: v.number(), revenue: v.number(),
+    discount: v.number(), cod: v.number(), transfer: v.number(),
+  })
+    .index("by_run_cs_product", ["runId", "csKey", "product"])
+    .index("by_run_cs", ["runId", "csKey"]),
+
+  rollupMigrationDistinctClaims: defineTable({
+    runId: v.id("rollupMigrationRuns"), claimKey: v.string(), count: v.number(),
+  }).index("by_run_claim", ["runId", "claimKey"]),
+
+  rollupMigrationLatestOrders: defineTable({
+    runId: v.id("rollupMigrationRuns"), csKey: v.string(), phone: v.string(),
+    createdAt: v.number(), product: v.string(),
+  }).index("by_run_cs_phone", ["runId", "csKey", "phone"]),
+
+  rollupMigrationClosingClaims: defineTable({
+    runId: v.id("rollupMigrationRuns"), csKey: v.string(), identity: v.string(), closedAt: v.number(),
+    phone: v.string(), product: v.string(), revenue: v.number(), discount: v.number(),
+    manual: v.boolean(), delivered: v.boolean(), touchCount: v.number(),
+    paymentMethod: v.string(),
+  }).index("by_run_cs_identity", ["runId", "csKey", "identity"]),
+
+  rollupMigrationConversationStates: defineTable({
+    runId: v.id("rollupMigrationRuns"), conversationId: v.id("conversations"),
+    csKey: v.string(), csName: v.string(), pendingInboundAt: v.optional(v.number()),
+  }).index("by_run_conversation", ["runId", "conversationId"]),
+
+  rollupMigrationSamples: defineTable({
+    runId: v.id("rollupMigrationRuns"), orgId: v.id("organizations"),
+    csKey: v.string(), csName: v.string(), conversationId: v.id("conversations"),
+    sourceMessageId: v.optional(v.id("messages")),
+    deltaMs: v.number(), inboundAt: v.number(), slaBreach: v.boolean(), createdAt: v.number(),
+  })
+    .index("by_run_createdAt", ["runId", "createdAt"])
+    .index("by_run_cs_createdAt", ["runId", "csKey", "createdAt"])
+    .index("by_run_sourceMessage", ["runId", "sourceMessageId"]),
 
   // Tiny fact row per detected reply pair. NO first/ongoing tag: "first" is
   // window-dependent (earliest pair per conversation WITHIN the queried window),
@@ -190,6 +380,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_conversation_createdAt", ["conversationId", "createdAt"])
+    .index("by_conversation_direction_createdAt", ["conversationId", "direction", "createdAt"])
     .index("by_org_createdAt", ["orgId", "createdAt"])
     .index("by_org_customerPhone_createdAt", ["orgId", "customerPhone", "createdAt"])
     .index("by_org_externalMessageId", ["orgId", "externalMessageId"]),

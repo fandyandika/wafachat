@@ -57,9 +57,10 @@ test("provisionOrg: duplicate slug / duplicate email / invalid slug all THROW (n
 test("E2E: provisioned org #2 ingests via its own source and its admin sees ONLY its data", async () => {
   const t = convexTest(schema);
   const defaultOrgId = await seedDefaultOrg(t);
+  const orgTwoOrderAt = Date.parse("2026-07-14T09:15:00+07:00");
   // tenant #1 baseline: an admin (users row) + one order
   await t.run(async (ctx: any) => {
-    const NOW = Date.now();
+    const NOW = orgTwoOrderAt;
     await ctx.db.insert("users", { orgId: defaultOrgId, email: "admin@pi.test", name: "PI", passwordHash: "x", role: "admin", isActive: true, createdAt: 1, updatedAt: 1 });
     await ctx.db.insert("orders", {
       orgId: defaultOrgId, orderId: "O-PI-1", customerPhone: "62800000001", customerName: "cust-pi",
@@ -78,7 +79,7 @@ test("E2E: provisioned org #2 ingests via its own source and its admin sees ONLY
   expect(String(source.orgId)).toBe(String(prov.orgId));
   // ingest a lead.created order through org #2's source (same internal path the webhook route uses)
   const rawBody = JSON.stringify({ order: {
-    id: "O-ORGTWO-1", created_at: "2026-07-14T09:15:00+07:00", assigned_to_staff: "B-Z28TdYc",
+    id: "O-ORGTWO-1", created_at: new Date(orgTwoOrderAt).toISOString(), assigned_to_staff: "B-Z28TdYc",
     shipping_cost: 15000, total: 100000,
     shipping_address: { phone: "62899999001", firstName: "Dua", address: "Jl. Dua 2", district: "D", city: "E" },
     products: [{ name: "Buku Dua", price: 85000, count: 1 }],
@@ -94,8 +95,7 @@ test("E2E: provisioned org #2 ingests via its own source and its admin sees ONLY
     expect(orders.filter((o: any) => String(o.orgId) === String(defaultOrgId)).length).toBe(1);
   });
   // org #2 admin (users row from provisionOrg + matching orgId claim) sees ONLY org #2
-  const now = Date.now();
-  const range = { startAt: now - 86_400_000, endAt: now + 86_400_000 };
+  const range = { startAt: orgTwoOrderAt - 86_400_000, endAt: orgTwoOrderAt + 86_400_000 };
   const sumTwo = await t.withIdentity({ subject: "u2", role: "admin", name: "T", email: "admin@two.test", orgId: String(prov.orgId) } as any)
     .query(api.metrics.getDashboardSummary, { ...range, raw: true });
   expect(sumTwo.leads).toBe(1);   // only org #2's order — NOT 2

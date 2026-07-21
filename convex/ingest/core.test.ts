@@ -2,6 +2,8 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
+import type { Id } from "../_generated/dataModel";
+import { processCapturedEvent, resolveBerduStaffMap } from "./core";
 
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
@@ -18,6 +20,24 @@ const RECEIVED_RAW = JSON.stringify({
   } }] }],
 });
 const RECEIVED_HEADERS = JSON.stringify({ "x-kirim-event": "message.received" });
+
+test("resolveBerduStaffMap fails closed above the active registry cap", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 51; i++) {
+      await ctx.db.insert("csConfigs", {
+        orgId, normalizedName: `agent-${i}`, csName: `Agent ${i}`, key: `agent-${i}`,
+        nameAliases: [], berduStaffIds: [`STAFF-${i}`], providerNumberIds: [],
+        orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+        isActive: true, createdAt: i + 1, updatedAt: 1,
+      });
+    }
+  });
+  await t.run(async (ctx) => {
+    expect(await resolveBerduStaffMap(ctx, orgId)).toEqual({});
+  });
+});
 
 async function captureKirimdev(t: ReturnType<typeof convexTest>, orgId: any, rawBody: string, rawHeaders = RECEIVED_HEADERS) {
   return t.mutation(internal.ingest.events.captureEvent, {
@@ -204,6 +224,164 @@ test("lead.created attribution: csConfigs.berduStaffIds overrides the baked defa
     const orders = await ctx.db.query("orders").collect();
     const order = orders.find((o) => o.orderId.includes("2607110001"));
     expect(order?.assignedCsName).toBe("Sari"); // registry won, not baked "Aisyah"
+  });
+});
+
+test("ingestion reads tenant closing phrases only for outbound text while retaining closing detection", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    await ctx.db.insert("closingRules", { orgId, phrase: "CUSTOM CLOSED", active: true, createdAt: 1 });
+    let closingRuleQueries = 0;
+    const tracedCtx = {
+      ...ctx,
+      db: new Proxy(ctx.db, {
+        get(target, property, receiver) {
+          if (property === "query") {
+            return (table: string) => {
+              if (table === "closingRules") closingRuleQueries++;
+              return target.query(table);
+            };
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    };
+    const event = (rawBody: Record<string, unknown>) => ({
+      sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}",
+      rawBody: JSON.stringify(rawBody), receivedAt: 1, orgId,
+    });
+
+    await processCapturedEvent(tracedCtx, event({
+      phone: "6281234567001", direction: "inbound", role: "customer",
+      content: "CUSTOM CLOSED", externalMessageId: "inbound-close",
+    }));
+    expect(closingRuleQueries).toBe(0);
+
+    await processCapturedEvent(tracedCtx, event({
+      phone: "6281234567002", direction: "outbound", role: "cs", messageType: "template",
+      content: "CUSTOM CLOSED", externalMessageId: "template-close",
+    }));
+    expect(closingRuleQueries).toBe(0);
+    const template = await ctx.db.query("messages")
+      .withIndex("by_org_externalMessageId", (q: any) => q.eq("orgId", orgId).eq("externalMessageId", "template-close"))
+      .unique();
+    expect(template?.messageType).toBe("text");
+
+    await processCapturedEvent(tracedCtx, event({
+      phone: "6281234567004", direction: "outbound", role: "cs", messageType: "future_type",
+      content: "CUSTOM CLOSED", externalMessageId: "unknown-type-close",
+    }));
+    expect(closingRuleQueries).toBe(0);
+    const unknown = await ctx.db.query("messages")
+      .withIndex("by_org_externalMessageId", (q: any) => q.eq("orgId", orgId).eq("externalMessageId", "unknown-type-close"))
+      .unique();
+    expect(unknown?.messageType).toBe("text");
+
+    await processCapturedEvent(tracedCtx, event({
+      phone: "6281234567003", direction: "outbound", role: "cs", messageType: "text",
+      content: "CUSTOM CLOSED", externalMessageId: "text-close",
+    }));
+    expect(closingRuleQueries).toBe(1);
+    expect(await ctx.db.query("shippingRecaps")
+      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId))
+      .collect()).toHaveLength(1);
+  });
+});
+
+test("generic template ingest retains the established response-sample path", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const inboundEventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}",
+    rawBody: JSON.stringify({
+      phone: "6281234567100", direction: "inbound", role: "customer",
+      content: "halo", externalMessageId: "template-inbound", timestamp: 1_000,
+    }), signatureOk: true, orgId,
+  });
+  const templateEventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}",
+    rawBody: JSON.stringify({
+      phone: "6281234567100", direction: "outbound", role: "cs", messageType: "template",
+      content: "PEMESANAN BERHASIL", externalMessageId: "template-outbound", timestamp: 2_000,
+    }), signatureOk: true, orgId,
+  });
+
+  await t.mutation(internal.ingest.core.processEvent, { eventId: inboundEventId });
+  await t.mutation(internal.ingest.core.processEvent, { eventId: templateEventId });
+
+  await t.run(async (ctx: any) => {
+    expect(await ctx.db.query("responseSamples").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId)).collect()).toHaveLength(1);
+    expect(await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+  });
+});
+
+test("unknown generic source type preserves persistence, deduplication, and response sampling", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const capture = (rawBody: Record<string, unknown>) => t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "custom-x", kind: "generic.message", rawHeaders: "{}",
+    rawBody: JSON.stringify(rawBody), signatureOk: true, orgId,
+  });
+  const inboundEventId = await capture({
+    phone: "6281234567200", direction: "inbound", role: "customer",
+    content: "halo", externalMessageId: "unknown-inbound", timestamp: 1_000,
+  });
+  const outboundBody = {
+    phone: "6281234567200", direction: "outbound", role: "cs", messageType: "future_type",
+    content: "PEMESANAN BERHASIL", externalMessageId: "unknown-outbound", timestamp: 2_000,
+  };
+  const outboundEventId = await capture(outboundBody);
+  const duplicateEventId = await capture(outboundBody);
+
+  await t.mutation(internal.ingest.core.processEvent, { eventId: inboundEventId });
+  await t.mutation(internal.ingest.core.processEvent, { eventId: outboundEventId });
+  await t.mutation(internal.ingest.core.processEvent, { eventId: duplicateEventId });
+
+  await t.run(async (ctx: any) => {
+    const messages = await ctx.db.query("messages")
+      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId))
+      .collect();
+    expect(messages).toHaveLength(2);
+    expect(messages.find((message: any) => message.externalMessageId === "unknown-outbound")?.messageType).toBe("text");
+    expect(await ctx.db.query("responseSamples").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId)).collect()).toHaveLength(1);
+    expect(await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId)).collect()).toHaveLength(0);
+  });
+});
+
+test("lead.created attribution: baked staff map is tenant-1 only", async () => {
+  const t = convexTest(schema);
+  const defaultOrgId = await seedOrg(t);
+  const otherOrgId = await t.run((ctx: any) => ctx.db.insert("organizations", {
+    slug: "tenant-two", name: "Tenant Two", createdAt: 1, updatedAt: 1,
+  })) as Id<"organizations">;
+  const rawBody = (id: string, phone: string) => JSON.stringify({ order: {
+    id, assigned_to_staff: "B-1apQSy",
+    products: [{ name: "Quran Mapping", price: 100000, count: 1 }],
+    shipping_address: { phone, firstName: "Budi", address: "Jl. X", district: "Y", city: "Z" },
+  } });
+
+  const defaultEventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "berdu-pustakaislam", kind: "lead.created", rawHeaders: "{}",
+    rawBody: rawBody("2607111001", "6281234510001"), signatureOk: true, orgId: defaultOrgId,
+  });
+  const otherEventId = await t.mutation(internal.ingest.events.captureEvent, {
+    sourceKey: "berdu-tenant-two", kind: "lead.created", rawHeaders: "{}",
+    rawBody: rawBody("2607111002", "6281234510002"), signatureOk: true, orgId: otherOrgId,
+  });
+  await t.mutation(internal.ingest.core.processEvent, { eventId: defaultEventId });
+  await t.mutation(internal.ingest.core.processEvent, { eventId: otherEventId });
+
+  await t.run(async (ctx: any) => {
+    const defaultOrder = await ctx.db.query("orders")
+      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", defaultOrgId))
+      .unique();
+    const otherOrder = await ctx.db.query("orders")
+      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", otherOrgId))
+      .unique();
+    expect(defaultOrder?.assignedCsName).toBe("Aisyah");
+    expect(otherOrder?.assignedCsName).toBe("Staff B-1apQSy");
+    expect(otherOrder?.assignedCsName).not.toBe("Aisyah");
   });
 });
 

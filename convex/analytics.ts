@@ -4,8 +4,9 @@ import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, csKey, canonicalizeProduct, startOfJakartaDayMs } from "./lib";
 import { normalizeCsName } from "./shippingRecaps";
-import { dailyReportFromRollups, leaderboardFromRollups, productDifficultyFromRollups, periodReportFromRollups } from "./rollupReaders";
+import { productDifficultyFromRaw, periodReportFromRaw } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
+import { assertFallbackLookupBudget, assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 
 // leads/closedCust are keyed by customer PHONE (unique customers); closings by ORDER
 // (orderIdBerdu) — order-level is right for volume + revenue (a double-ordering customer
@@ -17,10 +18,10 @@ async function computeCsAgg(ctx: any, orgId: Id<"organizations">, startAt: numbe
   const internalPhones = await getInternalPhoneSet(ctx, orgId);
   const key = csName ? csKey(csName) : null;
   const orders = (
-    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+    await collectExactBounded(ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)), "analytics.getCsLeaderboard orders")
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
   const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+    await collectExactBounded(ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)), "analytics.getCsLeaderboard recaps")
   ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKey(r.csName) === key));
 
   // Group by csKey so a CS's raw name-forms ("Aisyah"/"CS Aisyah") merge into one row.
@@ -48,9 +49,10 @@ function aggName(a: CsAgg): string {
 }
 
 export async function computeCsLeaderboardRaw(ctx: any, orgId: Id<"organizations">, args: { startAt: number; endAt: number; csName?: string }) {
+    assertPublicAnalyticsRange(args.startAt, args.endAt, "analytics.getCsLeaderboard");
     const len = args.endAt - args.startAt;
     const cur = await computeCsAgg(ctx, orgId, args.startAt, args.endAt, args.csName);
-    const prev = await computeCsAgg(ctx, orgId, args.startAt - len, args.startAt - 1, args.csName);
+    const prev = await computeCsAgg(ctx, orgId, args.startAt - len, args.startAt, args.csName);
     const cr = (c: number, l: number) => (l > 0 ? Math.round((c / l) * 1000) / 10 : 0);
     const keys = Array.from(new Set(Array.from(cur.keys()).concat(Array.from(prev.keys()))));
     const rows = keys.map((k) => {
@@ -75,45 +77,20 @@ export async function computeCsLeaderboardRaw(ctx: any, orgId: Id<"organizations
 }
 
 export const getCsLeaderboard = query({
-  // raw=true → calendar-day / any-range raw computation (cheap for a small "today" slice);
-  // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
+  // `raw` remains accepted for API compatibility. Exact global identity unions
+  // require the bounded raw calculation for every range.
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getCsLeaderboard");
-    return args.raw ? computeCsLeaderboardRaw(ctx, orgId, args) : leaderboardFromRollups(ctx, orgId, args);
+    return computeCsLeaderboardRaw(ctx, orgId, args);
   },
 });
-
-async function computeProductAgg(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number, csName?: string) {
-  const internalPhones = await getInternalPhoneSet(ctx, orgId);
-  const key = csName ? csKey(csName) : null;
-  const orders = (
-    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-  ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
-  const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-  ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones) && (!key || csKey(r.csName) === key));
-
-  const leads = new Map<string, number>();
-  const closings = new Map<string, Set<string>>();
-  for (const o of orders) {
-    const p = canonicalizeProduct(o.productName || o.products);
-    leads.set(p, (leads.get(p) ?? 0) + 1);
-  }
-  for (const r of recaps) {
-    const p = canonicalizeProduct(r.packageContent);
-    const s = closings.get(p) ?? new Set<string>();
-    s.add(r.orderIdBerdu || normalizePhone(r.customerPhone));
-    closings.set(p, s);
-  }
-  return { leads, closings };
-}
 
 export const getProductDifficulty = query({
   args: { startAt: v.number(), endAt: v.number(), minLeads: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getProductDifficulty");
-    return productDifficultyFromRollups(ctx, orgId, args);
+    return productDifficultyFromRaw(ctx, orgId, args);
   },
 });
 
@@ -146,7 +123,7 @@ export const getPeriodReport = query({
   args: { period: v.union(v.literal("week"), v.literal("month")), anchor: v.optional(v.number()), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getPeriodReport");
-    return periodReportFromRollups(ctx, orgId, args);
+    return periodReportFromRaw(ctx, orgId, args);
   },
 });
 
@@ -169,20 +146,21 @@ export const getCsDetail = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.string() },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getCsDetail");
+    assertPublicAnalyticsRange(args.startAt, args.endAt, "analytics.getCsDetail");
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const k = csKey(args.csName);
     const BOUNDARY_MS = 6 * 60 * 60 * 1000; // neighbor-period peek on each side
 
     const orders = (
-      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt)).collect()
+      await collectExactBounded(ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt)), "analytics.getCsDetail orders")
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones) && csKey(o.assignedCsName) === k);
 
     // One index read covers the window AND both boundary peeks.
     const recapsAll = (
-      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt - BOUNDARY_MS).lte("closedAt", args.endAt + BOUNDARY_MS)).collect()
+      await collectExactBounded(ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", args.startAt - BOUNDARY_MS).lt("closedAt", args.endAt + BOUNDARY_MS)), "analytics.getCsDetail recaps")
     ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones) && csKey(r.csName) === k);
 
-    const inWin = (r: any) => r.closedAt >= args.startAt && r.closedAt <= args.endAt;
+    const inWin = (r: any) => r.closedAt >= args.startAt && r.closedAt < args.endAt;
     const isCancelled = (s: string) => s === "cancelled" || s === "cancelled_after_export";
     const money = (r: any) => r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
 
@@ -264,12 +242,13 @@ export const getCsDetail = query({
 // rules exactly (so totals match the Performance page), adding discount + per-CS×product
 // nesting + a duplicate-phone count (a judging aid for the CS-reported "Mis Rep").
 export async function computeDailyReportRaw(ctx: any, orgId: Id<"organizations">, startAt: number, endAt: number) {
+    assertPublicAnalyticsRange(startAt, endAt, "analytics.getDailyReport");
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const orders = (
-      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
+      await collectExactBounded(ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lt("createdAt", endAt)), "analytics.getDailyReport orders")
     ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
     const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
+      await collectExactBounded(ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lt("closedAt", endAt)), "analytics.getDailyReport recaps")
     ).filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export" && !isInternalTestPhone(r.customerPhone, internalPhones));
 
     // Resolve a closing's product to the matched in-window order's name (anti-fragmentation),
@@ -296,6 +275,7 @@ export async function computeDailyReportRaw(ctx: any, orgId: Id<"organizations">
       fbSeen.add(phone);
       fbNeeded.push({ phone, orderIdBerdu: r.orderIdBerdu });
     }
+    assertFallbackLookupBudget(fbNeeded.length, "analytics.getDailyReport");
     const fbResults = await Promise.all(
       fbNeeded.map(async ({ phone, orderIdBerdu }) => {
         let order: any = null;
@@ -303,8 +283,10 @@ export async function computeDailyReportRaw(ctx: any, orgId: Id<"organizations">
           order = await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", orderIdBerdu)).unique();
         }
         if (!order) {
-          const all = await ctx.db.query("orders").withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone)).collect();
-          order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
+          order = await ctx.db.query("orders")
+            .withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone))
+            .order("desc")
+            .first();
         }
         return { phone, order };
       }),
@@ -411,6 +393,6 @@ export const getDailyReport = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "analytics.getDailyReport");
-    return dailyReportFromRollups(ctx, orgId, args);
+    return computeDailyReportRaw(ctx, orgId, args.startAt, args.endAt);
   },
 });

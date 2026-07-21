@@ -114,6 +114,49 @@ test("getFollowUpCandidates: stage-2 (H+2) after a post-window touch (manual or 
   expect(r.stage1.length).toBe(0);
 });
 
+test("long alternating history keeps the latest inbound, post-window outbound touch, and H+2 candidacy", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
+  let convId: any;
+  const orderId = "O-LONG-HISTORY";
+  const phone = "628155";
+  const lastInboundAt = now - 50 * HOUR;
+  const touchAt = now - 25 * HOUR;
+
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId, customerPhone: phone });
+    await ctx.db.insert("orders", { orgId, ...orderBase, orderId, customerPhone: phone });
+    // This deliberately exceeds the lifecycle marker scan and the former direction-filtered reads.
+    for (let i = 0; i < 122; i++) {
+      const direction = i % 2 === 0 ? "inbound" as const : "outbound" as const;
+      await ctx.db.insert("messages", { orgId, ...msg(convId, orderId, phone, direction, now - 200 * HOUR + i * HOUR) });
+    }
+    await ctx.db.insert("messages", { orgId, ...msg(convId, orderId, phone, "inbound", lastInboundAt) });
+    await ctx.db.insert("messages", { orgId, ...msg(convId, orderId, phone, "outbound", lastInboundAt + HOUR) });
+    await ctx.db.insert("messages", { orgId, ...msg(convId, orderId, phone, "outbound", touchAt) });
+  });
+
+  await t.run(async (ctx) => {
+    const latestInbound = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", convId).eq("direction", "inbound"))
+      .order("desc")
+      .first();
+    const touches = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_direction_createdAt", (q: any) => q.eq("conversationId", convId).eq("direction", "outbound").gt("createdAt", lastInboundAt + 24 * HOUR))
+      .collect();
+    expect(latestInbound?.createdAt).toBe(lastInboundAt);
+    expect(touches.map((m: any) => m.createdAt)).toEqual([touchAt]);
+  });
+
+  const candidates = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  expect(candidates.stage2.find((c) => c.orderId === orderId)).toMatchObject({ lastInboundAt, touchAts: [touchAt] });
+  const candidacy = await t.query(internal.followUp.candidacyFor, { conversationId: convId, nowOverride: now });
+  expect(candidacy?.eligible).toBe(2);
+});
+
 test("getFollowUpCandidates: ANTI-DOUBLE — a fresh manual-via-WABA touch drops the lead from H+1", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
@@ -398,7 +441,7 @@ test("getArchivedFollowUps: lists recent manual archives, scoped by CS", async (
       status: "closed", followUpArchivedAt: now - 2 * HOUR
     });
   });
-  const res = await asAdmin.query(api.followUp.getArchivedFollowUps, { csName: "Nabila" });
+  const res = await asAdmin.query(api.followUp.getArchivedFollowUps, { csName: "Nabila", nowOverride: now });
   expect(res.find((r) => r.orderId === "O-19")).toBeDefined();
   expect(res.find((r) => r.orderId === "O-20")).toBeUndefined();
   expect(res[0].followUpArchivedAt).toBeGreaterThan(res[1]?.followUpArchivedAt ?? 0);
@@ -464,7 +507,7 @@ test("getFollowUpEffectiveness: counts closings with FU touches", async () => {
 
     // Recap with 2 touches
     await ctx.db.insert("shippingRecaps", { orgId,
-      orderIdBerdu: "O-21", customerPhone: "62821", customerName: "Budi", csName: "Nabila", closedAt: now,
+      orderIdBerdu: "O-21", customerPhone: "62821", customerName: "Budi", csName: "Nabila", closedAt: now - 1,
       recipientName: "Budi", recipientPhone: "62821", recipientAddress: "", recipientDistrict: "",
       recipientCity: "", packageContent: "X", paymentMethod: "cod" as const,
       status: "ready" as const, flags: [], sourceMessageText: "", version: 1, followUpTouchesAtClose: 2,
@@ -480,6 +523,24 @@ test("getFollowUpEffectiveness: counts closings with FU touches", async () => {
   expect(res.totalClosings).toBe(1);
   expect(res.fromFollowUp).toBe(1);
   expect(res.byStage.h2).toBe(1);
+});
+
+test("follow-up effectiveness uses half-open neighboring windows", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "boundary-admin", role: "admin", name: "Admin", email: "boundary@w" });
+  const orgId = await seedOrg(t);
+  await t.run((ctx) => ctx.db.insert("shippingRecaps", { orgId,
+    orderIdBerdu: "FU-BOUNDARY", customerPhone: "6281777000001", customerName: "Boundary", csName: "Nabila", closedAt: now,
+    recipientName: "Boundary", recipientPhone: "6281777000001", recipientAddress: "", recipientDistrict: "",
+    recipientCity: "", packageContent: "X", paymentMethod: "cod" as const,
+    status: "ready" as const, flags: [], sourceMessageText: "", version: 1, followUpTouchesAtClose: 1,
+    createdAt: now, updatedAt: now,
+  }));
+
+  const previous = await asAdmin.query(api.followUp.getFollowUpEffectiveness, { startAt: now - HOUR, endAt: now });
+  const next = await asAdmin.query(api.followUp.getFollowUpEffectiveness, { startAt: now, endAt: now + HOUR });
+  expect(previous.totalClosings).toBe(0);
+  expect(next.totalClosings).toBe(1);
 });
 
 // Closing tab: recent closings, with via-follow-up flag, scoped + cleaned
@@ -538,4 +599,38 @@ test("candidacyFor: resolves providerNumberId by csKey even when assignedCsName 
   });
   const d = await t.query(internal.followUp.candidacyFor, { conversationId: convId, nowOverride: now });
   expect(d?.phoneNumberId).toBe("PHONE_X");
+});
+
+test("candidacyFor fails closed when a legacy no-key claim exceeds the active registry cap", async () => {
+  const t = convexTest(schema);
+  let convId: any;
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    convId = await ctx.db.insert("conversations", {
+      orgId, ...convBase, orderId: "O-capped", customerPhone: "62871", assignedCsName: "Target",
+    });
+    await ctx.db.insert("orders", {
+      orgId, ...orderBase, orderId: "O-capped", customerPhone: "62871", assignedCsName: "Target",
+    });
+    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-capped", "62871", "inbound", now - 30 * HOUR) });
+    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-capped", "62871", "outbound", now - 29 * HOUR) });
+    await ctx.db.insert("csConfigs", {
+      orgId, normalizedName: "not-target", csName: "CS Target", key: undefined,
+      providerNumberId: "PHONE-CAPPED", nameAliases: [], berduStaffIds: [], providerNumberIds: [],
+      orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+      isActive: true, createdAt: now, updatedAt: now,
+    });
+    for (let i = 0; i < 50; i++) {
+      await ctx.db.insert("csConfigs", {
+        orgId, normalizedName: `extra-${i}`, csName: `Extra ${i}`, key: `extra-${i}`,
+        nameAliases: [], berduStaffIds: [], providerNumberIds: [],
+        orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
+        isActive: true, createdAt: now + i + 1, updatedAt: now,
+      });
+    }
+  });
+  const result = await t.query(internal.followUp.candidacyFor, {
+    conversationId: convId, nowOverride: now,
+  });
+  expect(result?.phoneNumberId).toBeNull();
 });

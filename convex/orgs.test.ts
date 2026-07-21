@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { getDefaultOrgId, requireDefaultOrgId } from "./orgs";
 
 async function seedOrg(t: any) {
@@ -9,6 +9,18 @@ async function seedOrg(t: any) {
 }
 
 const ADMIN = { subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" };
+
+test("legacy cron organization listing fails loudly above its hard cap", async () => {
+  const t = convexTest(schema);
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 101; index++) {
+      await ctx.db.insert("organizations", {
+        slug: `org-${index}`, name: `Org ${index}`, createdAt: index, updatedAt: index,
+      });
+    }
+  });
+  await expect(t.query(internal.orgs.listOrgsInternal, {})).rejects.toThrow(/organization cap 100/i);
+});
 
 test("getDefaultOrgId: null before seed; resolves after; requireDefaultOrgId throws before", async () => {
   const t = convexTest(schema);
@@ -79,4 +91,17 @@ test("backfillOrgId/orgIdCoverage: cursor-paging contract over already-stamped r
   expect(r2.scanned).toBe(1);
   expect(r2.patched).toBe(0);
   expect(r2.done).toBe(true);
+});
+
+test("legacy B1 orgId tools reject tables whose schema already requires orgId", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity(ADMIN);
+  await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+
+  await expect(asAdmin.mutation(api.orgs.backfillOrgId, {
+    table: "providerNumberBackfillRuns" as any,
+  })).rejects.toThrow();
+  await expect(asAdmin.query(api.orgs.orgIdCoverage, {
+    table: "providerNumberBackfillClaims" as any,
+  })).rejects.toThrow();
 });

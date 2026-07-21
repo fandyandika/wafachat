@@ -63,16 +63,6 @@ http.route({
       return jsonResponse({ ...result, _action: "set_order" });
     }
 
-    if (action === "list_order_counters") {
-      const orgId = await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
-      if (!orgId) return jsonResponse({ success: false, error: "no default org" }, 500);
-      const result = await ctx.runQuery(internal.state.listOrderCountersByPrefix, {
-        datePrefix: String(body.datePrefix || ""),
-        orgId,
-      });
-      return jsonResponse({ ...result, _action: "list_order_counters" });
-    }
-
     if (action === "get_with_global") {
       const result = await ctx.runQuery(internal.state.getConversationContextForN8n, {
         phone: String(body.phone || ""),

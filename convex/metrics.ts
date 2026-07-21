@@ -3,20 +3,21 @@ import { requireAdminOrg, requireMember, requireMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
-import { dashboardSummaryFromRollups, trendFromRollups } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
+import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 
 export async function computeDashboardSummaryRaw(ctx: QueryCtx, orgId: Id<"organizations">, args: { startAt: number; endAt: number; csName?: string; includeActiveChats?: boolean }) {
+    assertPublicAnalyticsRange(args.startAt, args.endAt, "metrics.getDashboardSummary");
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
-    const orders = await ctx.db.query("orders")
-      .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
-      .collect();
-    const recaps = await ctx.db.query("shippingRecaps")
-      .withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lte("closedAt", args.endAt))
-      .collect();
-    const events = await ctx.db.query("events")
-      .withIndex("by_org_type_createdAt", (q) => q.eq("orgId", orgId).eq("type", "handover").gte("createdAt", args.startAt).lte("createdAt", args.endAt))
-      .collect();
+    const orders = await collectExactBounded(ctx.db.query("orders")
+      .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt))
+      , "metrics.getDashboardSummary orders");
+    const recaps = await collectExactBounded(ctx.db.query("shippingRecaps")
+      .withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lt("closedAt", args.endAt))
+      , "metrics.getDashboardSummary recaps");
+    const events = await collectExactBounded(ctx.db.query("events")
+      .withIndex("by_org_type_createdAt", (q) => q.eq("orgId", orgId).eq("type", "handover").gte("createdAt", args.startAt).lt("createdAt", args.endAt))
+      , "metrics.getDashboardSummary handovers");
 
     const key = args.csName ? csKey(args.csName) : null;
     const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
@@ -40,7 +41,7 @@ export async function computeDashboardSummaryRaw(ctx: QueryCtx, orgId: Id<"organ
     // does not render it, so only compute it when a caller explicitly asks (default off →
     // skip the read entirely). A future CS-AI ops page can pass includeActiveChats: true.
     const activeChats = args.includeActiveChats
-      ? (await ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", orgId).eq("status", "active")).collect())
+      ? (await collectExactBounded(ctx.db.query("conversations").withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", orgId).eq("status", "active")), "metrics.getDashboardSummary active conversations"))
           .filter((c) => !isInternalTestPhone(c.customerPhone, internalPhones) && csOk(c.assignedCsName)).length
       : 0;
 
@@ -56,12 +57,12 @@ export async function computeDashboardSummaryRaw(ctx: QueryCtx, orgId: Id<"organ
 }
 
 export const getDashboardSummary = query({
-  // raw=true → calendar-day / any-range raw computation (cheap for a small "today" slice);
-  // omitted/false → rollup reader (whole 16:00-windows). Same output shape either way.
+  // `raw` remains accepted for API compatibility. Exact global identity unions
+  // require the bounded raw calculation for every range.
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()), includeActiveChats: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "metrics.getDashboardSummary");
-    return args.raw ? computeDashboardSummaryRaw(ctx, orgId, args) : dashboardSummaryFromRollups(ctx, orgId, args);
+    return computeDashboardSummaryRaw(ctx, orgId, args);
   },
 });
 
@@ -82,21 +83,55 @@ export const getTrend = query({
     bucket: v.union(v.literal("day"), v.literal("week"), v.literal("month")), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "metrics.getTrend");
-    return trendFromRollups(ctx, orgId, args);
+    return computeTrendRaw(ctx, orgId, args);
   },
 });
+
+export async function computeTrendRaw(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  args: { startAt: number; endAt: number; bucket: "day" | "week" | "month"; csName?: string },
+) {
+  assertPublicAnalyticsRange(args.startAt, args.endAt, "metrics.getTrend");
+  const internalPhones = await getInternalPhoneSet(ctx, orgId);
+  const key = args.csName ? csKey(args.csName) : null;
+  const csOk = (cs: string | undefined) => !key || csKey(cs) === key;
+  const orders = (
+    await collectExactBounded(ctx.db.query("orders").withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt)), "metrics.getTrend orders")
+  ).filter((order) => !isInternalTestPhone(order.customerPhone, internalPhones) && csOk(order.assignedCsName));
+  const recaps = (
+    await collectExactBounded(ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId).gte("closedAt", args.startAt).lt("closedAt", args.endAt)), "metrics.getTrend recaps")
+  ).filter((recap) => recap.status !== "cancelled" && recap.status !== "cancelled_after_export"
+    && !isInternalTestPhone(recap.customerPhone, internalPhones) && csOk(recap.csName));
+
+  const buckets = new Map<string, { leads: Set<string>; closings: Set<string> }>();
+  const getBucket = (timestamp: number) => {
+    const name = bucketKey(timestamp, args.bucket);
+    const value = buckets.get(name) ?? { leads: new Set<string>(), closings: new Set<string>() };
+    buckets.set(name, value);
+    return value;
+  };
+  for (const order of orders) getBucket(order.createdAt).leads.add(normalizePhone(order.customerPhone));
+  for (const recap of recaps) getBucket(recap.closedAt).closings.add(recap.orderIdBerdu || normalizePhone(recap.customerPhone));
+  return Array.from(buckets.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([bucket, value]) => {
+    const leads = value.leads.size;
+    const closings = value.closings.size;
+    return { bucket, leads, closings, cr: leads > 0 ? Math.round((closings / leads) * 1000) / 10 : 0 };
+  });
+}
 
 export const getDuplicateOrders = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "metrics.getDuplicateOrders");
+    assertPublicAnalyticsRange(args.startAt, args.endAt, "metrics.getDuplicateOrders");
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const key = args.csName ? csKey(args.csName) : null;
     const orders = (
-      await ctx.db
+      await collectExactBounded(ctx.db
         .query("orders")
-        .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
-        .collect()
+        .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt))
+        , "metrics.getDuplicateOrders orders")
     ).filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
 
     const groups = new Map<string, typeof orders>();
@@ -169,11 +204,12 @@ export const debugOrderReconcile = query({
   args: { startAt: v.number(), endAt: v.number() },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "metrics.debugOrderReconcile");
+    assertPublicAnalyticsRange(args.startAt, args.endAt, "metrics.debugOrderReconcile");
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
-    const orders = await ctx.db
+    const orders = await collectExactBounded(ctx.db
       .query("orders")
-      .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lte("createdAt", args.endAt))
-      .collect();
+      .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt))
+      , "metrics.debugOrderReconcile orders");
     const excluded = orders.filter((o) => isInternalTestPhone(o.customerPhone, internalPhones));
     const valid = orders.filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones));
     const distinctValid = new Set(valid.map((o) => normalizePhone(o.customerPhone))).size;

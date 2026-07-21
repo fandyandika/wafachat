@@ -10,6 +10,7 @@
 
 import type * as agents from "../agents.js";
 import type * as analytics from "../analytics.js";
+import type * as analyticsBounds from "../analyticsBounds.js";
 import type * as auth from "../auth.js";
 import type * as authz from "../authz.js";
 import type * as autoFollowUp from "../autoFollowUp.js";
@@ -27,6 +28,7 @@ import type * as ingest_core from "../ingest/core.js";
 import type * as ingest_events from "../ingest/events.js";
 import type * as ingest_kirimdevAdapter from "../ingest/kirimdevAdapter.js";
 import type * as ingest_monitor from "../ingest/monitor.js";
+import type * as ingest_reconcileState from "../ingest/reconcileState.js";
 import type * as ingest_reconciler from "../ingest/reconciler.js";
 import type * as ingest_signature from "../ingest/signature.js";
 import type * as ingest_sources from "../ingest/sources.js";
@@ -38,7 +40,9 @@ import type * as orgs from "../orgs.js";
 import type * as passwordHash from "../passwordHash.js";
 import type * as responseTime from "../responseTime.js";
 import type * as responseTimeMath from "../responseTimeMath.js";
+import type * as rollupMigration from "../rollupMigration.js";
 import type * as rollupReaders from "../rollupReaders.js";
+import type * as rollupVersion from "../rollupVersion.js";
 import type * as rollups from "../rollups.js";
 import type * as settings from "../settings.js";
 import type * as shippingRecaps from "../shippingRecaps.js";
@@ -53,6 +57,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   agents: typeof agents;
   analytics: typeof analytics;
+  analyticsBounds: typeof analyticsBounds;
   auth: typeof auth;
   authz: typeof authz;
   autoFollowUp: typeof autoFollowUp;
@@ -70,6 +75,7 @@ declare const fullApi: ApiFromModules<{
   "ingest/events": typeof ingest_events;
   "ingest/kirimdevAdapter": typeof ingest_kirimdevAdapter;
   "ingest/monitor": typeof ingest_monitor;
+  "ingest/reconcileState": typeof ingest_reconcileState;
   "ingest/reconciler": typeof ingest_reconciler;
   "ingest/signature": typeof ingest_signature;
   "ingest/sources": typeof ingest_sources;
@@ -81,7 +87,9 @@ declare const fullApi: ApiFromModules<{
   passwordHash: typeof passwordHash;
   responseTime: typeof responseTime;
   responseTimeMath: typeof responseTimeMath;
+  rollupMigration: typeof rollupMigration;
   rollupReaders: typeof rollupReaders;
+  rollupVersion: typeof rollupVersion;
   rollups: typeof rollups;
   settings: typeof settings;
   shippingRecaps: typeof shippingRecaps;

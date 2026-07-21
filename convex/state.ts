@@ -114,7 +114,7 @@ export const createTestConversation = mutation({
     const { orgId } = await requireAdminOrg(ctx, "state.createTestConversation");
     const now = Date.now();
     const phone = normalizePhone(args.phone);
-    const canonTest = await canonicalizeCs(ctx, args.csName ?? "CS Aisyah");
+    const canonTest = await canonicalizeCs(ctx, orgId, args.csName ?? "CS Aisyah");
     const productName = args.productName ?? "Test Product";
     const orderId = `TEST-${phone}-${Date.now()}`;
     const csConfig = await getCsFeatureConfig(ctx, orgId, canonTest.csName);
@@ -246,7 +246,7 @@ export async function upsertOrderCore(
     orgId: Id<"organizations">;
   },
 ) {
-  const canon = await canonicalizeCs(ctx, args.csName);
+  const canon = await canonicalizeCs(ctx, args.orgId, args.csName);
   const now = Date.now();
   const phone = normalizePhone(args.phone);
   const orderId = args.order_id || makeOrderKey({ phone, productName: args.productName });
@@ -395,33 +395,6 @@ export const upsertOrderFromN8n = internalMutation({
     // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
     return upsertOrderCore(ctx, { ...args, orgId });
-  },
-});
-
-// Reconciler support: list the present per-day order counters for a Berdu date
-// prefix (e.g. "260624" -> orderIds "O-260624######"). The n8n reconciler diffs
-// these against Berdu's sequential daily numbering to find dropped orders to
-// backfill via /order/detail. Returns only the counters present in WaFaChat.
-export const listOrderCountersByPrefix = internalQuery({
-  args: { datePrefix: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, args) => {
-    const lo = `O-${args.datePrefix}000000`;
-    const hi = `O-${args.datePrefix}999999`;
-    const rows = await ctx.db
-      .query("orders")
-      .withIndex("by_org_orderId", (q) => q.eq("orgId", args.orgId).gte("orderId", lo).lte("orderId", hi))
-      .collect();
-    const counters = rows
-      .map((r) => parseInt(r.orderId.slice(-6), 10))
-      .filter((n) => !Number.isNaN(n))
-      .sort((a, b) => a - b);
-    return {
-      datePrefix: args.datePrefix,
-      counters,
-      min: counters[0] ?? null,
-      max: counters[counters.length - 1] ?? null,
-      count: counters.length,
-    };
   },
 });
 

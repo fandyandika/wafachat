@@ -47,10 +47,29 @@ export const defaultOrgIdInternal = internalQuery({
   handler: async (ctx) => getDefaultOrgId(ctx),
 });
 
-// Cron helpers iterate every org (single org today = identical behavior).
+export const LEGACY_CRON_ORGANIZATION_LIMIT = 100;
+
+// Legacy cron helpers still iterate a single bounded organization page. New
+// maintenance drivers use listOrgPageInternal and scheduled continuations.
 export const listOrgsInternal = internalQuery({
   args: {},
-  handler: async (ctx) => ctx.db.query("organizations").collect(),
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("organizations").take(LEGACY_CRON_ORGANIZATION_LIMIT + 1);
+    if (rows.length > LEGACY_CRON_ORGANIZATION_LIMIT) {
+      throw new Error(`legacy cron organization cap ${LEGACY_CRON_ORGANIZATION_LIMIT} exceeded`);
+    }
+    return rows;
+  },
+});
+
+// Bounded organization enumeration for scheduled platform-wide maintenance.
+// The cursor is durable in the scheduler payload, so one action never needs to
+// read or enqueue every tenant at once.
+export const listOrgPageInternal = internalQuery({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => ctx.db
+    .query("organizations")
+    .paginate({ cursor: args.cursor ?? null, numItems: 20 }),
 });
 
 const B1_TABLES = [

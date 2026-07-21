@@ -5,13 +5,11 @@ import { requireAdminOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { csKey as csKeyOf, isInternalTestPhone, normalizePhone, windowKeyFor, windowRangeForKey, windowKeyToday } from "./lib";
 import { canonicalizeProduct } from "./shippingRecaps";
-import { pairResponsePairs, isSlaBreach, type RtMessage } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
+import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
+import { advanceRollupMigration, currentRollupMigration } from "./rollupMigration";
 
 const PRODUCT_CAP = 50;
-// Production showed 40 windows exceeded Convex mutation limits.
-// Reduced to 10 for reliable performance; heavy-message windows may need 1.
-const BACKFILL_WINDOW_CAP = 10;
 
 export type RollupValues = {
   windowKey: string;
@@ -30,7 +28,9 @@ export type RollupValues = {
   fuH1: number;
   fuH2: number;
   fuH3: number;
-  byProduct: Array<{ product: string; leads: number; closings: number }>;  // leads = distinct customers per product (matches getDailyReport; getProductDifficulty reads raw)
+  cod: number;
+  transfer: number;
+  byProduct: Array<{ product: string; leads: number; closings: number; leadOrders: number; revenue: number; discount: number; cod: number; transfer: number }>;
   updatedAt: number;
 };
 
@@ -42,14 +42,14 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
   // whole window (kills the O(window^2) write-amplification). Exclude internal test phones.
   const orders = (
     await ctx.db.query("orders")
-      .withIndex("by_org_csKey_createdAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("createdAt", startAt).lte("createdAt", endAt))
+      .withIndex("by_org_csKey_createdAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("createdAt", startAt).lt("createdAt", endAt))
       .collect()
   ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
 
   // Fetch THIS CS's recaps in the window in ONE read; split active vs cancelled in memory.
   const recapsAll = (
     await ctx.db.query("shippingRecaps")
-      .withIndex("by_org_csKey_closedAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("closedAt", startAt).lte("closedAt", endAt))
+      .withIndex("by_org_csKey_closedAt", (q: any) => q.eq("orgId", orgId).eq("csKey", csKeyArg).gte("closedAt", startAt).lt("closedAt", endAt))
       .collect()
   ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
   const recaps = recapsAll.filter((r: any) => r.status !== "cancelled" && r.status !== "cancelled_after_export");
@@ -79,8 +79,10 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
         order = await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", orderIdBerdu)).unique();
       }
       if (!order) {
-        const all = await ctx.db.query("orders").withIndex("by_org_customerPhone", (q: any) => q.eq("orgId", orgId).eq("customerPhone", phone)).collect();
-        order = all.sort((a: any, b: any) => b.createdAt - a.createdAt)[0] ?? null;
+        order = await ctx.db.query("orders")
+          .withIndex("by_org_customerPhone_createdAt", (q: any) => q
+            .eq("orgId", orgId).eq("customerPhone", phone))
+          .order("desc").first();
       }
       return { phone, order };
     }),
@@ -107,6 +109,8 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
   const closedCust = new Set<string>();
   let revenue = 0;
   let discount = 0;
+  const cod = recapsAll.filter((r: any) => r.paymentMethod === "cod").length;
+  const transfer = recapsAll.filter((r: any) => r.paymentMethod === "transfer").length;
   let manualClosings = 0;
   let delivered = 0;
   let fuClosings = 0;
@@ -128,15 +132,16 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
   }
 
   // Per-product aggregation (leads = distinct customers to match getDailyReport)
-  const productMap = new Map<string, { leads: Set<string>; closings: Set<string> }>();
+  const productMap = new Map<string, { leads: Set<string>; closings: Set<string>; leadOrders: number; revenue: number; discount: number; cod: number; transfer: number }>();
   for (const o of orders) {
     const p = canonicalizeProduct(o.productName || o.products);
     let prod = productMap.get(p);
     if (!prod) {
-      prod = { leads: new Set(), closings: new Set() };
+      prod = { leads: new Set(), closings: new Set(), leadOrders: 0, revenue: 0, discount: 0, cod: 0, transfer: 0 };
       productMap.set(p, prod);
     }
     prod.leads.add(normalizePhone(o.customerPhone));
+    prod.leadOrders += 1;
   }
 
   for (const r of closingsList) {
@@ -145,21 +150,30 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
     const p = canonicalizeProduct(matched?.productName || matched?.products || r.packageContent);
     let prod = productMap.get(p);
     if (!prod) {
-      prod = { leads: new Set(), closings: new Set() };
+      prod = { leads: new Set(), closings: new Set(), leadOrders: 0, revenue: 0, discount: 0, cod: 0, transfer: 0 };
       productMap.set(p, prod);
     }
     prod.closings.add(r.orderIdBerdu || cphone);
+    prod.revenue += r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
+    prod.discount += r.discount ?? 0;
+    if (r.paymentMethod === "cod") prod.cod += 1;
+    if (r.paymentMethod === "transfer") prod.transfer += 1;
   }
 
   // Build byProduct array, cap at 50 + overflow bucket
   const productsEntries = Array.from(productMap.entries())
-    .map(([product, p]) => ({ product, leads: p.leads.size, closings: p.closings.size }))
+    .map(([product, p]) => ({ product, leads: p.leads.size, closings: p.closings.size, leadOrders: p.leadOrders, revenue: p.revenue, discount: p.discount, cod: p.cod, transfer: p.transfer }))
     .filter((p) => p.leads > 0 || p.closings > 0)
     .sort((x, y) => y.leads - x.leads || x.product.localeCompare(y.product));
 
-  const byProduct: Array<{ product: string; leads: number; closings: number }> = [];
+  const byProduct: Array<{ product: string; leads: number; closings: number; leadOrders: number; revenue: number; discount: number; cod: number; transfer: number }> = [];
   let overflowLeads = 0;
   let overflowClosings = 0;
+  let overflowLeadOrders = 0;
+  let overflowRevenue = 0;
+  let overflowDiscount = 0;
+  let overflowCod = 0;
+  let overflowTransfer = 0;
 
   for (let i = 0; i < productsEntries.length; i++) {
     if (i < PRODUCT_CAP) {
@@ -167,11 +181,16 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
     } else {
       overflowLeads += productsEntries[i].leads;
       overflowClosings += productsEntries[i].closings;
+      overflowLeadOrders += productsEntries[i].leadOrders;
+      overflowRevenue += productsEntries[i].revenue;
+      overflowDiscount += productsEntries[i].discount;
+      overflowCod += productsEntries[i].cod;
+      overflowTransfer += productsEntries[i].transfer;
     }
   }
 
   if (overflowLeads > 0 || overflowClosings > 0) {
-    byProduct.push({ product: "lainnya", leads: overflowLeads, closings: overflowClosings });
+    byProduct.push({ product: "lainnya", leads: overflowLeads, closings: overflowClosings, leadOrders: overflowLeadOrders, revenue: overflowRevenue, discount: overflowDiscount, cod: overflowCod, transfer: overflowTransfer });
   }
 
   // Get most frequent csName
@@ -206,6 +225,8 @@ export async function computeRollupValues(ctx: any, orgId: Id<"organizations">, 
     delivered,
     revenue,
     discount,
+    cod,
+    transfer,
     fuClosings,
     fuH1,
     fuH2,
@@ -251,7 +272,15 @@ export async function bumpForOrderDoc(ctx: any, before: any | null, after: any |
     const orgId = doc.orgId;
     pairs.set(`${orgId}|${k}|${w}`, { orgId, k, w });
   }
-  for (const { orgId, k, w } of pairs.values()) await computeRollupRow(ctx, orgId, k, w);
+  for (const { orgId, k, w } of pairs.values()) {
+    const migration = await ctx.db.query("rollupMigrationRuns")
+      .withIndex("by_org_window", (q: any) => q.eq("orgId", orgId).eq("windowKey", w))
+      .order("desc").first();
+    if (migration && migration.phase !== "complete") {
+      await ctx.db.patch(migration._id, { dirty: true, updatedAt: Date.now() });
+    }
+    await computeRollupRow(ctx, orgId, k, w);
+  }
 }
 
 export async function bumpForRecapDoc(ctx: any, before: any | null, after: any | null): Promise<void> {
@@ -263,153 +292,68 @@ export async function bumpForRecapDoc(ctx: any, before: any | null, after: any |
     const orgId = doc.orgId;
     pairs.set(`${orgId}|${k}|${w}`, { orgId, k, w });
   }
-  for (const { orgId, k, w } of pairs.values()) await computeRollupRow(ctx, orgId, k, w);
-}
-
-export async function recomputeWindowImpl(ctx: any, orgId: Id<"organizations">, windowKey: string): Promise<number> {
-  const internalPhones = await getInternalPhoneSet(ctx, orgId);
-  const { startAt, endAt } = windowRangeForKey(windowKey);
-  const keys = new Set<string>();
-
-  // Collect csKeys from orders in the window
-  const orders = (
-    await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-  ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
-  for (const o of orders) {
-    // Self-heal: stamp csKey if a doc predates the field or a write site missed it.
-    // No-op in prod (backfill + write-path guarantee csKey); keeps the by_org_csKey_* reads
-    // in computeRollupValues correct even for stragglers. Runs only in trueUp/backfill.
-    if (o.csKey === undefined) await ctx.db.patch(o._id, { csKey: csKeyOf(o.assignedCsName) });
-    keys.add(csKeyOf(o.assignedCsName));
+  for (const { orgId, k, w } of pairs.values()) {
+    const migration = await ctx.db.query("rollupMigrationRuns")
+      .withIndex("by_org_window", (q: any) => q.eq("orgId", orgId).eq("windowKey", w))
+      .order("desc").first();
+    if (migration && migration.phase !== "complete") {
+      await ctx.db.patch(migration._id, { dirty: true, updatedAt: Date.now() });
+    }
+    await computeRollupRow(ctx, orgId, k, w);
   }
-
-  // Collect csKeys from recaps in the window (including orphan attribution)
-  const recaps = (
-    await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-  ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
-  for (const r of recaps) {
-    if (r.csKey === undefined) await ctx.db.patch(r._id, { csKey: csKeyOf(r.csName) });
-    keys.add(csKeyOf(r.csName));
-  }
-
-  // Collect csKeys from existing dailyRollups rows in the window (so stale rows get zeroed/deleted)
-  const existingRollups = (
-    await ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey)).collect()
-  );
-  for (const row of existingRollups) {
-    keys.add(row.csKey);
-  }
-
-  // Recompute all csKeys in the window
-  for (const k of keys) {
-    await computeRollupRow(ctx, orgId, k, windowKey);
-  }
-
-  return keys.size;
 }
 
 export const recomputeWindow = internalMutation({
   args: { orgId: v.string(), windowKey: v.string() },
-  handler: async (ctx, args) => {
-    const csKeys = await recomputeWindowImpl(ctx, args.orgId as Id<"organizations">, args.windowKey);
-    return { windowKey: args.windowKey, csKeys };
-  },
+  handler: (ctx, args) => advanceRollupMigration(
+    ctx, args.orgId as Id<"organizations">, args.windowKey, { startNewWhenComplete: true },
+  ),
 });
-
-export async function rebuildSamplesForWindowImpl(ctx: any, orgId: Id<"organizations">, windowKey: string): Promise<number> {
-  const internalPhones = await getInternalPhoneSet(ctx, orgId);
-  const { startAt, endAt } = windowRangeForKey(windowKey);
-
-  // Delete all responseSamples in this window for this org
-  const existingSamples = (
-    await ctx.db.query("responseSamples").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-  );
-  for (const sample of existingSamples) {
-    await ctx.db.delete(sample._id);
-  }
-
-  // Fetch messages in window, grouped by conversation (exactly like responseTime.getResponseTimes)
-  const msgs = (
-    await ctx.db
-      .query("messages")
-      .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt))
-      .collect()
-  ).filter((m: any) => !isInternalTestPhone(m.customerPhone, internalPhones));
-
-  // Group by conversation, preserving ascending createdAt order
-  const byConv = new Map<string, RtMessage[]>();
-  const convOrder: string[] = [];
-  const convIdByKey = new Map<string, any>();
-  for (const m of msgs) {
-    const key = String(m.conversationId);
-    let arr = byConv.get(key);
-    if (!arr) {
-      arr = [];
-      byConv.set(key, arr);
-      convOrder.push(key);
-      convIdByKey.set(key, m.conversationId);
-    }
-    arr.push({ direction: m.direction, messageType: m.messageType, role: m.role, createdAt: m.createdAt });
-  }
-
-  // Fetch conversation docs to get assignedCsName (exactly like responseTime.getResponseTimes)
-  const convDocs = await Promise.all(convOrder.map((key) => ctx.db.get(convIdByKey.get(key))));
-  const csByKey = new Map<string, string>();
-  convOrder.forEach((key, i) => csByKey.set(key, (convDocs[i] as any)?.assignedCsName || "Unknown"));
-
-  // For each conversation, pair messages and insert samples
-  let sampleCount = 0;
-  for (const key of convOrder) {
-    const pairs = pairResponsePairs(byConv.get(key)!);
-    const raw = csByKey.get(key) || "Unknown";
-    const ck = csKeyOf(raw);
-    const convId = convIdByKey.get(key);
-
-    for (const pair of pairs) {
-      await ctx.db.insert("responseSamples", {
-        csKey: ck,
-        csName: raw,
-        conversationId: convId,
-        deltaMs: pair.gapMs,
-        inboundAt: pair.inboundAt,
-        slaBreach: isSlaBreach(pair.inboundAt, pair.replyAt),
-        createdAt: pair.replyAt,
-        orgId,
-      });
-      sampleCount++;
-    }
-  }
-
-  return sampleCount;
-}
 
 export const rebuildSamplesForWindow = internalMutation({
   args: { orgId: v.string(), windowKey: v.string() },
-  handler: async (ctx, args) => {
-    const sampleCount = await rebuildSamplesForWindowImpl(ctx, args.orgId as Id<"organizations">, args.windowKey);
-    return { windowKey: args.windowKey, samplesRebuilt: sampleCount };
-  },
+  handler: (ctx, args) => advanceRollupMigration(
+    ctx, args.orgId as Id<"organizations">, args.windowKey, { startNewWhenComplete: false },
+  ),
 });
 
 export const trueUp = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    // Derive "yesterday" and "today" windows
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
     const today = windowKeyToday();
     const todayRange = windowRangeForKey(today);
     const yesterday = windowKeyFor(todayRange.startAt - 1);
-
-    // Process each org separately
-    const orgs = await ctx.runQuery(internal.orgs.listOrgsInternal, {});
-    for (const org of orgs) {
-      // Rebuild samples for both windows
+    const page: {
+      page: Array<{ _id: Id<"organizations"> }>;
+      continueCursor: string;
+      isDone: boolean;
+    } = await ctx.runQuery(internal.orgs.listOrgPageInternal, { cursor: args.cursor });
+    for (const org of page.page) {
       for (const windowKey of [yesterday, today]) {
-        await ctx.runMutation(internal.rollups.rebuildSamplesForWindow, { orgId: String(org._id), windowKey });
-        await ctx.runMutation(internal.rollups.recomputeWindow, { orgId: String(org._id), windowKey });
+        await ctx.scheduler.runAfter(0, internal.rollups.runRollupWindow, {
+          orgId: String(org._id), windowKey,
+        });
       }
     }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.rollups.trueUp, { cursor: page.continueCursor });
+    }
+    return {
+      yesterday, today, organizationsScheduled: page.page.length,
+      organizationEnumerationComplete: page.isDone,
+      scheduledDriverContinuation: !page.isDone,
+    };
+  },
+});
 
-    return { yesterday, today, status: "ok" };
+export const runRollupWindow = internalAction({
+  args: { orgId: v.string(), windowKey: v.string() },
+  handler: async (ctx, args): Promise<any> => {
+    const result: any = await ctx.runMutation(internal.rollups.recomputeWindow, args);
+    if (!result.done) {
+      await ctx.scheduler.runAfter(0, internal.rollups.runRollupWindow, args);
+    }
+    return { ...result, scheduledContinuation: !result.done };
   },
 });
 
@@ -418,14 +362,14 @@ export const oldestWindowKey = query({
   handler: async (ctx) => {
     const { orgId } = await requireAdminOrg(ctx, "rollups.oldestWindowKey");
 
-    // Get the first order by createdAt asc for this org
-    const order = await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", 0)).first();
-
-    if (!order) {
-      return null;
-    }
-
-    return windowKeyFor(order.createdAt);
+    const [order, recap] = await Promise.all([
+      ctx.db.query("orders")
+        .withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", 0)).first(),
+      ctx.db.query("shippingRecaps")
+        .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", 0)).first(),
+    ]);
+    const oldest = Math.min(order?.createdAt ?? Number.POSITIVE_INFINITY, recap?.closedAt ?? Number.POSITIVE_INFINITY);
+    return Number.isFinite(oldest) ? windowKeyFor(oldest) : null;
   },
 });
 
@@ -434,38 +378,20 @@ export const backfillRange = mutation({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "rollups.backfillRange");
 
-    const processed: string[] = [];
-    let currentKey = args.fromKey;
-    let nextFromKey: string | null = null;
-
-    // Iterate up to BACKFILL_WINDOW_CAP windows per call
-    for (let i = 0; i < BACKFILL_WINDOW_CAP; i++) {
-      if (currentKey > args.toKey) {
-        break;
-      }
-
-      // Execute both rebuild and recompute for this window
-      await rebuildSamplesForWindowImpl(ctx, orgId, currentKey);
-      await recomputeWindowImpl(ctx, orgId, currentKey);
-
-      processed.push(currentKey);
-
-      // Derive next key
-      const { endAt } = windowRangeForKey(currentKey);
-      currentKey = windowKeyFor(endAt);
-
-      // Check if we'd exceed the range
-      if (currentKey > args.toKey && i < BACKFILL_WINDOW_CAP - 1) {
-        break;
-      }
+    if (args.fromKey > args.toKey) return { processed: [], nextFromKey: null, done: true };
+    const result = await advanceRollupMigration(ctx, orgId, args.fromKey, {
+      startNewWhenComplete: false,
+    });
+    if (!result.done) {
+      return { ...result, processed: [], nextFromKey: args.fromKey, done: false };
     }
-
-    // If currentKey is still <= toKey, set nextFromKey for caller to continue
-    if (currentKey <= args.toKey) {
-      nextFromKey = currentKey;
-    }
-
-    return { processed, nextFromKey };
+    const nextKey = windowKeyFor(windowRangeForKey(args.fromKey).endAt);
+    return {
+      ...result,
+      processed: [args.fromKey],
+      nextFromKey: nextKey <= args.toKey ? nextKey : null,
+      done: nextKey > args.toKey,
+    };
   },
 });
 
@@ -474,151 +400,174 @@ export const backfillRange = mutation({
 // comes from the same name the rollups already grouped by). Idempotent: re-runnable.
 // Controller loops per table until { done: true }.
 export const backfillCsKey = mutation({
-  args: { table: v.union(v.literal("orders"), v.literal("shippingRecaps")), limit: v.optional(v.number()) },
+  args: {
+    table: v.union(v.literal("orders"), v.literal("shippingRecaps")),
+    limit: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
-    await requireAdminOrg(ctx, "rollups.backfillCsKey");
-    const limit = args.limit ?? 500;
-    const rows = await ctx.db
-      .query(args.table)
-      .filter((q: any) => q.eq(q.field("csKey"), undefined))
-      .take(limit);
+    const { orgId } = await requireAdminOrg(ctx, "rollups.backfillCsKey");
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 500), 500));
+    const indexed = args.table === "orders"
+      ? ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId))
+      : ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId));
+    const page = await (indexed as any).paginate({ cursor: args.cursor ?? null, numItems: limit });
+    const rows = page.page.filter((row: any) => row.csKey === undefined);
     for (const r of rows) {
       const raw = args.table === "orders" ? (r as any).assignedCsName : (r as any).csName;
       await ctx.db.patch(r._id, { csKey: csKeyOf(raw ?? "") });
     }
-    return { table: args.table, patched: rows.length, done: rows.length < limit };
+    return {
+      table: args.table,
+      scanned: page.page.length,
+      patched: rows.length,
+      done: page.isDone,
+      continueCursor: page.isDone ? undefined : page.continueCursor,
+    };
   },
 });
 
 export const csKeyCoverage = query({
-  args: {},
-  handler: async (ctx) => {
+  args: {
+    ordersCursor: v.optional(v.string()),
+    recapsCursor: v.optional(v.string()),
+    pageSize: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "rollups.csKeyCoverage");
-    const ordersMissing = (
-      await ctx.db.query("orders").filter((q: any) => q.and(q.eq(q.field("orgId"), orgId), q.eq(q.field("csKey"), undefined))).collect()
-    ).length;
-    const recapsMissing = (
-      await ctx.db.query("shippingRecaps").filter((q: any) => q.and(q.eq(q.field("orgId"), orgId), q.eq(q.field("csKey"), undefined))).collect()
-    ).length;
-    return { ordersMissing, recapsMissing };
+    const pageSize = Math.max(1, Math.min(Math.floor(args.pageSize ?? 500), 500));
+    const [orders, recaps] = await Promise.all([
+      ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId))
+        .paginate({ cursor: args.ordersCursor ?? null, numItems: pageSize }),
+      ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId))
+        .paginate({ cursor: args.recapsCursor ?? null, numItems: pageSize }),
+    ]);
+    return {
+      ordersMissing: orders.page.filter((row: any) => row.csKey === undefined).length,
+      recapsMissing: recaps.page.filter((row: any) => row.csKey === undefined).length,
+      ordersScanned: orders.page.length,
+      recapsScanned: recaps.page.length,
+      ordersCursor: orders.isDone ? undefined : orders.continueCursor,
+      recapsCursor: recaps.isDone ? undefined : recaps.continueCursor,
+      done: orders.isDone && recaps.isDone,
+    };
   },
 });
 
+// Exact, resumable parity audit. The expected phase proves every staged result
+// has a matching published row; the stored phase proves there are no extra
+// published rows. Each call reads at most 25 rows plus point lookups.
 export const debugRollupParity = query({
-  args: { windowKey: v.string() },
+  args: {
+    windowKey: v.string(),
+    cursor: v.optional(v.string()),
+    source: v.optional(v.union(v.literal("expected"), v.literal("stored"))),
+  },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "rollups.debugRollupParity");
-    const internalPhones = await getInternalPhoneSet(ctx, orgId);
-
-    const { startAt, endAt } = windowRangeForKey(args.windowKey);
+    const source = args.source ?? "expected";
+    const marker = await ctx.db.query("rollupWindows")
+      .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", args.windowKey))
+      .unique();
+    const publishedRun = marker?.sampleRunId ? await ctx.db.get(marker.sampleRunId) : null;
+    const run = publishedRun ?? await currentRollupMigration(ctx, orgId, args.windowKey);
     const mismatches: Array<{ csKey: string; field: string; stored: any; fresh: any }> = [];
-
-    // Fetch all csKeys in the window for this org
-    const keys = new Set<string>();
-
-    // From orders
-    const orders = (
-      await ctx.db.query("orders").withIndex("by_org_createdAt", (q: any) => q.eq("orgId", orgId).gte("createdAt", startAt).lte("createdAt", endAt)).collect()
-    ).filter((o: any) => !isInternalTestPhone(o.customerPhone, internalPhones));
-    for (const o of orders) {
-      keys.add(csKeyOf(o.assignedCsName));
+    if (source === "expected" && marker?.schemaVersion !== ROLLUP_SCHEMA_VERSION) {
+      mismatches.push({
+        csKey: "(window)", field: "completenessMarker",
+        stored: marker?.schemaVersion ?? null, fresh: ROLLUP_SCHEMA_VERSION,
+      });
     }
 
-    // From recaps
-    const recaps = (
-      await ctx.db.query("shippingRecaps").withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", startAt).lte("closedAt", endAt)).collect()
-    ).filter((r: any) => !isInternalTestPhone(r.customerPhone, internalPhones));
-    for (const r of recaps) {
-      keys.add(csKeyOf(r.csName));
-    }
-
-    // From existing rollups (scoped to this org)
-    const storedRollups = await ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", args.windowKey)).collect();
-    const storedMap = new Map<string, any>();
-    for (const row of storedRollups) {
-      keys.add(row.csKey);
-      storedMap.set(row.csKey, row);
-    }
-
-    // Compute fresh for each csKey
-    for (const csKey of keys) {
-      const fresh = await computeRollupValues(ctx, orgId, csKey, args.windowKey);
-      const stored = storedMap.get(csKey);
-
-      // Compare
-      if (!fresh && !stored) {
-        // Both empty, no mismatch
-        continue;
+    const expectedValues = (agent: any) => agent && (
+      agent.leadsCust > 0 || agent.closings > 0 || agent.cancelled > 0
+    ) ? {
+      csName: agent.csName,
+      leadOrders: agent.leadOrders, leadsCust: agent.leadsCust,
+      closings: agent.closings, closedCust: agent.closedCust,
+      cancelled: agent.cancelled, manualClosings: agent.manualClosings,
+      delivered: agent.delivered, revenue: agent.revenue, discount: agent.discount,
+      cod: agent.cod, transfer: agent.transfer,
+      fuClosings: agent.fuClosings, fuH1: agent.fuH1, fuH2: agent.fuH2, fuH3: agent.fuH3,
+      byProduct: agent.topProducts ?? [],
+    } : null;
+    const compare = (csKey: string, stored: any, expected: any) => {
+      if (!stored && !expected) return;
+      if (!stored || !expected) {
+        mismatches.push({ csKey, field: "(entire row)", stored: stored ?? null, fresh: expected });
+        return;
       }
-
-      if (!fresh && stored) {
-        // Fresh is empty but stored exists - mismatch
-        mismatches.push({
-          csKey,
-          field: "(entire row)",
-          stored: stored,
-          fresh: null,
-        });
-        continue;
-      }
-
-      if (fresh && !stored) {
-        // Fresh exists but stored doesn't - mismatch
-        mismatches.push({
-          csKey,
-          field: "(entire row)",
-          stored: null,
-          fresh: fresh,
-        });
-        continue;
-      }
-
-      // Neither exists -> nothing to compare (also narrows types for below).
-      if (!fresh || !stored) continue;
-
-      // Both exist, compare field by field (excluding updatedAt which always changes)
-      const fieldsToCheck = [
+      for (const field of [
         "csName", "leadOrders", "leadsCust", "closings", "closedCust", "cancelled",
-        "manualClosings", "delivered", "revenue", "discount",
+        "manualClosings", "delivered", "revenue", "discount", "cod", "transfer",
         "fuClosings", "fuH1", "fuH2", "fuH3",
-      ];
-
-      for (const field of fieldsToCheck) {
-        const storedVal = stored[field];
-        const freshVal = fresh[field as keyof RollupValues];
-        if (freshVal !== storedVal) {
-          mismatches.push({
-            csKey,
-            field,
-            stored: storedVal,
-            fresh: freshVal,
-          });
+      ]) {
+        if (stored[field] !== expected[field]) {
+          mismatches.push({ csKey, field, stored: stored[field], fresh: expected[field] });
         }
       }
-
-      // Compare byProduct CONTENT, key-order independent: Convex normalizes stored object
-      // key order (alphabetical) while fresh in-memory objects keep insertion order, so
-      // stringify-ing raw objects false-positives. Normalize to [product, leads, closings]
-      // tuples sorted by leads desc then product asc (same as computeRollupValues).
-      const sortByLeads = (a: any, b: any) => b.leads - a.leads || a.product.localeCompare(b.product);
-      const toTuples = (arr: any[]) => [...(arr ?? [])].sort(sortByLeads).map((p) => [p.product, p.leads, p.closings]);
-      const storedProductsJson = JSON.stringify(toTuples(stored.byProduct));
-      const freshProductsJson = JSON.stringify(toTuples(fresh.byProduct));
-      if (storedProductsJson !== freshProductsJson) {
-        mismatches.push({
-          csKey,
-          field: "byProduct",
-          stored: stored.byProduct,
-          fresh: fresh.byProduct,
-        });
+      const tuples = (products: any[]) => [...(products ?? [])]
+        .sort((a, b) => a.product.localeCompare(b.product))
+        .map((product) => [
+          product.product, product.leads, product.closings, product.leadOrders,
+          product.revenue, product.discount, product.cod, product.transfer,
+        ]);
+      if (JSON.stringify(tuples(stored.byProduct)) !== JSON.stringify(tuples(expected.byProduct))) {
+        mismatches.push({ csKey, field: "byProduct", stored: stored.byProduct, fresh: expected.byProduct });
       }
+    };
+
+    if (!run) {
+      return {
+        windowKey: args.windowKey, source, mismatches,
+        storedRows: 0, freshRows: 0, markerVersion: marker?.schemaVersion ?? null,
+        nextCursor: undefined, nextSource: undefined, done: true,
+      };
     }
 
+    if (source === "expected") {
+      const page = await ctx.db.query("rollupMigrationAgents")
+        .withIndex("by_run", (q: any) => q.eq("runId", run._id))
+        .paginate({ cursor: args.cursor ?? null, numItems: 25 });
+      let storedRows = 0;
+      let freshRows = 0;
+      for (const agent of page.page) {
+        const expected = expectedValues(agent);
+        const stored = await ctx.db.query("dailyRollups")
+          .withIndex("by_org_window_cs", (q: any) => q
+            .eq("orgId", orgId).eq("windowKey", args.windowKey).eq("csKey", agent.csKey))
+          .unique();
+        if (expected) freshRows++;
+        if (stored) storedRows++;
+        compare(agent.csKey, stored, expected);
+      }
+      return {
+        windowKey: args.windowKey, source, mismatches, storedRows, freshRows,
+        markerVersion: marker?.schemaVersion ?? null,
+        nextCursor: page.isDone ? undefined : page.continueCursor,
+        nextSource: page.isDone ? "stored" as const : "expected" as const,
+        done: false,
+      };
+    }
+
+    const page = await ctx.db.query("dailyRollups")
+      .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", args.windowKey))
+      .paginate({ cursor: args.cursor ?? null, numItems: 25 });
+    let freshRows = 0;
+    for (const stored of page.page) {
+      const agent = await ctx.db.query("rollupMigrationAgents")
+        .withIndex("by_run_cs", (q: any) => q.eq("runId", run._id).eq("csKey", stored.csKey))
+        .unique();
+      const expected = expectedValues(agent);
+      if (expected) freshRows++;
+      compare(stored.csKey, stored, expected);
+    }
     return {
-      windowKey: args.windowKey,
-      mismatches,
-      storedRows: storedRollups.length,
-      freshRows: keys.size,
+      windowKey: args.windowKey, source, mismatches,
+      storedRows: page.page.length, freshRows, markerVersion: marker?.schemaVersion ?? null,
+      nextCursor: page.isDone ? undefined : page.continueCursor,
+      nextSource: page.isDone ? undefined : "stored" as const,
+      done: page.isDone,
     };
   },
 });
