@@ -108,6 +108,19 @@ export const captureWindow = internalMutation({
   },
 });
 
+export const rebuildThenCaptureWindow = internalAction({
+  args: { orgId: v.string(), windowKey: v.string() },
+  returns: v.any(),
+  handler: async (ctx, args): Promise<any> => {
+    const rebuilt: any = await ctx.runMutation(internal.rollups.recomputeWindow, args);
+    if (!rebuilt.done) {
+      await ctx.scheduler.runAfter(0, internal.queens.rebuildThenCaptureWindow, args);
+      return { status: "rebuilding" };
+    }
+    return ctx.runMutation(internal.queens.captureWindow, args);
+  },
+});
+
 export const captureClosedWindows = internalAction({
   args: { cursor: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -152,7 +165,7 @@ export const queueCurrentMonthBackfill = mutation({
       .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).gte("windowKey", bounds.first).lt("windowKey", bounds.afterLast)).collect();
     const known = new Set(existing.map((row) => row.windowKey));
     const missing = keysInRange(bounds.first, key).filter((windowKey) => !known.has(windowKey));
-    for (const windowKey of missing) await ctx.scheduler.runAfter(0, internal.queens.captureWindow, { orgId: String(orgId), windowKey });
+    for (const windowKey of missing) await ctx.scheduler.runAfter(0, internal.queens.rebuildThenCaptureWindow, { orgId: String(orgId), windowKey });
     return { scheduled: missing.length, month };
   },
 });

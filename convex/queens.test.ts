@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { windowRangeForKey } from "./lib";
@@ -70,6 +70,27 @@ test("a refreshed no-winner snapshot clears a prior winner", async () => {
   const awards: any[] = await t.run((ctx: any) => ctx.db.query("queenAwards").collect());
   expect(awards[0]).toMatchObject({ status: "no_winner" });
   expect(awards[0].winnerCsName).toBeUndefined();
+});
+
+test("Queen setup rebuilds a missing rollup before capturing its snapshot", async () => {
+  vi.useFakeTimers({ now: new Date("2026-07-02T11:00:00.000Z") });
+  try {
+    const t = convexTest(schema, modules);
+    const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
+    const orgId = await seedOrg(t);
+
+    await admin.mutation((api as any).queens.queueCurrentMonthBackfill, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const result = await t.run(async (ctx: any) => ({
+      award: await ctx.db.query("queenAwards").first(),
+      marker: await ctx.db.query("rollupWindows").first(),
+    }));
+    expect(result.marker).toMatchObject({ orgId, windowKey: "2026-07-01" });
+    expect(result.award).toMatchObject({ orgId, windowKey: "2026-07-01", status: "no_winner" });
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("month recap counts daily wins and keeps equal counts as a tie", async () => {
