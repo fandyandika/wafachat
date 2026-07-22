@@ -12,15 +12,16 @@ const recap = {
   setupNeeded: true,
 };
 
-test("shows monthly Queen, weekly tie, and the dated daily winner", () => {
-  const html = renderToStaticMarkup(<QueenRecapView recap={recap} onBackfill={() => undefined} busy={false} />);
-  expect(html).toContain("Queen Bulan Ini");
+test("shows a selected-month Queen with daily recap and an ongoing week", () => {
+  const html = renderToStaticMarkup(<QueenRecapView recap={recap} month="2026-07" currentMonth="2026-07" onBackfill={() => undefined} busy={false} />);
+  expect(html).toContain("Queen Bulan Terpilih");
   expect(html).toContain("Azelia");
   expect(html).toContain("Seri");
   expect(html).toContain("20 Jul 2026");
+  expect(html).toContain("Berjalan");
 });
 
-test("shows setup action only while a completed day is missing", () => {
-  const html = renderToStaticMarkup(<QueenRecapView recap={recap} onBackfill={() => undefined} busy={false} />);
-  expect(html).toContain("Siapkan rekap bulan ini");
+test("marks historical weekly recap as complete", () => {
+  const html = renderToStaticMarkup(<QueenRecapView recap={recap} month="2026-07" currentMonth="2026-08" onBackfill={() => undefined} busy={false} />);
+  expect(html).toContain("Selesai");
 });

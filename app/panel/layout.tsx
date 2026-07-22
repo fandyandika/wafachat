@@ -32,8 +32,9 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const sp = useSearchParams();
   const { range, cs } = usePanelFilters();
-  const csList = useQuery(api.cs.listCs, {}) ?? [];
-  const title = NAV.find((n) => n.href === pathname)?.label ?? 'Dashboard';
+  const isQueen = pathname === '/panel/queen';
+  const csList = useQuery(api.cs.listCs, isQueen ? 'skip' : {}) ?? [];
+  const title = isQueen ? 'Queen Recap' : NAV.find((n) => n.href === pathname)?.label ?? 'Dashboard';
   const [navHidden, setNavHidden] = useState(false);
   const me = useMe();
   // CS staff only get Laporan + Follow-up in the menu; admins get everything. Middleware
@@ -123,7 +124,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                   className="hidden h-6 w-auto max-w-[140px] object-contain sm:block"
                 />
               </div>
-              {!isFollowUp && (
+              {!isFollowUp && !isQueen && (
               <div className="flex flex-wrap items-center gap-3">
                 {pathname !== '/panel/laporan' && (
                 <div className="flex flex-wrap items-center gap-1">

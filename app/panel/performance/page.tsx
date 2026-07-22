@@ -1,8 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useQuery } from 'convex/react';
-import { RefreshCw } from 'lucide-react';
+import { Crown, RefreshCw } from 'lucide-react';
 import { api } from '@/convex/_generated/api';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { useResponseTimes } from '@/components/panel/use-response-times';
@@ -11,7 +12,6 @@ import { PerformancePanel } from '@/components/panel/performance-panel';
 import type { PerformanceData } from '@/components/panel/types';
 import { Button } from '@/components/ui/button';
 import { WindowModeToggle, type WindowMode } from '@/components/panel/window-mode-toggle';
-import { QueenRecap } from '@/components/panel/queen-recap';
 
 function fmtUpdatedAt(ms: number | null): string {
   if (!ms) return 'Belum dimuat';
@@ -61,21 +61,16 @@ function PerformanceWork({ mode, onModeChange }: { mode: WindowMode; onModeChang
     api.analytics.getProductDifficulty,
     rangeArgs,
   );
-  const trendData = useConvexSnapshotQuery<Array<{ bucket: string; leads: number; closings: number; cr: number }>>(
-    api.metrics.getTrend,
-    'skip',
-  );
   const performanceData = useConvexSnapshotQuery<PerformanceData>(api.shippingRecaps.getPerformance, performanceArgs);
 
   const responseTimes = useResponseTimes({ startAt, endAt, refreshKey: responseRefreshKey });
 
-  const loading = csLeaderboard.loading || productDifficulty.loading || trendData.loading || performanceData.loading || refreshing;
-  const error = csLeaderboard.error || productDifficulty.error || trendData.error || performanceData.error;
+  const loading = csLeaderboard.loading || productDifficulty.loading || performanceData.loading || refreshing;
+  const error = csLeaderboard.error || productDifficulty.error || performanceData.error;
   const lastUpdatedAt = Math.max(
     performanceData.lastUpdatedAt ?? 0,
     csLeaderboard.lastUpdatedAt ?? 0,
     productDifficulty.lastUpdatedAt ?? 0,
-    trendData.lastUpdatedAt ?? 0,
   ) || null;
 
   const refreshAll = async () => {
@@ -84,7 +79,6 @@ function PerformanceWork({ mode, onModeChange }: { mode: WindowMode; onModeChang
       await Promise.all([
         csLeaderboard.refresh(),
         productDifficulty.refresh(),
-        trendData.refresh(),
         performanceData.refresh(),
       ]);
       setResponseRefreshKey((n) => n + 1);
@@ -103,6 +97,9 @@ function PerformanceWork({ mode, onModeChange }: { mode: WindowMode; onModeChang
           </p>
         </div>
         <WindowModeToggle mode={mode} onChange={onModeChange} />
+        <Link href="/panel/queen" className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted">
+          <Crown className="size-4 text-gold" /> Queen Recap
+        </Link>
         <Button size="sm" variant="outline" className="h-9 gap-2" onClick={refreshAll} disabled={loading}>
           <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
           Refresh
@@ -119,11 +116,9 @@ function PerformanceWork({ mode, onModeChange }: { mode: WindowMode; onModeChang
         data={performanceData.data}
         csLeaderboard={csLeaderboard.data}
         productDifficulty={productDifficulty.data}
-        trendData={trendData.data}
         responseTimes={responseTimes?.cs ?? undefined}
         avatarByKey={avatarByKey}
       />
-      <QueenRecap />
     </div>
   );
 }

@@ -1,7 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { useState } from 'react';
 
 import {
   Card,
@@ -11,39 +10,17 @@ import {
   CardTitle,
 } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { api } from '@/convex/_generated/api';
-import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
 import type { PerformanceData } from '@/components/panel/types';
 import { formatRupiah, formatDuration } from '@/lib/format';
 import { CsAvatar } from '@/components/ui/cs-avatar';
-import { TrendChart } from '@/components/ui/trend-chart';
 import { DeltaPill } from '@/components/ui/metric-card';
 import { crBarClass } from '@/lib/cr';
 import { csKey } from '@/lib/cs-key';
-
-const MONTHS_ID = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-/** Readable WIB date range, e.g. "16–22 Jun 2026" — replaces the cryptic "Pekan 2026-06-22". */
-function fmtPeriodRange(startMs?: number, endMs?: number): string {
-  if (!startMs || !endMs) return '…';
-  const JAK = 7 * 60 * 60 * 1000;
-  const s = new Date(startMs + JAK);
-  const e = new Date(endMs + JAK);
-  const sd = s.getUTCDate(), sm = s.getUTCMonth();
-  const ed = e.getUTCDate(), em = e.getUTCMonth(), ey = e.getUTCFullYear();
-  return sm === em
-    ? `${sd}–${ed} ${MONTHS_ID[em]} ${ey}`
-    : `${sd} ${MONTHS_ID[sm]} – ${ed} ${MONTHS_ID[em]} ${ey}`;
-}
-function fmtUpdatedAt(ms: number | null): string {
-  if (!ms) return 'Belum dimuat';
-  return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
-}
 
 export function PerformancePanel({
   data,
   csLeaderboard,
   productDifficulty,
-  trendData,
   responseTimes,
   avatarByKey,
 }: {
@@ -53,32 +30,11 @@ export function PerformancePanel({
     deltaLeads: number; deltaClosings: number; deltaCr: number;
   }>;
   productDifficulty?: Array<{ productName: string; leads: number; closings: number; cr: number; prevCr: number; deltaCr: number }>;
-  trendData?: Array<{ bucket: string; leads: number; closings: number; cr: number }>;
   responseTimes?: Array<{ csNameRaw: string; firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number }>;
   avatarByKey?: Map<string, string | null>;
 }) {
   const deltaTag = (d: number, suffix = '') => <DeltaPill value={d} suffix={suffix} />;
   const [perfTab, setPerfTab] = useState<'summary' | 'cs' | 'product'>('summary');
-  const [reportPeriod, setReportPeriod] = useState<'week' | 'month'>('week');
-  const reportArgs = useMemo(() => ({ period: reportPeriod }), [reportPeriod]);
-  const {
-    data: report,
-    loading: reportLoading,
-    lastUpdatedAt: reportLastUpdatedAt,
-    refresh: refreshReport,
-  } = useConvexSnapshotQuery<{
-    rangeStart: number;
-    rangeEnd: number;
-    leads: number;
-    closings: number;
-    cr: number;
-    revenue: number;
-    cancelled: number;
-    prevLeads: number;
-    prevClosings: number;
-    prevCr: number;
-    perCs: Array<{ csName: string; leads: number; closings: number; cr: number; revenue: number }>;
-  }>(api.analytics.getPeriodReport, reportArgs);
 
   const tabs = [
     { key: 'summary' as const, label: 'Ringkasan' },
@@ -246,90 +202,12 @@ export function PerformancePanel({
       )}
 
       {perfTab === 'summary' && (
-      <div className="grid items-start gap-4 lg:grid-cols-2">
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Trend Harian</CardTitle>
-          <CardDescription>Leads & closing per hari · 7 hari terakhir.</CardDescription>
+          <CardTitle className="text-base">Ringkasan Performance</CardTitle>
+          <CardDescription>KPI periode terpilih tampil di atas. Gunakan tab Per CS dan Per Produk untuk rincian.</CardDescription>
         </CardHeader>
-        <CardContent>
-          {trendData === undefined ? (
-            <p className="text-sm text-muted-foreground">Memuat…</p>
-          ) : trendData.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Belum ada data.</p>
-          ) : (
-            <TrendChart data={trendData.map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }))} />
-          )}
-        </CardContent>
       </Card>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <CardTitle className="text-base">Laporan {reportPeriod === 'week' ? 'Pekanan' : 'Bulanan'}</CardTitle>
-              <CardDescription>{report ? fmtPeriodRange(report.rangeStart, report.rangeEnd) : '…'} · total + perubahan vs periode sebelumnya.</CardDescription>
-            </div>
-            <div className="flex gap-1 rounded-lg border bg-muted/30 p-1">
-              {(['week', 'month'] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setReportPeriod(p)}
-                  className={cn('cursor-pointer rounded-md px-3 py-1 text-xs font-medium transition-colors', reportPeriod === p ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
-                >
-                  {p === 'week' ? 'Pekanan' : 'Bulanan'}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => void refreshReport()}
-                disabled={reportLoading}
-                aria-label="Refresh laporan periode"
-                className="inline-flex size-7 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <RefreshCw className={`size-3.5 ${reportLoading ? 'animate-spin' : ''}`} />
-              </button>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {report === undefined ? (
-            <p className="text-sm text-muted-foreground">Memuat…</p>
-          ) : (
-            <div className="space-y-3 text-sm">
-              <div className="text-xs text-muted-foreground">Snapshot · update {fmtUpdatedAt(reportLastUpdatedAt)}</div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <div><div className="text-xs text-muted-foreground">Leads</div><div className="font-semibold">{report.leads} {deltaTag(report.leads - report.prevLeads)}</div></div>
-                <div><div className="text-xs text-muted-foreground">Closing</div><div className="font-semibold">{report.closings} {deltaTag(report.closings - report.prevClosings)}</div></div>
-                <div><div className="text-xs text-muted-foreground">CR</div><div className="font-semibold">{report.cr}% {deltaTag(Math.round((report.cr - report.prevCr) * 10) / 10, '%')}</div></div>
-                <div><div className="text-xs text-muted-foreground">Omzet</div><div className="font-semibold">{formatRupiah(report.revenue)}</div></div>
-                <div><div className="text-xs text-muted-foreground">Dibatalkan</div><div className="font-semibold text-destructive">{report.cancelled}</div></div>
-              </div>
-              {report.perCs.length > 0 && (
-                <div className="space-y-2.5 border-t pt-3">
-                  {report.perCs.map((c) => (
-                    <div key={c.csName} className="flex items-center gap-3">
-                      <CsAvatar name={c.csName || '?'} size="sm" src={avatarByKey?.get(csKey(c.csName)) ?? undefined} />
-                      <span className="w-16 shrink-0 truncate text-sm font-medium">{c.csName || '—'}</span>
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                        <div
-                          className={cn('h-full rounded-full', crBarClass(c.cr))}
-                          style={{ width: `${Math.min(Math.max(c.cr, 0), 100)}%` }}
-                        />
-                      </div>
-                      <span className="shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-                        {c.closings}/{c.leads} · {c.cr}% · {formatRupiah(c.revenue)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      </div>
       )}
 
       {perfTab === 'product' && (
