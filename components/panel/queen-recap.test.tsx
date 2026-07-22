@@ -8,7 +8,10 @@ import { QueenRecapView } from "./queen-recap";
 const recap = {
   awards: [{ windowKey: "2026-07-20", status: "won" as const, winnerCsName: "Azelia", score: 82.5, leads: 10, closings: 8, cr: 80, respMedianMs: 60_000 }],
   monthly: { winners: ["Azelia"], winCount: 3, standings: [{ csKey: "azelia", csName: "Azelia", wins: 3 }] },
-  weekly: [{ weekStart: "2026-07-20", winners: ["Azelia", "Nabila"], winCount: 1, standings: [] }],
+  weekly: [
+    { weekStart: "2026-07-13", winners: ["Azelia"], winCount: 2, standings: [] },
+    { weekStart: "2026-07-20", winners: ["Azelia", "Nabila"], winCount: 1, standings: [] },
+  ],
   setupNeeded: true,
 };
 
@@ -19,6 +22,7 @@ test("shows a selected-month Queen with daily recap and an ongoing week", () => 
   expect(html).toContain("Seri");
   expect(html).toContain("20 Jul 2026");
   expect(html).toContain("Berjalan");
+  expect(html).toContain("Selesai");
 });
 
 test("marks historical weekly recap as complete", () => {

@@ -83,7 +83,7 @@ export function QueenRecapView({ recap, month, currentMonth, onBackfill, busy }:
             <div className="mb-2 text-sm font-medium">Pemenang Pekanan</div>
             {recap.weekly.length ? (
               <div className="grid gap-2 sm:grid-cols-2">
-                {recap.weekly.map((week, index) => <div key={week.weekStart} className="rounded-lg border border-border px-3 py-2.5 text-sm"><div className="flex items-center justify-between gap-2"><span className="font-medium">Pekan {index + 1}</span><span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{status}</span></div><div className="mt-1 text-muted-foreground">Mulai {formatDate(week.weekStart)}</div><div className="mt-1 font-medium">{winnerLabel(week.winners)}</div></div>)}
+                {recap.weekly.map((week, index) => <div key={week.weekStart} className="rounded-lg border border-border px-3 py-2.5 text-sm"><div className="flex items-center justify-between gap-2"><span className="font-medium">Pekan {index + 1}</span><span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{month === currentMonth && index === recap.weekly.length - 1 ? 'Berjalan' : 'Selesai'}</span></div><div className="mt-1 text-muted-foreground">Mulai {formatDate(week.weekStart)}</div><div className="mt-1 font-medium">{winnerLabel(week.winners)}</div></div>)}
               </div>
             ) : <p className="text-sm text-muted-foreground">Belum ada data pekanan.</p>}
           </section>
