@@ -13,10 +13,10 @@ async function seedOrg(t: any) {
   }));
 }
 
-async function seedEligibleDay(t: any, orgId: any, windowKey = WINDOW) {
+async function seedEligibleDay(t: any, orgId: any, windowKey = WINDOW, withMarker = true) {
   const { startAt } = windowRangeForKey(windowKey);
   await t.run(async (ctx: any) => {
-    await ctx.db.insert("rollupWindows", { orgId, windowKey, schemaVersion: 1, completedAt: startAt + 1 });
+    if (withMarker) await ctx.db.insert("rollupWindows", { orgId, windowKey, schemaVersion: 1, completedAt: startAt + 1 });
     for (const [csKey, csName, leads, closings] of [
       ["azelia", "Azelia", 10, 8],
       ["nabila", "Nabila", 10, 5],
@@ -72,12 +72,13 @@ test("a refreshed no-winner snapshot clears a prior winner", async () => {
   expect(awards[0].winnerCsName).toBeUndefined();
 });
 
-test("Queen setup rebuilds a missing rollup before capturing its snapshot", async () => {
+test("Queen setup snapshots existing daily data without requiring a rollup marker", async () => {
   vi.useFakeTimers({ now: new Date("2026-07-02T11:00:00.000Z") });
   try {
     const t = convexTest(schema, modules);
     const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
     const orgId = await seedOrg(t);
+    await seedEligibleDay(t, orgId, "2026-07-01", false);
 
     await admin.mutation((api as any).queens.queueCurrentMonthBackfill, {});
     await t.finishAllScheduledFunctions(vi.runAllTimers);
@@ -86,8 +87,8 @@ test("Queen setup rebuilds a missing rollup before capturing its snapshot", asyn
       award: await ctx.db.query("queenAwards").first(),
       marker: await ctx.db.query("rollupWindows").first(),
     }));
-    expect(result.marker).toMatchObject({ orgId, windowKey: "2026-07-01" });
-    expect(result.award).toMatchObject({ orgId, windowKey: "2026-07-01", status: "no_winner" });
+    expect(result.marker).toBeNull();
+    expect(result.award).toMatchObject({ orgId, windowKey: "2026-07-01", status: "won", winnerCsName: "Azelia" });
   } finally {
     vi.useRealTimers();
   }

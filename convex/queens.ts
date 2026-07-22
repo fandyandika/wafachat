@@ -62,14 +62,14 @@ function standings(awards: Award[]) {
 }
 
 export const captureWindow = internalMutation({
-  args: { orgId: v.string(), windowKey: v.string() },
+  args: { orgId: v.string(), windowKey: v.string(), force: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const orgId = args.orgId as Id<"organizations">;
     const range = windowRangeForKey(args.windowKey);
     if (range.endAt > Date.now()) return { status: "open" as const };
     const marker = await ctx.db.query("rollupWindows")
       .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", args.windowKey)).unique();
-    if (!marker) return { status: "pending" as const };
+    if (!marker && !args.force) return { status: "pending" as const };
 
     const [rollups, response] = await Promise.all([
       ctx.db.query("dailyRollups")
@@ -165,7 +165,10 @@ export const queueCurrentMonthBackfill = mutation({
       .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).gte("windowKey", bounds.first).lt("windowKey", bounds.afterLast)).collect();
     const known = new Set(existing.map((row) => row.windowKey));
     const missing = keysInRange(bounds.first, key).filter((windowKey) => !known.has(windowKey));
-    for (const windowKey of missing) await ctx.scheduler.runAfter(0, internal.queens.rebuildThenCaptureWindow, { orgId: String(orgId), windowKey });
+    // Historical Queen snapshots use the already-published daily rollups. Rebuilding every
+    // historical window here is both slow and needlessly expensive; the normal rollup/reconciler
+    // pipeline remains the source that maintains those rows.
+    for (const windowKey of missing) await ctx.scheduler.runAfter(0, internal.queens.captureWindow, { orgId: String(orgId), windowKey, force: true });
     return { scheduled: missing.length, month };
   },
 });
