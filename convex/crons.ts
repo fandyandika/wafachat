@@ -48,4 +48,11 @@ crons.daily(
   {},
 );
 
+crons.daily(
+  "queen daily snapshot",
+  { hourUTC: 10, minuteUTC: 0 }, // 17:00 WIB: the 16:00 business window is closed.
+  internal.queens.captureClosedWindows,
+  {},
+);
+
 export default crons;

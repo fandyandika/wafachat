@@ -2,7 +2,7 @@
 
 Deferred items. Pull from here when needed.
 
-## Current execution roadmap (2026-07-19)
+## Current execution roadmap (2026-07-22)
 
 ### Baseline Convex — 18 July 2026
 
@@ -11,6 +11,14 @@ Deferred items. Pull from here when needed.
 - Next hot groups: response time **17.09 MB**, follow-up **17.63 MB combined**, order-counter reconciler **9.89 MB**, period report **9.30 MB**, health monitor **7.53 MB**, lifecycle **7.13 MB**.
 - Detailed implementation plan: [`docs/superpowers/plans/2026-07-19-convex-io-remediation-roadmap.md`](superpowers/plans/2026-07-19-convex-io-remediation-roadmap.md).
 
+### Production status — 22 July 2026
+
+- ✅ Berdu webhook incident resolved; realtime order delivery and n8n notifications are normal again.
+- ✅ Convex I/O remediation and branded WaFaChat UI are live in production (`main` / Vercel / Convex).
+- ✅ Local release gate: 419 tests, TypeScript, Convex codegen, and production build green.
+- 🟡 Convex I/O remains under observation. Daily totals (UTC): **193.20 MB** Jul 18, **335.76 MB** Jul 19, **325.64 MB** Jul 20, **231.01 MB** Jul 21, and **89.81 MB partial** Jul 22.
+- 🟡 Current billing-period total is **3.7 GB**, but at least **1.58 GB** is one-time migration/index work (`orgs.backfillOrgId`, database index backfill, and `orgs.orgIdCoverage`), so it must not be used as the steady-state baseline.
+
 ### Ordered delivery gates
 
 1. **Convex correctness baseline** — fix the two date-dependent tests; full suite green.
@@ -18,16 +26,19 @@ Deferred items. Pull from here when needed.
 3. **Follow-up/lifecycle efficiency** — direction index, four-page durable lifecycle workers, scheduled continuations, and tenant-isolated scheduling.
 4. **Analytics safety completion** — additive sealed facts remain rollup-backed; non-composable identity unions remain exact raw with half-open 35-day/900-row fail-loud bounds. No additive distinct approximation.
 5. **Ingestion tuning** — indexed agent resolution, platform-wide resumable provider-claim migration, and fail-closed legacy registry caps while preserving raw capture/replay.
-6. **24-hour production comparison** — target ≤135 MB/day at comparable traffic, stretch ≤115 MB/day.
-7. **PWA project** — installable app shell, new branded icons, safe update flow, static/offline fallback only; authenticated Convex data is never cached by the service worker.
-8. **SaaS platform continuation** — B4 per-org timezone/cutoff, encrypted `tenantIntegrations`, onboarding/field mapper, connector presets, billing, Sentry/audit/export.
+6. **Steady-state production comparison** — measure a clean 24-hour window without migration/backfill activity; target ≤135 MB/day at comparable traffic, stretch ≤115 MB/day. If still above target, profile `ingest/core.processEvent`, then response-time and order-counter reads.
+7. **Queen monthly recap** — preserve the existing Queen formula; store one sealed daily winner per org and show an owner-only monthly recap for bonus evaluation.
+8. **PWA project** — installable app shell, new branded icons, safe update flow, static/offline fallback only; authenticated Convex data is never cached by the service worker.
+9. **SaaS platform continuation** — B4 per-org timezone/cutoff, encrypted `tenantIntegrations`, onboarding/field mapper, connector presets, billing, Sentry/audit/export.
 
 ### SaaS readiness status
 
 - ✅ Brand identity and favicon/app icons.
 - ✅ Organization spine, required `orgId`, tenant-isolated indexes/readers, tenant provisioning core, JWT org validation.
 - ✅ Universal capture-first ingestion and daily rollup foundation.
-- 🟡 Convex I/O remediation — local implementation/release gates green; production migration, deploy, parity run, and 24-hour measurement remain.
+- 🟡 Convex I/O remediation — deployed; clean steady-state 24-hour measurement and remaining production parity/migration checks remain.
+- ✅ Berdu realtime webhook + notification incident resolved.
+- ⬜ Owner-only Queen monthly recap / bonus audit trail.
 - ⬜ PWA/mobile installability — next standalone project.
 - ⬜ Per-org timezone and daily cutoff (B4).
 - ⬜ Per-org encrypted integration credentials and reconciler/connectors.

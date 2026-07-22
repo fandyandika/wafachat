@@ -38,6 +38,7 @@ import type * as metrics from "../metrics.js";
 import type * as orgSettings from "../orgSettings.js";
 import type * as orgs from "../orgs.js";
 import type * as passwordHash from "../passwordHash.js";
+import type * as queens from "../queens.js";
 import type * as responseTime from "../responseTime.js";
 import type * as responseTimeMath from "../responseTimeMath.js";
 import type * as rollupMigration from "../rollupMigration.js";
@@ -85,6 +86,7 @@ declare const fullApi: ApiFromModules<{
   orgSettings: typeof orgSettings;
   orgs: typeof orgs;
   passwordHash: typeof passwordHash;
+  queens: typeof queens;
   responseTime: typeof responseTime;
   responseTimeMath: typeof responseTimeMath;
   rollupMigration: typeof rollupMigration;
