@@ -27,7 +27,7 @@ Deferred items. Pull from here when needed.
 4. **Analytics safety completion** — additive sealed facts remain rollup-backed; non-composable identity unions remain exact raw with half-open 35-day/900-row fail-loud bounds. No additive distinct approximation.
 5. **Ingestion tuning** — indexed agent resolution, platform-wide resumable provider-claim migration, and fail-closed legacy registry caps while preserving raw capture/replay.
 6. **Steady-state production comparison** — measure a clean 24-hour window without migration/backfill activity; target ≤135 MB/day at comparable traffic, stretch ≤115 MB/day. If still above target, profile `ingest/core.processEvent`, then response-time and order-counter reads.
-7. **Queen monthly recap** — preserve the existing Queen formula; store one sealed daily winner per org and show an owner-only monthly recap for bonus evaluation.
+7. ✅ **Queen monthly recap** — preserve the existing Queen formula; store one sealed daily winner per org and show an owner-only monthly recap for bonus evaluation.
 8. **PWA project** — installable app shell, new branded icons, safe update flow, static/offline fallback only; authenticated Convex data is never cached by the service worker.
 9. **SaaS platform continuation** — B4 per-org timezone/cutoff, encrypted `tenantIntegrations`, onboarding/field mapper, connector presets, billing, Sentry/audit/export.
 
@@ -38,7 +38,7 @@ Deferred items. Pull from here when needed.
 - ✅ Universal capture-first ingestion and daily rollup foundation.
 - 🟡 Convex I/O remediation — deployed; clean steady-state 24-hour measurement and remaining production parity/migration checks remain.
 - ✅ Berdu realtime webhook + notification incident resolved.
-- ⬜ Owner-only Queen monthly recap / bonus audit trail.
+- ✅ Owner-only Queen monthly recap / bonus audit trail.
 - ⬜ PWA/mobile installability — next standalone project.
 - ⬜ Per-org timezone and daily cutoff (B4).
 - ⬜ Per-org encrypted integration credentials and reconciler/connectors.
