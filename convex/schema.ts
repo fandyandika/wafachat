@@ -256,6 +256,22 @@ export default defineSchema({
     .index("by_org_window_cs", ["orgId", "windowKey", "csKey"])
     .index("by_org_windowKey", ["orgId", "windowKey"]),
 
+  // One immutable-in-practice Queen result per completed 16:00-WIB window.
+  // Recaps count these rows; they never re-scan orders or shipping recaps.
+  queenAwards: defineTable({
+    orgId: v.id("organizations"),
+    windowKey: v.string(),
+    status: v.union(v.literal("won"), v.literal("no_winner")),
+    winnerCsKey: v.optional(v.string()),
+    winnerCsName: v.optional(v.string()),
+    score: v.optional(v.number()),
+    leads: v.optional(v.number()),
+    closings: v.optional(v.number()),
+    cr: v.optional(v.number()),
+    respMedianMs: v.optional(v.number()),
+    sealedAt: v.number(),
+  }).index("by_org_windowKey", ["orgId", "windowKey"]),
+
   // Written only after a bounded recompute has reconciled every CS row. Empty
   // windows get a marker too, so "no rows" is distinguishable from incomplete.
   rollupWindows: defineTable({

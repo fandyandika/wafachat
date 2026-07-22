@@ -11,6 +11,7 @@ import { PerformancePanel } from '@/components/panel/performance-panel';
 import type { PerformanceData } from '@/components/panel/types';
 import { Button } from '@/components/ui/button';
 import { WindowModeToggle, type WindowMode } from '@/components/panel/window-mode-toggle';
+import { QueenRecap } from '@/components/panel/queen-recap';
 
 function fmtUpdatedAt(ms: number | null): string {
   if (!ms) return 'Belum dimuat';
@@ -122,6 +123,7 @@ function PerformanceWork({ mode, onModeChange }: { mode: WindowMode; onModeChang
         responseTimes={responseTimes?.cs ?? undefined}
         avatarByKey={avatarByKey}
       />
+      <QueenRecap />
     </div>
   );
 }
