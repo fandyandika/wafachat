@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { usePanelFilters, type DateRangeKey } from '@/components/panel/use-panel-filters';
 import { useMe } from '@/components/panel/use-me';
+import { PwaInstallButton } from '@/components/panel/pwa-install';
 
 const NAV = [
   { href: '/panel', label: 'Dashboard', icon: LayoutDashboard },
@@ -89,6 +90,9 @@ function PanelShell({ children }: { children: React.ReactNode }) {
               );
             })}
           </nav>
+          <div className="px-4 pb-2">
+            <PwaInstallButton />
+          </div>
           {isCs && (
             <div className="px-4 pb-6">
               <button
