@@ -20,6 +20,16 @@ export function windowRangeForKey(key: string): { startAt: number; endAt: number
   return { startAt: fourPmWibMs(y, m - 1, d), endAt: fourPmWibMs(y, m - 1, d + 1) };
 }
 
+/** Closing-date label for a stored opening-window key. */
+export function businessDateKeyForWindowKey(key: string): string {
+  return windowKeyFor(windowRangeForKey(key).endAt);
+}
+
+/** Stored opening-window key for a closing-date label. */
+export function windowKeyForBusinessDate(key: string): string {
+  return windowKeyFor(windowRangeForKey(key).startAt - 1);
+}
+
 export function windowKeyToday(now = Date.now()): string {
   return windowKeyFor(now);
 }

@@ -118,8 +118,7 @@ export function DailyReportDashboard() {
     .map((c) => ({ csName: c.csName, ratePct: Math.round((c.slaBreaches / c.firstReplyCount) * 100) }))
     .sort((a, b) => b.ratePct - a.ratePct)[0];
 
-  // Open-date label = the day the window OPENS (= rawWindow.startAt's WIB date), not endAt (next day).
-  const label = wibDateParts(rawWindow.startAt);
+  const label = wibDateParts(rawWindow.endAt);
   const windowLabel = `Periode ${fmtBoundary(startAt)} → ${fmtBoundary(endAt)} WIB`;
   const titleDate = `${DAYS_SHORT[label.dow]} ${label.d} ${MONTHS_SHORT[label.m]} ${label.y}`;
   const dateInputValue = `${label.y}-${pad(label.m + 1)}-${pad(label.d)}`;
