@@ -48,7 +48,7 @@ export type PerformanceReport = {
   products: ProductMetricRow[];
   weeks: Array<DateRange & {
     partial: boolean;
-    status: "running" | "complete";
+    status: "upcoming" | "running" | "complete";
     metrics: MetricRow;
   }>;
 };

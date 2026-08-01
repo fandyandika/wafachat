@@ -64,7 +64,7 @@ const performanceReportValidator = v.object({
     startDate: v.string(),
     endDate: v.string(),
     partial: v.boolean(),
-    status: v.union(v.literal("running"), v.literal("complete")),
+    status: v.union(v.literal("upcoming"), v.literal("running"), v.literal("complete")),
     metrics: v.object(metricFields),
   })),
 });
@@ -213,7 +213,9 @@ export const getPerformanceReport = query({
     const weeks = args.period === "month"
       ? splitMonthIntoCalendarWeeks(args.startDate.slice(0, 7)).map((week) => ({
         ...week,
-        status: (week.endDate > effective.endDate ? "running" : "complete") as "running" | "complete",
+        status: week.startDate > today ? "upcoming" as const
+          : week.endDate >= today ? "running" as const
+          : "complete" as const,
         metrics: aggregateRollups(rowsWithin(currentRows, week)),
       }))
       : [];
@@ -222,7 +224,7 @@ export const getPerformanceReport = query({
       startDate: selected.startDate,
       endDate: selected.endDate,
       effectiveEndDate: effective.endDate,
-      status: effective.endDate === selected.endDate ? "complete" : "running",
+      status: selected.endDate >= today ? "running" : "complete",
       generatedAt: Date.now(),
       responseNotice,
       summary: {

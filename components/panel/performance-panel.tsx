@@ -1,245 +1,216 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
+import { useMemo, useState } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { DeltaPill } from "@/components/ui/metric-card";
+import { formatDuration, formatRupiah } from "@/lib/format";
+import type { DateRange, PerformanceReport } from "@/lib/performance-report";
+import { cn } from "@/lib/utils";
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import { cn } from '@/lib/utils';
-import type { PerformanceData } from '@/components/panel/types';
-import { formatRupiah, formatDuration } from '@/lib/format';
-import { CsAvatar } from '@/components/ui/cs-avatar';
-import { DeltaPill } from '@/components/ui/metric-card';
-import { crBarClass } from '@/lib/cr';
-import { csKey } from '@/lib/cs-key';
+const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
+const pct = (value: number) => `${number.format(value)}%`;
 
-export function PerformancePanel({
-  data,
-  csLeaderboard,
-  productDifficulty,
-  responseTimes,
-  avatarByKey,
-}: {
-  data?: PerformanceData;
-  csLeaderboard?: Array<{
-    csName: string; leads: number; closings: number; cr: number; revenue: number;
-    deltaLeads: number; deltaClosings: number; deltaCr: number;
-  }>;
-  productDifficulty?: Array<{ productName: string; leads: number; closings: number; cr: number; prevCr: number; deltaCr: number }>;
-  responseTimes?: Array<{ csNameRaw: string; firstReplyMedianMs: number | null; firstReplyP90Ms: number | null; firstReplyCount: number }>;
-  avatarByKey?: Map<string, string | null>;
-}) {
-  const deltaTag = (d: number, suffix = '') => <DeltaPill value={d} suffix={suffix} />;
-  const [perfTab, setPerfTab] = useState<'summary' | 'cs' | 'product'>('summary');
+function dateLabel(value: string): string {
+  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", timeZone: "UTC" })
+    .format(new Date(`${value}T00:00:00Z`))
+    .replace(".", "");
+}
 
-  const tabs = [
-    { key: 'summary' as const, label: 'Ringkasan' },
-    { key: 'cs' as const, label: 'Per CS' },
-    { key: 'product' as const, label: 'Per Produk' },
-  ];
+function rangeLabel(range: DateRange): string {
+  if (range.startDate === range.endDate) return dateLabel(range.startDate);
+  const start = dateLabel(range.startDate);
+  const end = dateLabel(range.endDate);
+  const [, startMonth] = start.split(" ");
+  const [endDay, endMonth] = end.split(" ");
+  return startMonth === endMonth ? `${start.split(" ")[0]}–${endDay} ${endMonth}` : `${start}–${end}`;
+}
 
-  const kpiCards = [
-    { label: 'Total Percakapan', value: data?.totalLeads ?? 0, tone: 'text-lead' },
-    { label: 'Total Closing', value: data?.totalClosing ?? 0, tone: 'text-positive' },
-    { label: 'Conversion Rate', value: `${data?.overallCr ?? 0}%`, tone: 'text-primary' },
-    { label: 'COD', value: data?.totalCod ?? 0, tone: 'text-amber-600' },
-    { label: 'Transfer', value: data?.totalTransfer ?? 0, tone: 'text-lead' },
-    { label: 'Omzet', value: formatRupiah(data?.totalRevenue), tone: 'text-positive' },
-    { label: 'Terkirim', value: data?.delivered ?? 0, tone: 'text-positive' },
-    { label: 'Dibatalkan', value: data?.cancelled ?? 0, tone: 'text-destructive' },
-  ];
+function MetricCard({ label, value, delta }: { label: string; value: React.ReactNode; delta?: number }) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm">
+      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 flex items-center gap-2 text-xl font-semibold tabular-nums">
+        <span>{value}</span>
+        {delta !== undefined && <DeltaPill value={delta} />}
+      </div>
+    </div>
+  );
+}
 
-  const sortedProducts = [...(data?.products ?? [])].sort((a, b) => b.closing - a.closing);
-  const respByRaw = new Map((responseTimes ?? []).map((r) => [r.csNameRaw, r]));
+export function PerformancePanel({ report }: { report: PerformanceReport }) {
+  const [tab, setTab] = useState<"summary" | "cs" | "product">("summary");
+  const [productSort, setProductSort] = useState<"closing" | "cr">("closing");
+  const products = useMemo(() => [...report.products].sort((a, b) => productSort === "cr"
+    ? a.cr - b.cr || b.closings - a.closings
+    : b.closings - a.closings || a.product.localeCompare(b.product)), [productSort, report.products]);
+  const s = report.summary;
 
   return (
     <div className="space-y-4">
-      {/* Topbar: tabs */}
-      <div className="flex gap-1 rounded-lg border bg-muted/30 p-1 w-fit">
-        {tabs.map((tab) => (
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
+        <div>
+          <p className="font-medium">{rangeLabel({ startDate: report.startDate, endDate: report.endDate })}</p>
+          <p className="text-xs text-muted-foreground">
+            Data sampai {dateLabel(report.effectiveEndDate)} · dibuat {new Intl.DateTimeFormat("id-ID", { hour: "2-digit", minute: "2-digit" }).format(report.generatedAt)}
+          </p>
+        </div>
+        <span className={cn(
+          "rounded-full px-2.5 py-1 text-xs font-medium",
+          report.status === "running" ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800",
+        )}>
+          {report.status === "running" ? "Berjalan" : "Selesai"}
+        </span>
+      </div>
+
+      <div className="flex w-fit gap-1 rounded-lg border border-border bg-muted/30 p-1">
+        {([['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per Produk']] as const).map(([value, label]) => (
           <button
-            key={tab.key}
-            onClick={() => setPerfTab(tab.key)}
-            className={cn(
-              'cursor-pointer rounded-md px-4 py-1.5 text-sm font-medium transition-colors',
-              perfTab === tab.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-            )}
+            key={value}
             type="button"
+            aria-pressed={tab === value}
+            onClick={() => setTab(value)}
+            className={cn(
+              "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+              tab === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+            )}
           >
-            {tab.label}
+            {label}
           </button>
         ))}
       </div>
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-        {kpiCards.map((card) => (
-          <div
-            key={card.label}
-            className="rounded-2xl border border-border bg-card p-4 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-elevate"
-          >
-            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{card.label}</div>
-            <div className={cn('mt-1.5 truncate text-xl font-semibold tabular-nums sm:text-2xl', card.tone)}>{card.value}</div>
+      {report.responseNotice && (
+        <div className="rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {report.responseNotice}
+        </div>
+      )}
+
+      {tab === "summary" && (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <MetricCard label="Leads" value={number.format(s.leads)} delta={s.deltaLeads} />
+            <MetricCard label="Closing" value={number.format(s.closings)} delta={s.deltaClosings} />
+            <MetricCard label="Conversion Rate" value={pct(s.cr)} delta={s.deltaCr} />
+            <MetricCard label="Omzet" value={formatRupiah(s.revenue)} delta={s.deltaRevenue} />
+            <MetricCard label="Diskon" value={formatRupiah(s.discount)} />
+            <MetricCard label="COD" value={number.format(s.cod)} />
+            <MetricCard label="Transfer" value={number.format(s.transfer)} />
+            <MetricCard label="Rasio Pembayaran" value={<span className="text-sm">COD {pct(s.codPct)} · Transfer {pct(s.transferPct)}</span>} />
+            <MetricCard label="Terkirim" value={number.format(s.delivered)} />
+            <MetricCard label="Dibatalkan" value={number.format(s.cancelled)} />
           </div>
-        ))}
-      </div>
 
-      {perfTab === 'cs' && (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Leaderboard CS</CardTitle>
-          <CardDescription>Ranking juara→lesu periode terpilih. Pill ↑/↓ = perubahan vs periode sebelumnya yang sama panjang. “Balas chat” = median waktu balas chat pertama.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {csLeaderboard === undefined ? (
-            <p className="text-sm text-muted-foreground">Memuat…</p>
-          ) : csLeaderboard.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Belum ada data di periode ini.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                  <tr>
-                    <th className="py-2 pr-3 font-medium">#</th>
-                    <th className="py-2 pr-3 font-medium">CS</th>
-                    <th className="py-2 pr-3 text-right font-medium">Leads</th>
-                    <th className="py-2 pr-3 text-right font-medium">Closing</th>
-                    <th className="py-2 pr-3 text-right font-medium">CR</th>
-                    <th className="py-2 pr-3 text-right font-medium">Balas chat</th>
-                    <th className="py-2 pr-3 text-right font-medium">Omzet</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {csLeaderboard.map((r, i) => (
-                      <tr
-                        key={r.csName}
-                        className={cn(
-                          'border-t border-border transition-colors hover:bg-accent',
-                          i === 0 && 'bg-accent/40',
-                        )}
-                      >
-                        <td className="py-2.5 pr-3">
-                          <span
-                            className={cn(
-                              'inline-flex size-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
-                              i === 0
-                                ? 'bg-primary text-primary-foreground'
-                                : i < 3
-                                  ? 'bg-accent text-accent-foreground'
-                                  : 'text-muted-foreground',
-                            )}
-                          >
-                            {i + 1}
-                          </span>
-                        </td>
-                        <td className="py-2.5 pr-3">
-                          <div className="flex items-center gap-2.5">
-                            <CsAvatar name={r.csName || '?'} size="sm" src={avatarByKey?.get(csKey(r.csName)) ?? undefined} />
-                            <span className={cn('font-medium', i === 0 && 'font-semibold')}>{r.csName || '—'}</span>
-                          </div>
-                        </td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{r.leads} {deltaTag(r.deltaLeads)}</td>
-                        <td className={cn('py-2.5 pr-3 text-right tabular-nums', i === 0 && 'font-semibold')}>{r.closings} {deltaTag(r.deltaClosings)}</td>
-                        <td className="py-2.5 pr-3">
-                          <div className="flex flex-col items-end gap-1">
-                            <span className="tabular-nums">{r.cr}% {deltaTag(r.deltaCr, '%')}</span>
-                            <div className="h-1 w-16 overflow-hidden rounded-full bg-muted">
-                              <div
-                                className={cn('h-full rounded-full', crBarClass(r.cr))}
-                                style={{ width: `${Math.min(Math.max(r.cr, 0), 100)}%` }}
-                              />
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{respByRaw.get(r.csName)?.firstReplyCount ? formatDuration(respByRaw.get(r.csName)!.firstReplyMedianMs) : '–'}</td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">{formatRupiah(r.revenue)}</td>
-                      </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-      )}
-
-      {perfTab === 'product' && (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Produk Tersusah Closing</CardTitle>
-          <CardDescription>CR terendah dulu (min 3 leads). Pill ↑/↓ = perubahan vs periode sebelumnya.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {productDifficulty === undefined ? (
-            <p className="text-sm text-muted-foreground">Memuat…</p>
-          ) : productDifficulty.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Belum cukup data produk di periode ini.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
-                  <tr><th className="py-2 pr-3 font-medium">Produk</th><th className="py-2 pr-3 text-right font-medium">Leads</th><th className="py-2 pr-3 text-right font-medium">Closing</th><th className="py-2 pr-3 text-right font-medium">CR</th></tr>
-                </thead>
-                <tbody>
-                  {productDifficulty.map((p) => (
-                    <tr key={p.productName} className="border-t border-border transition-colors hover:bg-accent">
-                      <td className="py-2.5 pr-3 font-medium">{p.productName}</td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums">{p.leads}</td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums">{p.closings}</td>
-                      <td className="py-2.5 pr-3 text-right tabular-nums">{p.cr}% {deltaTag(p.deltaCr, '%')}</td>
+          {report.period === "month" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Rincian Pekanan</CardTitle>
+                <CardDescription>Senin sampai Ahad, dipotong di batas bulan agar total tetap sama.</CardDescription>
+              </CardHeader>
+              <CardContent className="overflow-x-auto">
+                <table className="w-full min-w-[720px] text-sm">
+                  <thead className="text-left text-xs text-muted-foreground">
+                    <tr>
+                      <th className="pb-2 font-medium">Pekan</th><th className="pb-2 font-medium">Status</th>
+                      <th className="pb-2 text-right font-medium">Leads</th><th className="pb-2 text-right font-medium">Closing</th>
+                      <th className="pb-2 text-right font-medium">CR</th><th className="pb-2 text-right font-medium">Omzet</th>
+                      <th className="pb-2 text-right font-medium">COD</th><th className="pb-2 text-right font-medium">Transfer</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {report.weeks.map((week) => (
+                      <tr key={week.startDate} className="border-t border-border">
+                        <td className="py-2.5 font-medium">{rangeLabel(week)}</td>
+                        <td className="py-2.5 text-muted-foreground">
+                          {week.partial && "Pekan parsial · "}
+                          {week.status === "upcoming" ? "Belum berjalan" : week.status === "running" ? "Berjalan" : "Selesai"}
+                        </td>
+                        <td className="py-2.5 text-right tabular-nums">{number.format(week.metrics.leads)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{number.format(week.metrics.closings)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{pct(week.metrics.cr)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{formatRupiah(week.metrics.revenue)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{number.format(week.metrics.cod)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{number.format(week.metrics.transfer)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
+        </>
       )}
 
-      {perfTab === 'summary' && (
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Ringkasan Performance</CardTitle>
-          <CardDescription>KPI periode terpilih tampil di atas. Gunakan tab Per CS dan Per Produk untuk rincian.</CardDescription>
-        </CardHeader>
-      </Card>
-      )}
-
-      {perfTab === 'product' && (
+      {tab === "cs" && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Performance per Produk</CardTitle>
-            <CardDescription>Diurutkan dari closing terbanyak. Bar = closing rate.</CardDescription>
+            <CardTitle>Performance per CS</CardTitle>
+            <CardDescription>Semua metrik mengikuti periode dan filter CS yang sama.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-3.5">
-            {sortedProducts.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Belum ada data produk.</p>
-            ) : (
-              sortedProducts.map((p) => (
-                <div key={p.product} className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-2 text-sm">
-                    <span className="min-w-0 flex-1 truncate font-medium text-foreground">{p.product}</span>
-                    <span className="shrink-0 tabular-nums text-muted-foreground">
-                      {p.closing}/{p.leads} · {formatRupiah(p.revenue)}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                      <div
-                        className={cn('h-full rounded-full', crBarClass(p.cr))}
-                        style={{ width: `${Math.min(Math.max(p.cr, 0), 100)}%` }}
-                      />
-                    </div>
-                    <span className="w-10 shrink-0 text-right text-xs font-semibold tabular-nums">{p.cr}%</span>
-                  </div>
-                </div>
-              ))
-            )}
+          <CardContent className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-sm">
+              <thead className="text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="pb-2 font-medium">CS</th><th className="pb-2 text-right font-medium">Leads</th>
+                  <th className="pb-2 text-right font-medium">Closing</th><th className="pb-2 text-right font-medium">CR</th>
+                  <th className="pb-2 text-right font-medium">Omzet</th><th className="pb-2 text-right font-medium">COD / Transfer</th>
+                  <th className="pb-2 text-right font-medium">Balas pertama</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.cs.map((row) => (
+                  <tr key={row.csKey} className="border-t border-border">
+                    <td className="py-2.5 font-medium">{row.csName}</td>
+                    <td className="py-2.5 text-right tabular-nums">{number.format(row.leads)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{number.format(row.closings)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{pct(row.cr)} <DeltaPill value={row.deltaCr} suffix="%" /></td>
+                    <td className="py-2.5 text-right tabular-nums">{formatRupiah(row.revenue)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{pct(row.codPct)} / {pct(row.transferPct)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{report.responseNotice ? "Rentang terlalu panjang" : formatDuration(row.responseMedianMs)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "product" && (
+        <Card>
+          <CardHeader className="sm:grid-cols-[1fr_auto]">
+            <div>
+              <CardTitle>Performance per Produk</CardTitle>
+              <CardDescription>Ringkas, tanpa grafik; urutkan sesuai kebutuhan evaluasi.</CardDescription>
+            </div>
+            <select value={productSort} onChange={(event) => setProductSort(event.target.value as "closing" | "cr")} className="h-8 rounded-lg border border-input bg-background px-2 text-sm">
+              <option value="closing">Closing terbanyak</option>
+              <option value="cr">CR terendah</option>
+            </select>
+          </CardHeader>
+          <CardContent className="overflow-x-auto">
+            <table className="w-full min-w-[820px] text-sm">
+              <thead className="text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="pb-2 font-medium">Produk</th><th className="pb-2 text-right font-medium">Leads</th>
+                  <th className="pb-2 text-right font-medium">Closing</th><th className="pb-2 text-right font-medium">CR</th>
+                  <th className="pb-2 text-right font-medium">Omzet</th><th className="pb-2 text-right font-medium">COD</th>
+                  <th className="pb-2 text-right font-medium">Transfer</th><th className="pb-2 text-right font-medium">Rasio</th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.map((row) => (
+                  <tr key={row.product} className="border-t border-border">
+                    <td className="py-2.5 font-medium">{row.product}</td>
+                    <td className="py-2.5 text-right tabular-nums">{number.format(row.leads)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{number.format(row.closings)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{pct(row.cr)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{formatRupiah(row.revenue)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{number.format(row.cod)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{number.format(row.transfer)}</td>
+                    <td className="py-2.5 text-right tabular-nums">{pct(row.codPct)} / {pct(row.transferPct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </CardContent>
         </Card>
       )}

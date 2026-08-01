@@ -1,0 +1,67 @@
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { expect, test } from "vitest";
+import type { MetricRow, PerformanceReport } from "@/lib/performance-report";
+import { PerformancePanel } from "./performance-panel";
+
+(globalThis as any).React = React;
+
+const metrics: MetricRow = {
+  leads: 30,
+  closings: 15,
+  cr: 50,
+  revenue: 3_000_000,
+  cod: 9,
+  transfer: 6,
+  codPct: 60,
+  transferPct: 40,
+  delivered: 12,
+  cancelled: 1,
+  discount: 50_000,
+};
+
+const report: PerformanceReport = {
+  period: "month",
+  startDate: "2026-08-01",
+  endDate: "2026-08-31",
+  effectiveEndDate: "2026-08-05",
+  status: "running",
+  generatedAt: Date.parse("2026-08-05T10:00:00Z"),
+  summary: {
+    ...metrics,
+    cr: 67.2,
+    deltaLeads: 5,
+    deltaClosings: 2,
+    deltaCr: 3.1,
+    deltaRevenue: 500_000,
+  },
+  cs: [{ ...metrics, csKey: "aisyah", csName: "Aisyah", responseMedianMs: 60_000, deltaCr: 2.5 }],
+  products: [{ ...metrics, product: "Quran Mapping" }],
+  weeks: [
+    { startDate: "2026-08-01", endDate: "2026-08-02", partial: true, status: "complete", metrics },
+    { startDate: "2026-08-03", endDate: "2026-08-09", partial: false, status: "running", metrics },
+    { startDate: "2026-08-31", endDate: "2026-08-31", partial: true, status: "running", metrics: { ...metrics, leads: 0, closings: 0 } },
+  ],
+};
+
+test("shows the running summary and clipped monthly weeks", () => {
+  const html = renderToStaticMarkup(<PerformancePanel report={report} />);
+
+  expect(html).toContain("Berjalan");
+  expect(html).toContain("67,2%");
+  expect(html).toContain("COD 60%");
+  expect(html).toContain("Transfer 40%");
+  expect(html).toContain("1–2 Agu");
+  expect(html).toContain("Pekan parsial");
+  expect(html).toContain("31 Agu");
+});
+
+test("keeps core metrics visible when response samples are limited", () => {
+  const html = renderToStaticMarkup(<PerformancePanel report={{
+    ...report,
+    responseNotice: "Response time membutuhkan rentang lebih pendek",
+  }} />);
+
+  expect(html).toContain("Response time membutuhkan rentang lebih pendek");
+  expect(html).toContain("Rp3.000.000");
+});

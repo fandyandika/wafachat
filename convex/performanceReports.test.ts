@@ -169,3 +169,22 @@ test("response sample overflow degrades only the performance response metric", a
     fakeCtx, "org", { startAt, endAt },
   )).resolves.toEqual({ data: null, limited: true });
 });
+
+test("marks the active business-date week running and later month weeks upcoming", async () => {
+  vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") }); // 19:00 WIB; business date 2 Aug is active.
+  const t = convexTest(schema, modules);
+  await seed(t);
+  const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
+
+  const week = await admin.query((api as any).performanceReports.getPerformanceReport, {
+    period: "week", startDate: "2026-07-27", endDate: "2026-08-02",
+  });
+  const month = await admin.query((api as any).performanceReports.getPerformanceReport, {
+    period: "month", startDate: "2026-08-01", endDate: "2026-08-31",
+  });
+
+  expect(week.status).toBe("running");
+  expect(month.weeks.map((row: any) => row.status)).toEqual([
+    "running", "upcoming", "upcoming", "upcoming", "upcoming", "upcoming",
+  ]);
+});
