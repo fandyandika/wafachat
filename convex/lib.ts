@@ -80,7 +80,10 @@ export function startOfJakartaDayMs(timestamp = Date.now()): number {
 
 // ── Report-window helpers (16:00→16:00 WIB business day) ─────────────────────
 // Single source of truth in lib/report-window-core.ts; re-exported here + components/panel/report-window.ts (Task 10).
-export { fourPmWibMs, windowKeyFor, windowRangeForKey, windowKeyToday, isWindowAlignedRange } from "@/lib/report-window-core";
+export {
+  businessDateKeyForWindowKey, fourPmWibMs, isWindowAlignedRange, windowKeyFor,
+  windowKeyForBusinessDate, windowRangeForKey, windowKeyToday,
+} from "@/lib/report-window-core";
 
 // ── Product canonicalization ──────────────────────────────────────────────────
 // Shared helpers to avoid circular imports when rollupReaders needs canonicalizeProduct.

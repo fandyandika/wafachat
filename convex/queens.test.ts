@@ -80,36 +80,50 @@ test("Queen setup snapshots existing daily data without requiring a rollup marke
     const orgId = await seedOrg(t);
     await seedEligibleDay(t, orgId, "2026-07-01", false);
 
-    await admin.mutation((api as any).queens.queueCurrentMonthBackfill, {});
+    const queued = await admin.mutation((api as any).queens.queueMonthBackfill, { month: "2026-07" });
     await t.finishAllScheduledFunctions(vi.runAllTimers);
 
     const result = await t.run(async (ctx: any) => ({
-      award: await ctx.db.query("queenAwards").first(),
+      awards: await ctx.db.query("queenAwards").collect(),
       marker: await ctx.db.query("rollupWindows").first(),
     }));
     expect(result.marker).toBeNull();
-    expect(result.award).toMatchObject({ orgId, windowKey: "2026-07-01", status: "won", winnerCsName: "Azelia" });
+    expect(queued).toMatchObject({ month: "2026-07", scheduled: 2 });
+    expect(result.awards.find((row: any) => row.windowKey === "2026-07-01")).toMatchObject({ orgId, status: "won", winnerCsName: "Azelia" });
+    expect(result.awards.some((row: any) => row.windowKey === "2026-07-02")).toBe(false);
   } finally {
     vi.useRealTimers();
   }
 });
 
-test("month recap counts daily wins and keeps equal counts as a tie", async () => {
+test("month recap maps source windows to closing dates and always returns four fixed weeks", async () => {
+  vi.useFakeTimers({ now: new Date("2026-08-10T03:00:00.000Z") });
+  try {
   const t = convexTest(schema, modules);
   const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
   const orgId = await seedOrg(t);
   await t.run(async (ctx: any) => {
     for (const [windowKey, winnerCsKey, winnerCsName] of [
-      ["2026-07-20", "azelia", "Azelia"], ["2026-07-21", "nabila", "Nabila"],
+      ["2026-07-31", "azelia", "Azelia"], ["2026-08-01", "nabila", "Nabila"],
     ]) await ctx.db.insert("queenAwards", {
       orgId, windowKey, status: "won", winnerCsKey, winnerCsName, score: 80,
       leads: 10, closings: 8, cr: 80, respMedianMs: 60_000, sealedAt: 1,
     });
   });
 
-  const recap = await admin.query((api as any).queens.getMonth, { month: "2026-07" });
+  const recap = await admin.query((api as any).queens.getMonth, { month: "2026-08" });
   expect(recap.monthly.winners).toEqual(["Azelia", "Nabila"]);
+  expect(recap.awards.map((row: any) => row.windowKey)).toEqual(["2026-08-01", "2026-08-02"]);
+  expect(recap.weekly).toHaveLength(4);
+  expect(recap.weekly.map((week: any) => [week.startKey, week.endKey])).toEqual([
+    ["2026-08-01", "2026-08-07"], ["2026-08-08", "2026-08-14"],
+    ["2026-08-15", "2026-08-21"], ["2026-08-22", "2026-08-31"],
+  ]);
   expect(recap.weekly[0].winners).toEqual(["Azelia", "Nabila"]);
+  expect(recap.weekly.map((week: any) => week.status)).toEqual(["complete", "running", "upcoming", "upcoming"]);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("CS cannot access the owner Queen recap", async () => {
@@ -117,5 +131,5 @@ test("CS cannot access the owner Queen recap", async () => {
   const cs = t.withIdentity({ subject: "cs", role: "cs", name: "CS", email: "cs@wafachat" });
   await seedOrg(t);
   await expect(cs.query((api as any).queens.getMonth, { month: "2026-07" })).rejects.toThrow(/admin/i);
-  await expect(cs.mutation((api as any).queens.queueCurrentMonthBackfill, {})).rejects.toThrow(/admin/i);
+  await expect(cs.mutation((api as any).queens.queueMonthBackfill, { month: "2026-07" })).rejects.toThrow(/admin/i);
 });

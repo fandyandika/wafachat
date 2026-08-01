@@ -3,7 +3,10 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { requireAdminOrg } from "./authz";
-import { csKey, windowKeyFor, windowRangeForKey, windowKeyToday } from "./lib";
+import {
+  businessDateKeyForWindowKey, csKey, windowKeyFor, windowKeyForBusinessDate,
+  windowRangeForKey, windowKeyToday,
+} from "./lib";
 import { responseTimesFromSamples } from "./rollupReaders";
 import { computeQueenCs, computeQueenScores } from "../lib/queen";
 
@@ -41,10 +44,15 @@ function keysInRange(first: string, last: string | null) {
   return keys;
 }
 
-function weekStartKey(key: string) {
-  const date = new Date(`${key}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
-  return date.toISOString().slice(0, 10);
+function monthWeeks(month: string) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  const key = (day: number) => `${month}-${String(day).padStart(2, "0")}`;
+  return [[1, 7], [8, 14], [15, 21], [22, lastDay]].map(([start, end], index) => ({
+    week: index + 1,
+    startKey: key(start),
+    endKey: key(end),
+  }));
 }
 
 function standings(awards: Award[]) {
@@ -137,38 +145,49 @@ export const getMonth = query({
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "queens.getMonth");
     const bounds = monthBounds(args.month);
+    const sourceFirst = windowKeyForBusinessDate(bounds.first);
+    const sourceAfterLast = windowKeyForBusinessDate(bounds.afterLast);
     const rows = await ctx.db.query("queenAwards")
-      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).gte("windowKey", bounds.first).lt("windowKey", bounds.afterLast)).collect();
+      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).gte("windowKey", sourceFirst).lt("windowKey", sourceAfterLast)).collect();
     const awards = rows.map(({ windowKey, status, winnerCsKey, winnerCsName, score, leads, closings, cr, respMedianMs }) => (
-      { windowKey, status, winnerCsKey, winnerCsName, score, leads, closings, cr, respMedianMs }
+      { windowKey: businessDateKeyForWindowKey(windowKey), status, winnerCsKey, winnerCsName, score, leads, closings, cr, respMedianMs }
     )).sort((a, b) => a.windowKey.localeCompare(b.windowKey));
-    const monthLast = windowKeyFor(windowRangeForKey(bounds.afterLast).startAt - 1);
-    const expectedInMonth = keysInRange(bounds.first, closedWindowKey() < monthLast ? closedWindowKey() : monthLast);
-    const byWeek = new Map<string, Award[]>();
-    for (const award of awards) {
-      const week = weekStartKey(award.windowKey);
-      byWeek.set(week, [...(byWeek.get(week) ?? []), award]);
-    }
-    const weekly = Array.from(byWeek.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([weekStart, weekAwards]) => ({ weekStart, ...standings(weekAwards) }));
-    return { awards, monthly: standings(awards), weekly, setupNeeded: expectedInMonth.some((key) => !awards.some((award) => award.windowKey === key)) };
+    const sourceLast = windowKeyFor(windowRangeForKey(sourceAfterLast).startAt - 1);
+    const lastClosed = closedWindowKey();
+    const expectedInMonth = keysInRange(sourceFirst, lastClosed < sourceLast ? lastClosed : sourceLast);
+    const knownSourceKeys = new Set(rows.map((row) => row.windowKey));
+    const currentBusinessDate = businessDateKeyForWindowKey(windowKeyToday());
+    const closedBusinessDate = businessDateKeyForWindowKey(lastClosed);
+    const weekly = monthWeeks(args.month).map((week) => ({
+      ...week,
+      status: closedBusinessDate >= week.endKey
+        ? "complete" as const
+        : currentBusinessDate >= week.startKey && currentBusinessDate <= week.endKey
+          ? "running" as const
+          : "upcoming" as const,
+      ...standings(awards.filter((award) => award.windowKey >= week.startKey && award.windowKey <= week.endKey)),
+    }));
+    return { awards, monthly: standings(awards), weekly, setupNeeded: expectedInMonth.some((key) => !knownSourceKeys.has(key)) };
   },
 });
 
-export const queueCurrentMonthBackfill = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const { orgId } = await requireAdminOrg(ctx, "queens.queueCurrentMonthBackfill");
-    const key = closedWindowKey();
-    const month = key.slice(0, 7);
-    const bounds = monthBounds(month);
+export const queueMonthBackfill = mutation({
+  args: { month: v.string() },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "queens.queueMonthBackfill");
+    const bounds = monthBounds(args.month);
+    const sourceFirst = windowKeyForBusinessDate(bounds.first);
+    const sourceAfterLast = windowKeyForBusinessDate(bounds.afterLast);
     const existing = await ctx.db.query("queenAwards")
-      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).gte("windowKey", bounds.first).lt("windowKey", bounds.afterLast)).collect();
+      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).gte("windowKey", sourceFirst).lt("windowKey", sourceAfterLast)).collect();
     const known = new Set(existing.map((row) => row.windowKey));
-    const missing = keysInRange(bounds.first, key).filter((windowKey) => !known.has(windowKey));
+    const sourceLast = windowKeyFor(windowRangeForKey(sourceAfterLast).startAt - 1);
+    const lastClosed = closedWindowKey();
+    const missing = keysInRange(sourceFirst, lastClosed < sourceLast ? lastClosed : sourceLast).filter((windowKey) => !known.has(windowKey));
     // Historical Queen snapshots use the already-published daily rollups. Rebuilding every
     // historical window here is both slow and needlessly expensive; the normal rollup/reconciler
     // pipeline remains the source that maintains those rows.
     for (const windowKey of missing) await ctx.scheduler.runAfter(0, internal.queens.captureWindow, { orgId: String(orgId), windowKey, force: true });
-    return { scheduled: missing.length, month };
+    return { scheduled: missing.length, month: args.month };
   },
 });

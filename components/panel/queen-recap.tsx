@@ -11,7 +11,7 @@ type Standing = { csKey: string; csName: string; wins: number };
 export type QueenRecapData = {
   awards: Array<{ windowKey: string; status: 'won' | 'no_winner'; winnerCsName?: string; score?: number; leads?: number; closings?: number; cr?: number }>;
   monthly: { winners: string[]; winCount: number; standings: Standing[] };
-  weekly: Array<{ weekStart: string; winners: string[]; winCount: number; standings: Standing[] }>;
+  weekly: Array<{ week: number; startKey: string; endKey: string; status: 'complete' | 'running' | 'upcoming'; winners: string[]; winCount: number; standings: Standing[] }>;
   setupNeeded: boolean;
 };
 
@@ -41,9 +41,11 @@ function weekStatus(month: string, currentMonth: string) {
   return month === currentMonth ? 'Berjalan' : 'Selesai';
 }
 
+const WEEK_STATUS = { complete: 'Selesai', running: 'Berjalan', upcoming: 'Akan datang' } as const;
+
 export function QueenRecapView({ recap, month, currentMonth, onBackfill, busy }: { recap: QueenRecapData; month: string; currentMonth: string; onBackfill: () => void; busy: boolean }) {
   const status = weekStatus(month, currentMonth);
-  const canBackfill = recap.setupNeeded && month === currentMonth;
+  const canBackfill = recap.setupNeeded;
 
   return (
     <div className="space-y-4">
@@ -81,11 +83,9 @@ export function QueenRecapView({ recap, month, currentMonth, onBackfill, busy }:
 
           <section>
             <div className="mb-2 text-sm font-medium">Pemenang Pekanan</div>
-            {recap.weekly.length ? (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {recap.weekly.map((week, index) => <div key={week.weekStart} className="rounded-lg border border-border px-3 py-2.5 text-sm"><div className="flex items-center justify-between gap-2"><span className="font-medium">Pekan {index + 1}</span><span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{month === currentMonth && index === recap.weekly.length - 1 ? 'Berjalan' : 'Selesai'}</span></div><div className="mt-1 text-muted-foreground">Mulai {formatDate(week.weekStart)}</div><div className="mt-1 font-medium">{winnerLabel(week.winners)}</div></div>)}
-              </div>
-            ) : <p className="text-sm text-muted-foreground">Belum ada data pekanan.</p>}
+            <div className="grid gap-2 sm:grid-cols-2">
+              {recap.weekly.map((week) => <div key={week.week} className="rounded-lg border border-border px-3 py-2.5 text-sm"><div className="flex items-center justify-between gap-2"><span className="font-medium">Pekan {week.week}</span><span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{WEEK_STATUS[week.status]}</span></div><div className="mt-1 text-muted-foreground">{formatDate(week.startKey)} – {formatDate(week.endKey)}</div><div className="mt-1 font-medium">{week.status === 'running' && !week.winners.length ? 'Menunggu penutupan 16:00' : week.status === 'upcoming' ? 'Belum dimulai' : winnerLabel(week.winners)}</div></div>)}
+            </div>
           </section>
 
           <section>
@@ -111,9 +111,9 @@ export function QueenRecap() {
   const currentMonth = monthKey();
   const [month, setMonth] = useState(currentMonth);
   const recap = useQuery(api.queens.getMonth, { month }) as QueenRecapData | undefined;
-  const queueBackfill = useMutation(api.queens.queueCurrentMonthBackfill);
+  const queueBackfill = useMutation(api.queens.queueMonthBackfill);
   const [busy, setBusy] = useState(false);
-  const onBackfill = async () => { setBusy(true); try { await queueBackfill({}); } finally { setBusy(false); } };
+  const onBackfill = async () => { setBusy(true); try { await queueBackfill({ month }); } finally { setBusy(false); } };
 
   return (
     <div className="space-y-4">
