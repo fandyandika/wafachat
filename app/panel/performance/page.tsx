@@ -1,124 +1,170 @@
-'use client';
+"use client";
 
-import { useMemo, useState } from 'react';
-import Link from 'next/link';
-import { useQuery } from 'convex/react';
-import { Crown, RefreshCw } from 'lucide-react';
-import { api } from '@/convex/_generated/api';
-import { usePanelFilters } from '@/components/panel/use-panel-filters';
-import { useResponseTimes } from '@/components/panel/use-response-times';
-import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
-import { PerformancePanel } from '@/components/panel/performance-panel';
-import type { PerformanceData } from '@/components/panel/types';
-import { Button } from '@/components/ui/button';
-import { WindowModeToggle, type WindowMode } from '@/components/panel/window-mode-toggle';
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { useQuery } from "convex/react";
+import { Crown, RefreshCw } from "lucide-react";
+import { api } from "@/convex/_generated/api";
+import { PerformancePanel } from "@/components/panel/performance-panel";
+import { useConvexSnapshotQuery } from "@/components/panel/use-convex-snapshot-query";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  inclusiveDateCount,
+  resolvePerformanceRange,
+  type PerformancePeriod,
+  type PerformanceReport,
+} from "@/lib/performance-report";
+import { cn } from "@/lib/utils";
 
-function fmtUpdatedAt(ms: number | null): string {
-  if (!ms) return 'Belum dimuat';
-  return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
+type SubmittedArgs = {
+  period: PerformancePeriod;
+  startDate: string;
+  endDate: string;
+  csName?: string;
+};
+
+function jakartaDate(): string {
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
 }
 
-// Same UI in both modes — only the DATA window changes. DEFAULT = "Hari ini" (live,
-// calendar-day midnight→now; raw queries, cheap for today's small slice). "Periode kerja"
-// = the 16:00 window from the range filter (rollup-backed). No layout change between modes.
+const inputClass = "h-9 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30";
+
 export default function PerformancePage() {
-  const [mode, setMode] = useState<WindowMode>('live');
-  return <PerformanceWork mode={mode} onModeChange={setMode} />;
-}
-
-const JAK_OFFSET = 7 * 60 * 60 * 1000;
-function wibMidnight(now: number) { return Math.floor((now + JAK_OFFSET) / 86_400_000) * 86_400_000 - JAK_OFFSET; }
-
-function PerformanceWork({ mode, onModeChange }: { mode: WindowMode; onModeChange: (m: WindowMode) => void }) {
-  const { startAt: workStart, endAt: workEnd, csName } = usePanelFilters();
-  const [responseRefreshKey, setResponseRefreshKey] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
+  const today = useMemo(jakartaDate, []);
+  const [period, setPeriod] = useState<PerformancePeriod>("week");
+  const [anchorDate, setAnchorDate] = useState(today);
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [startDate, setStartDate] = useState(today);
+  const [endDate, setEndDate] = useState(today);
+  const [csName, setCsName] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState<SubmittedArgs | null>(null);
   const csList = useQuery(api.cs.listCs, {}) ?? [];
-  const avatarByKey = useMemo(() => new Map(csList.map((c) => [c.key, c.avatarUrl])), [csList]);
-
-  // live = calendar-day (midnight WIB → now); work = 16:00-window. `now` captured on mount +
-  // each refresh so args stay stable (no refetch loop). raw=true routes the rollup-backed
-  // queries to their cheap raw computation for the small "today" slice.
-  const now = useMemo(() => Date.now(), [responseRefreshKey]);
-  const startAt = mode === 'live' ? wibMidnight(now) : workStart;
-  const endAt = mode === 'live' ? now : workEnd;
-  const rawMode = mode === 'live';
-
-  const rangeArgs = useMemo(() => ({ startAt, endAt }), [startAt, endAt]);
-  const leaderboardArgs = useMemo(() => ({ startAt, endAt, raw: rawMode }), [startAt, endAt, rawMode]);
-  const performanceArgs = useMemo(() => ({
-    startAt,
-    endAt,
-    includeInferredDiscount: false,
-    csName,
-  }), [csName, endAt, startAt]);
-
-  const csLeaderboard = useConvexSnapshotQuery<Array<{
-    csName: string; leads: number; closings: number; cr: number; revenue: number;
-    deltaLeads: number; deltaClosings: number; deltaCr: number;
-  }>>(api.analytics.getCsLeaderboard, leaderboardArgs);
-  const productDifficulty = useConvexSnapshotQuery<Array<{ productName: string; leads: number; closings: number; cr: number; prevCr: number; deltaCr: number }>>(
-    api.analytics.getProductDifficulty,
-    rangeArgs,
+  const report = useConvexSnapshotQuery<PerformanceReport>(
+    api.performanceReports.getPerformanceReport,
+    submitted ?? "skip",
   );
-  const performanceData = useConvexSnapshotQuery<PerformanceData>(api.shippingRecaps.getPerformance, performanceArgs);
 
-  const responseTimes = useResponseTimes({ startAt, endAt, refreshKey: responseRefreshKey });
-
-  const loading = csLeaderboard.loading || productDifficulty.loading || performanceData.loading || refreshing;
-  const error = csLeaderboard.error || productDifficulty.error || performanceData.error;
-  const lastUpdatedAt = Math.max(
-    performanceData.lastUpdatedAt ?? 0,
-    csLeaderboard.lastUpdatedAt ?? 0,
-    productDifficulty.lastUpdatedAt ?? 0,
-  ) || null;
-
-  const refreshAll = async () => {
-    setRefreshing(true);
+  const submit = () => {
     try {
-      await Promise.all([
-        csLeaderboard.refresh(),
-        productDifficulty.refresh(),
-        performanceData.refresh(),
-      ]);
-      setResponseRefreshKey((n) => n + 1);
-    } finally {
-      setRefreshing(false);
+      const range = resolvePerformanceRange(period, { anchorDate, month, startDate, endDate });
+      if (inclusiveDateCount(range) > 35) throw new Error("Maksimal 35 hari");
+      setValidationError(null);
+      setSubmitted({ period, ...range, csName: csName || undefined });
+    } catch (error) {
+      setValidationError(error instanceof Error ? error.message : "Periode tidak valid");
     }
   };
+
+  const empty = report.data && report.data.summary.leads === 0 && report.data.summary.closings === 0;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1">
           <h1 className="text-base font-semibold tracking-tight">Performance</h1>
-          <p className="text-xs text-muted-foreground">
-            Snapshot analytics · update {fmtUpdatedAt(lastUpdatedAt)}
-          </p>
+          <p className="text-xs text-muted-foreground">Laporan evaluasi hanya dimuat saat diminta.</p>
         </div>
-        <WindowModeToggle mode={mode} onChange={onModeChange} />
         <Link href="/panel/queen" className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted">
           <Crown className="size-4 text-gold" /> Queen Recap
         </Link>
-        <Button size="sm" variant="outline" className="h-9 gap-2" onClick={refreshAll} disabled={loading}>
-          <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
       </div>
 
-      {error && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {error}
+      <Card>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-1 rounded-lg bg-muted/50 p-1 sm:w-fit">
+            {([
+              ["week", "Pekanan"],
+              ["month", "Bulanan"],
+              ["custom", "Rentang khusus"],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setPeriod(value)}
+                className={cn(
+                  "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  period === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_auto] md:items-end">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {period === "week" && (
+                <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                  Tanggal dalam pekan
+                  <input type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} className={inputClass} />
+                </label>
+              )}
+              {period === "month" && (
+                <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                  Bulan
+                  <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className={inputClass} />
+                </label>
+              )}
+              {period === "custom" && (
+                <>
+                  <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                    Mulai
+                    <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className={inputClass} />
+                  </label>
+                  <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                    Sampai
+                    <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className={inputClass} />
+                  </label>
+                </>
+              )}
+            </div>
+
+            <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+              CS
+              <Select value={csName || "__all"} onValueChange={(value) => setCsName(value === "__all" || !value ? "" : value)}>
+                <SelectTrigger className="h-9 w-full"><SelectValue>{csName || "Semua CS"}</SelectValue></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all">Semua CS</SelectItem>
+                  {csList.map((cs) => <SelectItem key={cs.key} value={cs.csName}>{cs.csName.replace(/^CS\s+/i, "")}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </label>
+
+            <div className="flex gap-2">
+              <Button size="lg" className="flex-1" onClick={submit} disabled={report.loading}>
+                {report.loading ? "Menyiapkan..." : "Tampilkan laporan"}
+              </Button>
+              {submitted && (
+                <Button size="icon-lg" variant="outline" onClick={() => report.refresh()} disabled={report.loading} aria-label="Refresh laporan">
+                  <RefreshCw className={cn("size-4", report.loading && "animate-spin")} />
+                </Button>
+              )}
+            </div>
+          </div>
+          {validationError && <p className="text-sm text-destructive">{validationError}</p>}
+        </CardContent>
+      </Card>
+
+      {!submitted && (
+        <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
+          Pilih periode lalu tampilkan laporan
         </div>
       )}
-
-      <PerformancePanel
-        data={performanceData.data}
-        csLeaderboard={csLeaderboard.data}
-        productDifficulty={productDifficulty.data}
-        responseTimes={responseTimes?.cs ?? undefined}
-        avatarByKey={avatarByKey}
-      />
+      {report.error && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          <span>{report.error}</span>
+          <Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>
+        </div>
+      )}
+      {empty && <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">Belum ada data pada periode ini</div>}
+      {report.data && !empty && <PerformancePanel report={report.data} />}
     </div>
   );
 }
