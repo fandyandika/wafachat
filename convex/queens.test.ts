@@ -115,6 +115,7 @@ test("month recap maps source windows to closing dates and always returns four f
   expect(recap.monthly.winners).toEqual(["Azelia", "Nabila"]);
   expect(recap.awards.map((row: any) => row.windowKey)).toEqual(["2026-08-01", "2026-08-02"]);
   expect(recap.weekly).toHaveLength(4);
+  expect(recap.weekly[0].weekStart).toBe("2026-08-01");
   expect(recap.weekly.map((week: any) => [week.startKey, week.endKey])).toEqual([
     ["2026-08-01", "2026-08-07"], ["2026-08-08", "2026-08-14"],
     ["2026-08-15", "2026-08-21"], ["2026-08-22", "2026-08-31"],
@@ -132,4 +133,5 @@ test("CS cannot access the owner Queen recap", async () => {
   await seedOrg(t);
   await expect(cs.query((api as any).queens.getMonth, { month: "2026-07" })).rejects.toThrow(/admin/i);
   await expect(cs.mutation((api as any).queens.queueMonthBackfill, { month: "2026-07" })).rejects.toThrow(/admin/i);
+  await expect(cs.mutation((api as any).queens.queueCurrentMonthBackfill, {})).rejects.toThrow(/admin/i);
 });

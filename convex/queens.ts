@@ -1,4 +1,5 @@
 import { internalAction, internalMutation, mutation, query } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
@@ -160,6 +161,7 @@ export const getMonth = query({
     const closedBusinessDate = businessDateKeyForWindowKey(lastClosed);
     const weekly = monthWeeks(args.month).map((week) => ({
       ...week,
+      weekStart: week.startKey,
       status: closedBusinessDate >= week.endKey
         ? "complete" as const
         : currentBusinessDate >= week.startKey && currentBusinessDate <= week.endKey
@@ -171,11 +173,8 @@ export const getMonth = query({
   },
 });
 
-export const queueMonthBackfill = mutation({
-  args: { month: v.string() },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdminOrg(ctx, "queens.queueMonthBackfill");
-    const bounds = monthBounds(args.month);
+async function queueMonth(ctx: MutationCtx, orgId: Id<"organizations">, month: string) {
+    const bounds = monthBounds(month);
     const sourceFirst = windowKeyForBusinessDate(bounds.first);
     const sourceAfterLast = windowKeyForBusinessDate(bounds.afterLast);
     const existing = await ctx.db.query("queenAwards")
@@ -188,6 +187,22 @@ export const queueMonthBackfill = mutation({
     // historical window here is both slow and needlessly expensive; the normal rollup/reconciler
     // pipeline remains the source that maintains those rows.
     for (const windowKey of missing) await ctx.scheduler.runAfter(0, internal.queens.captureWindow, { orgId: String(orgId), windowKey, force: true });
-    return { scheduled: missing.length, month: args.month };
+    return { scheduled: missing.length, month };
+}
+
+export const queueMonthBackfill = mutation({
+  args: { month: v.string() },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "queens.queueMonthBackfill");
+    return queueMonth(ctx, orgId, args.month);
+  },
+});
+
+// Compatibility for the previous frontend during a rolling Convex/Vercel deploy.
+export const queueCurrentMonthBackfill = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const { orgId } = await requireAdminOrg(ctx, "queens.queueCurrentMonthBackfill");
+    return queueMonth(ctx, orgId, businessDateKeyForWindowKey(windowKeyToday()).slice(0, 7));
   },
 });
