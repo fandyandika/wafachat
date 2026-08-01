@@ -3,6 +3,8 @@ export const MAX_PUBLIC_ANALYTICS_RANGE_MS = 35 * ANALYTICS_DAY_MS;
 export const MAX_EXACT_ROWS_PER_SOURCE = 900;
 export const MAX_EXACT_FALLBACK_LOOKUPS = 100;
 export const MAX_RESPONSE_SAMPLES = 3_000;
+export const MAX_PERFORMANCE_ROLLUPS_PER_RANGE = 1_000;
+export const MAX_PERFORMANCE_RESPONSE_SAMPLES = 12_000;
 
 export function assertPublicAnalyticsRange(
   startAt: number,

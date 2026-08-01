@@ -4,7 +4,7 @@ import { normalizeCsName } from "./shippingRecaps";
 import { median, percentile } from "./responseTimeMath";
 import { getInternalPhoneSet } from "./orgSettings";
 import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
-import { assertFallbackLookupBudget, assertPublicAnalyticsRange, collectExactBounded, MAX_RESPONSE_SAMPLES } from "./analyticsBounds";
+import { assertFallbackLookupBudget, assertPublicAnalyticsRange, collectExactBounded, MAX_PERFORMANCE_RESPONSE_SAMPLES, MAX_RESPONSE_SAMPLES } from "./analyticsBounds";
 
 /**
  * Analytics reader helpers.
@@ -41,7 +41,8 @@ function windowKeysForRange(startAt: number, endAt: number): string[] {
 export async function responseTimesFromSamples(
   ctx: any,
   orgId: Id<"organizations">,
-  args: { startAt: number; endAt: number; csName?: string }
+  args: { startAt: number; endAt: number; csName?: string },
+  sampleLimit = MAX_RESPONSE_SAMPLES,
 ) {
   assertPublicAnalyticsRange(args.startAt, args.endAt, "responseTime.getResponseTimes");
   // Apply the effective CS scope at the indexed read boundary. Besides keeping
@@ -56,7 +57,7 @@ export async function responseTimesFromSamples(
     const window = windowRangeForKey(windowKey);
     const startAt = Math.max(args.startAt, window.startAt);
     const endAt = Math.min(args.endAt, window.endAt);
-    const remaining = MAX_RESPONSE_SAMPLES + 1 - samples.length;
+    const remaining = sampleLimit + 1 - samples.length;
     if (remaining <= 0) break;
     const rows = marker?.sampleRunId
       ? await (requestedCsKey
@@ -80,8 +81,8 @@ export async function responseTimesFromSamples(
     samples.push(...rows);
   }
   samples.sort((a: any, b: any) => a.createdAt - b.createdAt);
-  if (samples.length > MAX_RESPONSE_SAMPLES) {
-    throw new Error(`responseTime.getResponseTimes samples: exact row cap ${MAX_RESPONSE_SAMPLES} exceeded; narrow the requested range`);
+  if (samples.length > sampleLimit) {
+    throw new SampleLimitExceeded(sampleLimit);
   }
 
   // Group by conversationId, preserving order. For a CS-scoped request this
@@ -164,6 +165,28 @@ export async function responseTimesFromSamples(
     overall: { firstReplyMedianMs: median(overallFirst), firstReplyCount: overallFirst.length, slaBreaches: overallSlaBreaches },
     cs,
   };
+}
+
+class SampleLimitExceeded extends Error {
+  constructor(limit: number) {
+    super(`responseTime.getResponseTimes samples: exact row cap ${limit} exceeded; narrow the requested range`);
+  }
+}
+
+export async function responseTimesForPerformanceReport(
+  ctx: any,
+  orgId: Id<"organizations">,
+  args: { startAt: number; endAt: number; csName?: string },
+) {
+  try {
+    return {
+      data: await responseTimesFromSamples(ctx, orgId, args, MAX_PERFORMANCE_RESPONSE_SAMPLES),
+      limited: false,
+    };
+  } catch (error) {
+    if (error instanceof SampleLimitExceeded) return { data: null, limited: true };
+    throw error;
+  }
 }
 
 // ── 6. Raw Product Difficulty ──────────────────────────────────────
