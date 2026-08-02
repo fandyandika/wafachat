@@ -42,7 +42,7 @@ function MetricCard({
     <div
       data-slot="metric-card"
       className={cn(
-        "group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-[0_1px_2px_oklch(0.21_0.02_270/0.04)] transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-200",
+        "group relative flex flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-[0_1px_2px_oklch(0.21_0.02_270/0.04)] transition-[color,background-color,border-color,box-shadow,opacity,transform] duration-200 motion-reduce:transition-none",
         interactive && "hover:border-primary/30",
         emphasis && "ring-1 ring-primary/15",
         className,
