@@ -260,36 +260,42 @@ export function DailyReportDashboard() {
   return (
     <div className="space-y-6">
       <div role="toolbar" aria-label="Kontrol laporan" className="flex flex-wrap items-center gap-2">
-        <Button size="icon" variant="outline" className="size-9" onClick={() => step(-1)} aria-label="Hari sebelumnya">
+        <Button size="icon" variant="outline" className="size-11 sm:size-9" onClick={() => step(-1)} aria-label="Hari sebelumnya">
           <ChevronLeft className="size-4" />
         </Button>
-        <input
-          type="date"
-          value={dateInputValue}
-          onChange={(e) => e.target.value && onPick(e.target.value)}
-          aria-label="Pilih tanggal laporan"
-          className="h-11 rounded-md border border-input bg-background px-3 text-sm sm:h-9"
-        />
-        <Button size="icon" variant="outline" className="size-9" onClick={() => step(1)} disabled={isCurrent} aria-label="Hari berikutnya">
+        <div className="flex items-center gap-1">
+          <label htmlFor="report-day" className="text-xs font-medium text-muted-foreground">Tanggal</label>
+          <input
+            id="report-day"
+            type="date"
+            value={dateInputValue}
+            onChange={(e) => e.target.value && onPick(e.target.value)}
+            className="h-11 rounded-md border border-input bg-background px-3 text-sm sm:h-9"
+          />
+        </div>
+        <Button size="icon" variant="outline" className="size-11 sm:size-9" onClick={() => step(1)} disabled={isCurrent} aria-label="Hari berikutnya">
           <ChevronRight className="size-4" />
         </Button>
         <div className="ml-1 text-base font-semibold tracking-tight">Laporan {titleDate}</div>
         <PeriodStatusPill isCurrent={isCurrent} endAt={endAt} now={now} />
         {!scopedView && (
-          <select
-            value={csName ?? 'all'}
-            onChange={(e) => onPickCs(e.target.value)}
-            aria-label="Filter CS"
-            className="h-11 rounded-md border border-input bg-background px-3 text-sm sm:h-9"
-          >
-            <option value="all">Semua CS</option>
-            {csList.map((cs) => <option key={cs.key} value={cs.csName}>{cs.csName}</option>)}
-          </select>
+          <div className="flex items-center gap-1">
+            <label htmlFor="report-cs" className="text-xs font-medium text-muted-foreground">CS</label>
+            <select
+              id="report-cs"
+              value={csName ?? 'all'}
+              onChange={(e) => onPickCs(e.target.value)}
+              className="h-11 rounded-md border border-input bg-background px-3 text-sm sm:h-9"
+            >
+              <option value="all">Semua CS</option>
+              {csList.map((cs) => <option key={cs.key} value={cs.csName}>{cs.csName}</option>)}
+            </select>
+          </div>
         )}
         <Button
           size="sm"
           variant="outline"
-          className="ml-auto h-9 gap-2"
+          className="ml-auto h-11 gap-2 sm:h-9"
           onClick={refreshAll}
           disabled={refreshing || reportLoading || prevReportLoading}
         >
@@ -300,7 +306,7 @@ export function DailyReportDashboard() {
         <Button
           size="sm"
           variant="outline"
-          className="h-9 gap-2"
+          className="h-11 gap-2 sm:h-9"
           onClick={onShareBoard}
           disabled={sharingBoard || report === undefined}
           title="Simpan/share laporan sebagai gambar (siap kirim WA)"

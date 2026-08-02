@@ -23,5 +23,7 @@ test("daily report exposes one labelled toolbar while loading", () => {
   expect(html).toContain('role="toolbar"');
   expect(html).toContain('aria-label="Kontrol laporan"');
   expect(html).toContain("Periode kerja 16:00");
+  expect(html).toContain('for="report-day"');
+  expect(html).toContain('for="report-cs"');
   expect(html).not.toContain("Snapshot analytics");
 });
