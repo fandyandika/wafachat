@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { useQuery } from 'convex/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronLeft, ChevronRight, ClipboardList, Copy, CheckCircle2, Info, Clock, Crown, RefreshCw, ImageDown } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Copy, CheckCircle2, Info, Clock, Crown, RefreshCw, ImageDown } from 'lucide-react';
 import { shareNodeAsPng } from '@/lib/capture';
 import { api } from '@/convex/_generated/api';
 import { csKey } from '@/lib/cs-key';
@@ -18,6 +18,7 @@ import { useResponseTimes } from '@/components/panel/use-response-times';
 import { useMe } from '@/components/panel/use-me';
 import { ArenaHero } from '@/components/panel/arena-hero';
 import { CsDetailSheet } from '@/components/panel/cs-detail-sheet';
+import { PanelState } from '@/components/panel/panel-state';
 import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
 import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/panel/report-card';
 import {
@@ -119,7 +120,7 @@ export function DailyReportDashboard() {
     .sort((a, b) => b.ratePct - a.ratePct)[0];
 
   const label = wibDateParts(rawWindow.endAt);
-  const windowLabel = `Periode ${fmtBoundary(startAt)} → ${fmtBoundary(endAt)} WIB`;
+  const windowLabel = `Dari ${fmtBoundary(startAt)} sampai ${fmtBoundary(endAt)} WIB.`;
   const titleDate = `${DAYS_SHORT[label.dow]} ${label.d} ${MONTHS_SHORT[label.m]} ${label.y}`;
   const dateInputValue = `${label.y}-${pad(label.m + 1)}-${pad(label.d)}`;
 
@@ -138,6 +139,13 @@ export function DailyReportDashboard() {
   const onPick = (value: string) => {
     const [y, m, d] = value.split('-').map(Number);
     if (y && m && d) goTo({ y, m: m - 1, d });
+  };
+  const onPickCs = (value: string) => {
+    const qs = new URLSearchParams(sp.toString());
+    if (value === 'all') qs.delete('cs');
+    else qs.set('cs', value);
+    const s = qs.toString();
+    router.replace(s ? `${pathname}?${s}` : pathname);
   };
   const refreshAll = async () => {
     setRefreshing(true);
@@ -251,7 +259,7 @@ export function DailyReportDashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-2">
+      <div role="toolbar" aria-label="Kontrol laporan" className="flex flex-wrap items-center gap-2">
         <Button size="icon" variant="outline" className="size-9" onClick={() => step(-1)} aria-label="Hari sebelumnya">
           <ChevronLeft className="size-4" />
         </Button>
@@ -259,13 +267,25 @@ export function DailyReportDashboard() {
           type="date"
           value={dateInputValue}
           onChange={(e) => e.target.value && onPick(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+          aria-label="Pilih tanggal laporan"
+          className="h-11 rounded-md border border-input bg-background px-3 text-sm sm:h-9"
         />
         <Button size="icon" variant="outline" className="size-9" onClick={() => step(1)} disabled={isCurrent} aria-label="Hari berikutnya">
           <ChevronRight className="size-4" />
         </Button>
         <div className="ml-1 text-base font-semibold tracking-tight">Laporan {titleDate}</div>
         <PeriodStatusPill isCurrent={isCurrent} endAt={endAt} now={now} />
+        {!scopedView && (
+          <select
+            value={csName ?? 'all'}
+            onChange={(e) => onPickCs(e.target.value)}
+            aria-label="Filter CS"
+            className="h-11 rounded-md border border-input bg-background px-3 text-sm sm:h-9"
+          >
+            <option value="all">Semua CS</option>
+            {csList.map((cs) => <option key={cs.key} value={cs.csName}>{cs.csName}</option>)}
+          </select>
+        )}
         <Button
           size="sm"
           variant="outline"
@@ -291,7 +311,7 @@ export function DailyReportDashboard() {
       </div>
 
       <div className="text-xs text-muted-foreground">
-        {windowLabel}
+        <span className="font-medium text-foreground">Periode kerja 16:00</span> {windowLabel}
         {isCurrent && ' · berjalan'}
         {clamped && ' · data dari 22 Jun 00:00 (sebelumnya belum akurat)'}
         {' · update '}
@@ -299,11 +319,9 @@ export function DailyReportDashboard() {
       </div>
 
       {reportError ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {reportError}
-        </div>
+        <PanelState kind="error" title="Laporan gagal dimuat" description={reportError} action={<Button variant="outline" onClick={refreshAll}>Coba lagi</Button>} />
       ) : report === undefined ? (
-        <div className="text-sm text-muted-foreground">Memuat…</div>
+        <ReportSkeleton />
       ) : (
         <div ref={boardRef} className="space-y-6">
           {scopedView && (
@@ -327,14 +345,10 @@ export function DailyReportDashboard() {
             <QueenHero name={queenCard.csName} closings={queenCard.closings} cr={queenCard.cr} avatarByKey={avatarByKey} />
           )}
           {cards.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-card/50 p-10 text-center">
-              <ClipboardList className="size-7 text-muted-foreground/60" />
-              <p className="text-sm font-medium text-foreground">Belum ada aktivitas</p>
-              <p className="text-xs text-muted-foreground">Leads & closing untuk periode ini akan muncul di sini begitu masuk.</p>
-            </div>
+            <PanelState kind="empty" title="Belum ada aktivitas" description="Leads dan closing untuk periode ini akan muncul di sini begitu masuk." />
           ) : (
             <div className="space-y-4">
-              {!scopedView && <InfoStrip dup={totalDuplicates} sla={slaBreaches} worstSla={worstSla} loading={respData === undefined} />}
+              {!scopedView && <InfoStrip dup={totalDuplicates} sla={slaBreaches} worstSla={worstSla} />}
               {/* grid-cols-1 (minmax(0,1fr)) so long product names can't stretch the column past the phone viewport */}
               <div data-capture-grid="cards" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {cards.map((c) => (
@@ -373,10 +387,19 @@ export function DailyReportDashboard() {
 }
 
 // Lean one-line summary: order-double + SLA status (detail lives in each CS card).
-function InfoStrip({ dup, sla, worstSla, loading }: { dup: number; sla: number; worstSla?: { csName: string; ratePct: number }; loading: boolean }) {
+function ReportSkeleton() {
+  return (
+    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3" aria-label="Memuat laporan">
+      {[0, 1, 2].map((item) => <div key={item} className="h-64 animate-pulse rounded-xl bg-muted" />)}
+    </div>
+  );
+}
+
+function InfoStrip({ dup, sla, worstSla }: { dup: number; sla: number; worstSla?: { csName: string; ratePct: number } }) {
+  if (dup === 0 && sla === 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-border bg-card/40 px-3 py-2 text-xs">
-      {dup > 0 ? (
+      {dup > 0 && (
         <span className="inline-flex items-center gap-1.5 font-medium text-muted-foreground">
           <Copy className="size-3.5 shrink-0" /> {dup} order double
           <Tooltip>
@@ -387,30 +410,18 @@ function InfoStrip({ dup, sla, worstSla, loading }: { dup: number; sla: number; 
               <Info className="size-3.5" />
             </TooltipTrigger>
             <TooltipContent>
-              Pelanggan dengan ≥2 order di periode ini — calon mis-rep. CR dihitung dari pelanggan unik (leads maupun closing), jadi order double tidak menggelembungkan angka.
+              Pelanggan dengan ≥2 order di periode ini adalah calon mis-rep. CR dihitung dari pelanggan unik, jadi order double tidak menggelembungkan angka.
             </TooltipContent>
           </Tooltip>
         </span>
-      ) : (
-        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-          <CheckCircle2 className="size-3.5 shrink-0 text-positive" /> Tidak ada order double
-        </span>
       )}
-      {!loading && (
-        <>
-          <span data-capture-sep className="hidden h-3 w-px bg-border sm:block" />
-          {sla > 0 ? (
-            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <Clock className="size-3.5 shrink-0 text-destructive" />
-              <span className="font-semibold text-destructive">{sla}</span> chat lewat SLA
-              <span className="text-muted-foreground/80">(&gt;15m{worstSla ? ` · rawan ${worstSla.csName} ${worstSla.ratePct}%` : ''})</span>
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-              <Clock className="size-3.5 shrink-0 text-positive" /> Semua chat dalam SLA
-            </span>
-          )}
-        </>
+      {dup > 0 && sla > 0 && <span data-capture-sep className="hidden h-3 w-px bg-border sm:block" />}
+      {sla > 0 && (
+        <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+          <Clock className="size-3.5 shrink-0 text-destructive" />
+          <span className="font-semibold text-destructive">{sla}</span> chat lewat SLA
+          <span className="text-muted-foreground/80">(&gt;15m{worstSla ? ` · rawan ${worstSla.csName} ${worstSla.ratePct}%` : ''})</span>
+        </span>
       )}
     </div>
   );

@@ -151,13 +151,13 @@ export function ArenaHero({
 
   const countdown = live ? (
     <span className="inline-flex items-center gap-1 text-[11px] font-medium tabular-nums text-muted-foreground">
-      <Timer className="size-3.5" /> Penobatan Queen {fmtRemain(remainMs)} lagi · 16:00 WIB
+      <Timer className="size-3.5" /> Penobatan Queen {fmtRemain(remainMs)} lagi. Tutup 16:00 WIB.
     </span>
   ) : null;
 
   const paceLine = deltaClosings != null && deltaClosings > 0 ? (
     <div className="flex items-center gap-1 text-xs font-medium text-positive">
-      <TrendingUp className="size-3.5 shrink-0" /> +{deltaClosings} closing dibanding kemarin — ritme naik
+      <TrendingUp className="size-3.5 shrink-0" /> +{deltaClosings} closing dibanding kemarin. Pertahankan ritme.
     </div>
   ) : null;
 
@@ -173,7 +173,7 @@ export function ArenaHero({
             <div className="text-sm font-bold text-foreground">
               {own ? `${needLeads} leads lagi buat masuk papan skor Takhta` : 'Leads pertama membuka papan skor Takhta'}
             </div>
-            <div className="text-xs text-muted-foreground">Skor = CR (50) + closing (35) + kecepatan respon (15).</div>
+            <div className="text-xs text-muted-foreground">Tambahkan {needLeads} leads untuk masuk papan skor.</div>
           </div>
         </div>
         {countdown && <div className="mt-2">{countdown}</div>}
@@ -198,18 +198,18 @@ export function ArenaHero({
               <RankPill rank={1} total={eligible.length} />
             </div>
             <div className="text-base font-bold tracking-tight text-foreground">
-              Menuju penobatan — takhta masih milikmu, {stripCs(own.csName)}
+              Takhta masih milikmu, {stripCs(own.csName)}. Jaga ritme sampai penobatan.
             </div>
             {tight ? (
               <div className="mt-0.5 flex items-center gap-1 text-xs font-semibold text-destructive">
-                <ShieldAlert className="size-3.5 shrink-0" /> {stripCs(runner!.csName)} menempel, selisih {fmtPts(margin)} poin — jaga ritme
+                <ShieldAlert className="size-3.5 shrink-0" /> {stripCs(runner!.csName)} menempel. Jaga selisih {fmtPts(margin)} poin.
               </div>
             ) : runner ? (
               <div className="text-xs text-muted-foreground">
-                Skor <span className="font-semibold tabular-nums text-foreground">{fmtPts(own.score)}</span> · unggul {fmtPts(margin)} poin dari {stripCs(runner.csName)}.
+                Unggul {fmtPts(margin)} poin dari {stripCs(runner.csName)}. Pertahankan respon cepat.
               </div>
             ) : (
-              <div className="text-xs text-muted-foreground">Skor {fmtPts(own.score)} — belum ada penantang di papan.</div>
+              <div className="text-xs text-muted-foreground">Belum ada penantang. Pertahankan skor {fmtPts(own.score)}.</div>
             )}
           </div>
         </div>
@@ -230,14 +230,14 @@ export function ArenaHero({
     const header = forThrone ? (close ? 'Tinggal Senggol' : 'Pemburu Takhta') : 'Buruan Salip';
     const headline = forThrone ? (
       close ? (
-        <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — takhta masih bisa direbut</>
+        <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)}. Takhta masih bisa direbut.</>
       ) : (
-        <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — fokus di poin terbesarmu</>
+        <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)}. Fokus pada poin terbesarmu.</>
       )
     ) : close ? (
-      <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)} — posisinya bisa disalip</>
+      <>Kurang <span className="text-amber-600">{fmtPts(gap)} poin</span> dari {stripCs(nextUp.csName)}. Posisi ini bisa disalip.</>
     ) : (
-      <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)} — fokus di poin terbesarmu</>
+      <>Gap {fmtPts(gap)} poin dari {stripCs(nextUp.csName)}. Fokus pada poin terbesarmu.</>
     );
     return (
       <div
@@ -280,7 +280,7 @@ export function ArenaHero({
             <div className="text-[11px] font-bold uppercase tracking-wide text-gold">Queen Hari Ini · {titleDate}</div>
             <div className="text-base font-bold tracking-tight text-foreground">Sah! Takhta milik kamu, Queen {stripCs(own.csName)}</div>
             <div className="text-xs tabular-nums text-muted-foreground">
-              Skor {fmtPts(own.score)} · {own.closings} closing · CR {fmtPts(own.cr)}% — kombinasi terbaik hari itu.
+              Skor {fmtPts(own.score)}. Kombinasi closing dan CR terbaik hari itu.
             </div>
           </div>
         </div>
@@ -300,11 +300,11 @@ export function ArenaHero({
           <div className="text-base font-bold tracking-tight text-foreground">
             {rank > 0
               ? <>Finish #{rank} · skor {fmtPts(own.score)}. Besok takhta terbuka lagi</>
-              : <>Papan skor butuh ≥{QUEEN_MIN_LEADS} leads — mulai lagi besok</>}
+              : <>Papan skor butuh ≥{QUEEN_MIN_LEADS} leads. Mulai lagi besok.</>}
           </div>
           {queenName && (
             <div className="text-xs text-muted-foreground">
-              Takhta {titleDate} milik Queen {stripCs(queenName)}. Hari baru, papan kosong — semua mulai dari 0.
+              Takhta {titleDate} milik Queen {stripCs(queenName)}. Mulai lagi dari 0 besok.
             </div>
           )}
         </div>
