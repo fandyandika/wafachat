@@ -12,19 +12,30 @@ import { ConvexProviderWithAuth, ConvexReactClient, useConvexAuth } from 'convex
 // lifecycle (fetch, refresh, clear) from the useAuth contract below. Re-checking on
 // pathname changes keeps the state correct across login/logout navigations without
 // remounting the provider.
+export function requiresPanelAuth(pathname: string) {
+  return pathname.startsWith('/panel');
+}
+
 function useSessionAuth() {
   const pathname = usePathname();
+  const needsAuth = requiresPanelAuth(pathname);
   const [st, setSt] = useState<{ loaded: boolean; authed: boolean }>({ loaded: false, authed: false });
 
   useEffect(() => {
+    if (!needsAuth) {
+      setSt({ loaded: true, authed: false });
+      return;
+    }
+
     let cancelled = false;
     fetch('/api/auth/convex-token')
       .then((r) => { if (!cancelled) setSt({ loaded: true, authed: r.ok }); })
       .catch(() => { if (!cancelled) setSt({ loaded: true, authed: false }); });
     return () => { cancelled = true; };
-  }, [pathname]);
+  }, [needsAuth]);
 
   const fetchAccessToken = useCallback(async () => {
+    if (!needsAuth) return null;
     try {
       const r = await fetch('/api/auth/convex-token');
       if (!r.ok) return null;
@@ -33,7 +44,7 @@ function useSessionAuth() {
     } catch {
       return null;
     }
-  }, []);
+  }, [needsAuth]);
 
   return useMemo(
     () => ({ isLoading: !st.loaded, isAuthenticated: st.authed, fetchAccessToken }),
