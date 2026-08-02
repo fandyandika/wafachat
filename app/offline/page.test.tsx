@@ -8,6 +8,8 @@ import OfflinePage from './page';
 test('shows a connection recovery page without business data', () => {
   const html = renderToStaticMarkup(<OfflinePage />);
   expect(html).toContain('Koneksi terputus');
+  expect(html).toContain('Periksa koneksi internet');
+  expect(html).toContain('href="/panel"');
   expect(html).toContain('Coba lagi');
   expect(html).not.toContain('Leads');
 });
