@@ -12,27 +12,26 @@ export type WindowMode = 'live' | 'work';
 
 export function WindowModeToggle({ mode, onChange }: { mode: WindowMode; onChange: (m: WindowMode) => void }) {
   return (
-    <div className="inline-flex shrink-0 rounded-lg border border-neutral-200 bg-white p-0.5 text-sm">
+    <div className="inline-flex shrink-0 rounded-lg border border-ledger-rule bg-card p-0.5 text-sm">
       <button
         type="button"
         onClick={() => onChange('live')}
         className={cn(
-          'flex items-center gap-1.5 rounded-md px-3 py-1.5 font-medium transition-colors',
-          mode === 'live' ? 'bg-emerald-600 text-white' : 'text-neutral-500 hover:text-neutral-800',
+          'flex min-h-9 items-center gap-1.5 rounded-md px-3 py-1.5 font-medium transition-colors',
+          mode === 'live' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-ledger-ink',
         )}
       >
-        {mode === 'live' && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />}
-        Hari ini
+        Hari kalender
       </button>
       <button
         type="button"
         onClick={() => onChange('work')}
         className={cn(
-          'rounded-md px-3 py-1.5 font-medium transition-colors',
-          mode === 'work' ? 'bg-neutral-900 text-white' : 'text-neutral-500 hover:text-neutral-800',
+          'min-h-9 rounded-md px-3 py-1.5 font-medium transition-colors',
+          mode === 'work' ? 'bg-ledger-ink text-card' : 'text-muted-foreground hover:text-ledger-ink',
         )}
       >
-        Periode kerja (16:00)
+        Periode kerja 16:00
       </button>
     </div>
   );
