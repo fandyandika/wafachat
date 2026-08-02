@@ -630,7 +630,7 @@ Render the section control with `aria-label="Bagian pengaturan"`, `aria-pressed`
 
 - [ ] **Step 5: Run settings and authorization tests**
 
-Run: `rtk npx vitest run components/panel/settings-dashboard.test.tsx convex/settings.test.ts convex/csConfigs.test.ts convex/orgSettings.test.ts`
+Run: `rtk npx vitest run components/panel/settings-dashboard.test.tsx convex/cs.test.ts convex/csConfigs.test.ts convex/orgSettings.test.ts`
 
 Expected: PASS.
 
