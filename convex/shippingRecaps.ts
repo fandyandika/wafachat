@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { requireAdmin, requireMember, requireAdminOrg, requireMemberOrg } from "./authz";
+import { requireAdmin, requireMember, requireAdminOrg, requireMemberOrg, requireScopedMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isInternalTestPhone, csKey, canonicalizeProduct as canonicalizeProductLib, normalizeProductName as normalizeProductNameLib, windowKeyFor } from "./lib";
@@ -1315,8 +1315,8 @@ export const getPerformance = query({
     csName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "shippingRecaps.getPerformance");
-    return performanceFromRaw(ctx, orgId, args);
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "shippingRecaps.getPerformance", args.csName);
+    return performanceFromRaw(ctx, orgId, { ...args, csName: effectiveCsName });
   },
 });
 

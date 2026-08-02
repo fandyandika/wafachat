@@ -4,6 +4,8 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { windowKeyFor } from "./lib";
 
+const modules = (import.meta as any).glob("./**/*.{ts,js}");
+
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
 }
@@ -139,6 +141,78 @@ test("getDuplicateOrders: groups repeat phones, flags accidental, excludes test+
   // csName filter: no orders for "CS B"
   const none = await asAdmin.query(api.metrics.getDuplicateOrders, { startAt: t0 - 1, endAt: t0 + DAY, csName: "CS B" });
   expect(none.length).toBe(0);
+});
+
+test("CS dashboard reads cannot request another CS scope", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const csUserId = await t.run((ctx: any) => ctx.db.insert("users", {
+    orgId,
+    email: "aisyah@wafachat.test",
+    name: "Aisyah",
+    passwordHash: "x",
+    role: "cs",
+    csName: "Aisyah",
+    isActive: true,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const asCs = t.withIdentity({
+    subject: String(csUserId),
+    role: "cs",
+    name: "Aisyah",
+    email: "aisyah@wafachat.test",
+    csName: "Aisyah",
+  });
+  const orderBase = {
+    customerName: "Customer",
+    productName: "Quran",
+    products: "Quran",
+    productsSubtotal: "",
+    shippingCost: "",
+    total: "",
+    shippingAddress: "",
+    shippingDistrict: "",
+    shippingCity: "",
+    source: "berdu" as const,
+    aiEligible: true,
+    updatedAt: t0,
+  };
+  await t.run(async (ctx) => {
+    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "A-1", customerPhone: "628111111111", assignedCsName: "Aisyah", createdAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "A-2", customerPhone: "628111111111", assignedCsName: "Aisyah", createdAt: t0 + 1 });
+    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "L-1", customerPhone: "628222222222", assignedCsName: "Lila", createdAt: t0 });
+    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "L-2", customerPhone: "628222222222", assignedCsName: "Lila", createdAt: t0 + 1 });
+    await ctx.db.insert("shippingRecaps", {
+      orgId, orderIdBerdu: "A-1", customerPhone: "628111111111", customerName: "Customer A", csName: "Aisyah",
+      closedAt: t0, recipientName: "Customer A", recipientPhone: "628111111111", recipientAddress: "",
+      recipientDistrict: "", recipientCity: "", packageContent: "Quran", paymentMethod: "cod",
+      codValue: 100000, total: 100000, status: "ready", flags: [], sourceMessageText: "", version: 1,
+      createdAt: t0, updatedAt: t0,
+    });
+    await ctx.db.insert("shippingRecaps", {
+      orgId, orderIdBerdu: "L-1", customerPhone: "628222222222", customerName: "Customer L", csName: "Lila",
+      closedAt: t0, recipientName: "Customer L", recipientPhone: "628222222222", recipientAddress: "",
+      recipientDistrict: "", recipientCity: "", packageContent: "Quran", paymentMethod: "cod",
+      codValue: 200000, total: 200000, status: "ready", flags: [], sourceMessageText: "", version: 1,
+      createdAt: t0, updatedAt: t0,
+    });
+  });
+
+  const range = { startAt: t0 - 1, endAt: t0 + DAY, csName: "Lila" };
+  expect(await asCs.query(api.authz.whoami, {})).toMatchObject({
+    subject: String(csUserId),
+    role: "cs",
+    email: "aisyah@wafachat.test",
+  });
+  const summary = await asCs.query(api.metrics.getDashboardSummary, range);
+  expect(summary).toMatchObject({ leads: 1, closings: 1, revenue: 100000 });
+
+  const performance = await asCs.query(api.shippingRecaps.getPerformance, range);
+  expect(performance.cs.map((row) => row.csName)).toEqual(["Aisyah"]);
+
+  const duplicates = await asCs.query(api.metrics.getDuplicateOrders, range);
+  expect(duplicates.map((row) => row.phone)).toEqual(["628111111111"]);
 });
 
 test("dashboard windows are half-open and neighboring windows do not double-count the boundary", async () => {

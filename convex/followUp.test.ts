@@ -6,6 +6,8 @@ import { api, internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { windowKeyFor } from "./lib";
 
+const modules = (import.meta as any).glob("./**/*.{ts,js}");
+
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
 }
@@ -55,6 +57,50 @@ test("getFollowUpCandidates: ghosted >24h, not closed -> stage1", async () => {
   const r = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
   expect(r.stage1.map((c) => c.orderId)).toContain("O-1");
   expect(r.stage2.length).toBe(0);
+});
+
+test("CS follow-up candidates cannot request another CS scope", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const csUserId = await t.run((ctx: any) => ctx.db.insert("users", {
+    orgId,
+    email: "aisyah@wafachat.test",
+    name: "Aisyah",
+    passwordHash: "x",
+    role: "cs",
+    csName: "Aisyah",
+    isActive: true,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const asCs = t.withIdentity({
+    subject: String(csUserId),
+    role: "cs",
+    name: "Aisyah",
+    email: "aisyah@wafachat.test",
+    csName: "Aisyah",
+  });
+  await t.run(async (ctx) => {
+    for (const [orderId, phone, csName] of [
+      ["O-AISYAH", "628311111111", "Aisyah"],
+      ["O-LILA", "628322222222", "Lila"],
+    ] as const) {
+      const conversationId = await ctx.db.insert("conversations", {
+        orgId, ...convBase, orderId, customerPhone: phone, assignedCsName: csName,
+      });
+      await ctx.db.insert("orders", {
+        orgId, ...orderBase, orderId, customerPhone: phone, assignedCsName: csName,
+      });
+      await ctx.db.insert("messages", { orgId, ...msg(conversationId, orderId, phone, "inbound", now - 30 * HOUR) });
+      await ctx.db.insert("messages", { orgId, ...msg(conversationId, orderId, phone, "outbound", now - 29 * HOUR) });
+    }
+  });
+
+  const result = await asCs.query(api.followUp.getFollowUpCandidates, {
+    csName: "Lila",
+    nowOverride: now,
+  });
+  expect(result.stage1.map((row) => row.orderId)).toEqual(["O-AISYAH"]);
 });
 
 test("getFollowUpCandidates: closed (shippingRecap) excluded", async () => {

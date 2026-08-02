@@ -83,6 +83,7 @@ export async function requireAdmin(ctx: Parameters<typeof getViewer>[0], fn: str
 // CS without a users row is a misconfiguration: THROW (never silently default).
 
 export type ViewerOrg = { viewer: Viewer; orgId: Id<"organizations"> };
+export type ScopedViewerOrg = ViewerOrg & { effectiveCsName?: string };
 
 async function resolveViewerOrg(ctx: any, viewer: Viewer, fn: string): Promise<Id<"organizations">> {
   const userRow = await ctx.db.query("users")
@@ -115,6 +116,28 @@ export async function requireAdminOrg(ctx: any, fn: string): Promise<ViewerOrg> 
   const viewer = await requireAdmin(ctx, fn);
   if (!viewer || viewer.role !== "admin") throw new Error(`unauthorized: ${fn} requires admin`);
   return { viewer, orgId: await resolveViewerOrg(ctx, viewer, fn) };
+}
+
+export async function requireScopedMemberOrg(
+  ctx: any,
+  fn: string,
+  requestedCsName?: string,
+): Promise<ScopedViewerOrg> {
+  const { viewer, orgId } = await requireMemberOrg(ctx, fn);
+  if (viewer.role === "admin") {
+    return { viewer, orgId, effectiveCsName: requestedCsName?.trim() || undefined };
+  }
+
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_email", (q: any) => q.eq("email", viewer.email))
+    .unique();
+  if (!user || !user.isActive || String(user._id) !== viewer.subject || user.role !== "cs") {
+    throw new Error(`unauthorized: ${fn} session is stale`);
+  }
+  const effectiveCsName = user.csName?.trim();
+  if (!effectiveCsName) throw new Error(`unauthorized: ${fn} CS scope is missing`);
+  return { viewer, orgId, effectiveCsName };
 }
 
 /** Test/diagnostic probe for viewer-org resolution (B2b). */

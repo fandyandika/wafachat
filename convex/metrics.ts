@@ -1,5 +1,5 @@
 import { query, internalQuery, type QueryCtx } from "./_generated/server";
-import { requireAdminOrg, requireMember, requireMemberOrg } from "./authz";
+import { requireAdminOrg, requireMember, requireMemberOrg, requireScopedMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { normalizePhone, isInternalTestPhone, getJakartaDate, csKey } from "./lib";
@@ -61,8 +61,8 @@ export const getDashboardSummary = query({
   // require the bounded raw calculation for every range.
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()), raw: v.optional(v.boolean()), includeActiveChats: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "metrics.getDashboardSummary");
-    return computeDashboardSummaryRaw(ctx, orgId, args);
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "metrics.getDashboardSummary", args.csName);
+    return computeDashboardSummaryRaw(ctx, orgId, { ...args, csName: effectiveCsName });
   },
 });
 
@@ -123,14 +123,15 @@ export async function computeTrendRaw(
 export const getDuplicateOrders = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "metrics.getDuplicateOrders");
-    assertPublicAnalyticsRange(args.startAt, args.endAt, "metrics.getDuplicateOrders");
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "metrics.getDuplicateOrders", args.csName);
+    const scopedArgs = { ...args, csName: effectiveCsName };
+    assertPublicAnalyticsRange(scopedArgs.startAt, scopedArgs.endAt, "metrics.getDuplicateOrders");
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
-    const key = args.csName ? csKey(args.csName) : null;
+    const key = scopedArgs.csName ? csKey(scopedArgs.csName) : null;
     const orders = (
       await collectExactBounded(ctx.db
         .query("orders")
-        .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", args.startAt).lt("createdAt", args.endAt))
+        .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId).gte("createdAt", scopedArgs.startAt).lt("createdAt", scopedArgs.endAt))
         , "metrics.getDuplicateOrders orders")
     ).filter((o) => !isInternalTestPhone(o.customerPhone, internalPhones) && (!key || csKey(o.assignedCsName) === key));
 

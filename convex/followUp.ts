@@ -1,5 +1,5 @@
 import { query, action, mutation, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { requireMember, requireMemberOrg } from "./authz";
+import { requireMember, requireMemberOrg, requireScopedMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { csKey, isInternalTestPhone, normalizeCsName, normalizePhone } from "./lib";
@@ -142,8 +142,8 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
 export const getFollowUpCandidates = query({
   args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "followUp.getFollowUpCandidates");
-    return followUpCandidatesHandler(ctx, { ...args, orgId });
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getFollowUpCandidates", args.csName);
+    return followUpCandidatesHandler(ctx, { ...args, orgId, csName: effectiveCsName });
   },
 });
 
