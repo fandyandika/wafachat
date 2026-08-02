@@ -32,13 +32,17 @@ import { Switch } from "@/components/ui/switch";
 import { resizeImage } from "@/lib/resize-image";
 import { cn } from "@/lib/utils";
 
-type SettingsSection = "account" | "organization" | "team" | "cs";
+export type SettingsSection = "account" | "organization" | "team" | "cs";
 const SETTINGS_SECTIONS: Array<{ value: SettingsSection; label: string }> = [
   { value: "account", label: "Akun" },
   { value: "organization", label: "Organisasi" },
   { value: "team", label: "Tim" },
   { value: "cs", label: "Konfigurasi CS" },
 ];
+
+export function settingsSectionsForRole(role: "admin" | "cs" | null) {
+  return role === "admin" ? SETTINGS_SECTIONS : SETTINGS_SECTIONS.slice(0, 1);
+}
 
 type CsRow = {
   csName: string;
@@ -699,11 +703,11 @@ export function SettingsDashboard() {
       .then(setMe)
       .catch(() => setMe(null));
   }, []);
-  const isCs = me?.role === "cs";
-  const sections = isCs ? SETTINGS_SECTIONS.slice(0, 1) : SETTINGS_SECTIONS;
+  const isAdmin = me?.role === "admin";
+  const sections = settingsSectionsForRole(me?.role ?? null);
   useEffect(() => {
-    if (isCs) setSection("account");
-  }, [isCs]);
+    if (!isAdmin) setSection("account");
+  }, [isAdmin]);
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     router.push("/login");
@@ -830,7 +834,7 @@ export function SettingsDashboard() {
           </Card>
         </section>
       )}
-      {!isCs && section === "organization" && (
+      {isAdmin && section === "organization" && (
         <section aria-labelledby="settings-organization">
           <h2 id="settings-organization" className="sr-only">
             Organisasi
@@ -838,7 +842,7 @@ export function SettingsDashboard() {
           <OrgSection />
         </section>
       )}
-      {!isCs && section === "team" && (
+      {isAdmin && section === "team" && (
         <section aria-labelledby="settings-team">
           <h2 id="settings-team" className="sr-only">
             Tim
@@ -846,7 +850,7 @@ export function SettingsDashboard() {
           <TeamSection />
         </section>
       )}
-      {!isCs && section === "cs" && (
+      {isAdmin && section === "cs" && (
         <section aria-labelledby="settings-cs" className="space-y-4">
           <h2 id="settings-cs" className="sr-only">
             Konfigurasi CS
@@ -925,6 +929,47 @@ export function SettingsDashboard() {
                     Ganti nama
                   </Button>
                 </div>
+                {renaming?.name === cs.csName && (
+                  <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-muted/40 p-3">
+                    <div className="min-w-48 flex-1 space-y-1">
+                      <label
+                        htmlFor={`rename-${cs.key}`}
+                        className="text-sm font-medium"
+                      >
+                        Nama CS baru
+                      </label>
+                      <input
+                        id={`rename-${cs.key}`}
+                        className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                        value={renaming.value}
+                        onChange={(event) =>
+                          setRenaming((current) =>
+                            current
+                              ? { ...current, value: event.target.value }
+                              : current,
+                          )
+                        }
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      disabled={
+                        busy === cs.csName || !renaming.value.trim()
+                      }
+                      onClick={() => void saveRename()}
+                    >
+                      Simpan
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy === cs.csName}
+                      onClick={() => setRenaming(null)}
+                    >
+                      Batal
+                    </Button>
+                  </div>
+                )}
                 {cs.csPhone && (
                   <div className="rounded-lg bg-muted/40 px-3 py-2">
                     <div className="text-xs font-medium text-muted-foreground">
@@ -957,20 +1002,22 @@ export function SettingsDashboard() {
                 </div>
                 <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2">
                   {CS_TOGGLES.map(({ icon: Icon, label, field }) => (
-                    <div
+                    <label
                       key={field}
-                      className="flex min-h-11 items-center justify-between gap-3"
+                      htmlFor={`${cs.key}-${field}`}
+                      className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-lg px-1 focus-within:ring-3 focus-within:ring-ring/50"
                     >
                       <span className="flex items-center gap-2 text-sm font-medium">
                         <Icon className="size-4 text-muted-foreground" />
                         {label}
                       </span>
                       <Switch
+                        id={`${cs.key}-${field}`}
                         checked={Boolean(cs[field])}
                         onCheckedChange={(value) => onToggle(cs, field, value)}
                         disabled={busy === cs.csName}
                       />
-                    </div>
+                    </label>
                   ))}
                 </div>
                 <div className="border-t border-destructive/20 pt-4">
@@ -995,45 +1042,6 @@ export function SettingsDashboard() {
           )}
         </section>
       )}
-      <AlertDialog
-        open={Boolean(renaming)}
-        onOpenChange={(open) => {
-          if (!open) setRenaming(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Ganti nama CS</AlertDialogTitle>
-            <AlertDialogDescription>
-              Nama baru akan dipakai untuk konfigurasi CS ini.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <label htmlFor="rename-cs" className="text-sm font-medium">
-            Nama CS
-          </label>
-          <input
-            id="rename-cs"
-            className="rounded-lg border border-input bg-background px-3 py-2 text-sm"
-            value={renaming?.value ?? ""}
-            onChange={(event) =>
-              setRenaming((current) =>
-                current ? { ...current, value: event.target.value } : current,
-              )
-            }
-          />
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={Boolean(busy)}>
-              Batal
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={Boolean(busy) || !renaming?.value.trim()}
-              onClick={() => void saveRename()}
-            >
-              Simpan
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
       <AlertDialog
         open={Boolean(deleting)}
         onOpenChange={(open) => {
