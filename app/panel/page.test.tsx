@@ -11,8 +11,9 @@ const { snapshots, viewer } = vi.hoisted(() => ({
 vi.mock("convex/react", () => ({ useQuery: () => [] }));
 vi.mock("@/components/panel/use-panel-filters", () => ({
   usePanelFilters: () => ({ startAt: 1, endAt: 2, csName: undefined, jakartaDate: "2026-08-02", range: "today" }),
+  resolveRange: () => ({ startAt: 1, endAt: 2 }),
 }));
-vi.mock("@/components/panel/use-response-times", () => ({ useResponseTimes: () => null }));
+vi.mock("@/components/panel/use-response-times", () => ({ useResponseTimesState: () => ({ data: undefined, loading: false, error: null }) }));
 vi.mock("@/components/panel/use-me", () => ({ useMe: () => viewer.current }));
 vi.mock("@/components/panel/use-convex-snapshot-query", () => ({
   useConvexSnapshotQuery: (...args: unknown[]) => snapshots(...args),
@@ -39,6 +40,7 @@ test("dashboard renders the operational snapshot without a disabled trend", () =
   expect(html).toContain("Closing Rate");
   expect(html).toContain("Top CS");
   expect(html).toContain("Top Produk");
+  expect(html.indexOf("Perlu perhatian")).toBeLessThan(html.indexOf("Kinerja bisnis"));
   expect(html).not.toContain("Trend Harian");
   expect(html).not.toContain("Pekerjaan berikutnya");
   expect(html).not.toContain("Order Double");
@@ -67,4 +69,13 @@ test("CS dashboard prioritizes scoped next work without owner-only figures", () 
   expect(html).not.toContain("Top Produk");
   expect(snapshots).toHaveBeenCalledTimes(3);
   expect(snapshots.mock.calls[1][1]).toBe("skip");
+  expect(snapshots.mock.calls[2][1]).toBe("skip");
+});
+
+test("owner dashboard does not claim healthy operations before snapshots resolve", () => {
+  snapshots.mockReturnValue({ data: undefined, loading: true, error: null, lastUpdatedAt: null, refresh: vi.fn() });
+  const html = renderToStaticMarkup(<DashboardPage />);
+  expect(html).toContain("Memeriksa data operasional");
+  expect(html).not.toContain("Tidak ada perhatian mendesak");
+  expect(html).not.toContain("Operasional normal");
 });

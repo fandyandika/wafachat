@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Skeleton } from '@/components/ui/skeleton';
 import { WindowModeToggle, type WindowMode } from '@/components/panel/window-mode-toggle';
 import { cn } from '@/lib/utils';
 import { crBarClass } from '@/lib/cr';
@@ -52,20 +53,14 @@ export function OwnerHome() {
       ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <LedgerSection title="Kinerja bisnis" description="Snapshot periode aktif">
-          <LedgerMetricGrid>
-            <LedgerMetric label="Leads" value={<AnimatedNumber value={data.stats.orders} />} detail={data.periodLabel} />
-            <LedgerMetric label="Closing" value={<AnimatedNumber value={data.totalClosing} />} detail={data.periodLabel} tone="positive" />
-            <LedgerMetric label="Closing Rate" value={`${data.closingRate.toFixed(1)}%`} detail={data.periodLabel} tone="positive" />
-            <LedgerMetric label="Omzet" value={<AnimatedNumber value={data.revenue} format={formatRupiah} />} detail={data.periodLabel} />
-            <LedgerMetric label="Dibatalkan" value={<AnimatedNumber value={data.cancelled} />} detail={data.periodLabel} tone="negative" />
-            <LedgerMetric label="Respon CS" value={data.responseLabel} detail="Median balasan pertama, 24 jam" />
-          </LedgerMetricGrid>
-        </LedgerSection>
-
-        <LedgerSection title="Perlu perhatian">
+        <LedgerSection title="Perlu perhatian" className="xl:col-start-2">
           <div className="p-4">
-            {data.duplicateOrders.length ? (
+            {!data.ready.duplicates ? (
+              <div className="space-y-2 py-2">
+                <StatusStamp>Memeriksa</StatusStamp>
+                <p className="text-sm text-muted-foreground">Memeriksa data operasional…</p>
+              </div>
+            ) : data.duplicateOrders.length ? (
               <button type="button" onClick={() => setDuplicatesOpen(true)} className="flex min-h-11 w-full items-center justify-between gap-3 border-b border-ledger-rule py-2 text-left">
                 <span>
                   <span className="block font-semibold text-ledger-ink">Order ganda</span>
@@ -80,6 +75,23 @@ export function OwnerHome() {
               </div>
             )}
           </div>
+        </LedgerSection>
+
+        <LedgerSection title="Kinerja bisnis" description="Snapshot periode aktif" className="xl:col-start-1 xl:row-start-1">
+          {data.ready.summary && data.ready.performance ? (
+            <LedgerMetricGrid>
+              <LedgerMetric label="Leads" value={<AnimatedNumber value={data.stats.orders} />} detail={data.periodLabel} />
+              <LedgerMetric label="Closing" value={<AnimatedNumber value={data.totalClosing} />} detail={data.periodLabel} tone="positive" />
+              <LedgerMetric label="Closing Rate" value={`${data.closingRate.toFixed(1)}%`} detail={data.periodLabel} tone="positive" />
+              <LedgerMetric label="Omzet" value={<AnimatedNumber value={data.revenue} format={formatRupiah} />} detail={data.periodLabel} />
+              <LedgerMetric label="Dibatalkan" value={<AnimatedNumber value={data.cancelled} />} detail={data.periodLabel} tone="negative" />
+              <LedgerMetric label="Respon CS" value={data.responseLabel} detail="Median balasan pertama, 24 jam" />
+            </LedgerMetricGrid>
+          ) : (
+            <div className="grid sm:grid-cols-2 xl:grid-cols-3" aria-label="Memuat kinerja bisnis">
+              {Array.from({ length: 6 }).map((_, index) => <div key={index} className="min-h-28 border-b border-r border-ledger-rule p-5"><Skeleton className="h-3 w-20" /><Skeleton className="mt-4 h-7 w-24" /><Skeleton className="mt-2 h-3 w-16" /></div>)}
+            </div>
+          )}
         </LedgerSection>
       </div>
 
