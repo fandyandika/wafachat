@@ -32,6 +32,9 @@ type Candidate = {
   lastMessageText: string;
 };
 type Staged = Candidate & { stage: 1 | 2 | 3 };
+type CandidatesData = { stage1: Candidate[]; stage2: Candidate[]; stage3: Candidate[] };
+type KpiData = { totalClosings: number; fromFollowUp: number; byStage: { h1: number; h2: number; h3: number } };
+type SnapshotData = { candidates: CandidatesData; kpi: KpiData };
 
 type Tab = 'all' | 'stage1' | 'stage2' | 'stage3' | 'closing' | 'archived';
 
@@ -62,6 +65,25 @@ const STAGE_TEMPLATE_LABELS: Record<1 | 2 | 3, string> = {
   2: 'H+2 · Pengingat',
   3: 'H+3 · Penawaran terakhir (penutup)',
 };
+
+export async function fetchFollowUpSnapshot(csName: string | undefined, request: typeof fetch = fetch): Promise<SnapshotData> {
+  const response = await request('/api/follow-up/snapshot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ csName }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.error || 'Gagal memuat antrean follow-up.');
+  return { candidates: result.candidates, kpi: result.kpi };
+}
+
+export function getNextFollowUpTabIndex(key: string, currentIndex: number, tabCount: number): number | null {
+  if (key === 'ArrowRight') return (currentIndex + 1) % tabCount;
+  if (key === 'ArrowLeft') return (currentIndex - 1 + tabCount) % tabCount;
+  if (key === 'Home') return 0;
+  if (key === 'End') return tabCount - 1;
+  return null;
+}
 
 const formatRelativeTime = (ms: number): string => {
   const now = Date.now();
@@ -105,7 +127,7 @@ function truncateText(text: string, maxLen = 50): string {
   return text.length > maxLen ? text.substring(0, maxLen) + '…' : text;
 }
 
-function RowCheck({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
+export function RowCheck({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
   return (
     <button
       type="button"
@@ -115,12 +137,28 @@ function RowCheck({ checked, onToggle }: { checked: boolean; onToggle: () => voi
       }}
       aria-pressed={checked}
       aria-label={checked ? 'Batalkan pilih' : 'Pilih'}
-      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
-        checked ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-input bg-background text-transparent hover:border-emerald-500'
-      }`}
+      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md md:h-9 md:w-9"
     >
-      <span className="text-[11px] font-bold leading-none">✓</span>
+      <span
+        aria-hidden
+        className={`flex h-5 w-5 items-center justify-center rounded border text-[11px] font-bold leading-none transition-colors ${
+          checked ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-input bg-background text-transparent hover:border-emerald-500'
+        }`}
+      >
+        ✓
+      </span>
     </button>
+  );
+}
+
+export function FollowUpSnapshotError({ message, retrying, onRetry }: { message: string; retrying: boolean; onRetry: () => void }) {
+  return (
+    <PanelState
+      kind="error"
+      title="Antrean follow-up gagal dimuat"
+      description={message}
+      action={<Button onClick={onRetry} disabled={retrying}>{retrying ? 'Memuat…' : 'Coba lagi'}</Button>}
+    />
   );
 }
 
@@ -575,27 +613,22 @@ export function FollowUpDashboard() {
   // filter change / after an action / manual Refresh) instead of a live subscription —
   // a live subscription re-read the whole conversations table on every inbound message,
   // which is what blew the DB I/O budget. (Also fails gracefully if Convex is down.)
-  type CandidatesData = { stage1: Candidate[]; stage2: Candidate[]; stage3: Candidate[] };
-  type KpiData = { totalClosings: number; fromFollowUp: number; byStage: { h1: number; h2: number; h3: number } };
   const [data, setData] = useState<CandidatesData | undefined>(undefined);
   const [kpiData, setKpiData] = useState<KpiData | undefined>(undefined);
   const [refreshing, setRefreshing] = useState(false);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const loadSnapshot = useCallback(async () => {
     if (!me) return;
     setRefreshing(true);
+    setSnapshotError(null);
     try {
-      const r = await fetch('/api/follow-up/snapshot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csName }),
-      }).then((x) => x.json());
-      if (r.ok) {
-        setData(r.candidates);
-        setKpiData(r.kpi);
-      }
-    } catch {
-      /* keep last data on failure */
+      const snapshot = await fetchFollowUpSnapshot(csName);
+      setData(snapshot.candidates);
+      setKpiData(snapshot.kpi);
+    } catch (error) {
+      setSnapshotError(error instanceof Error ? error.message : 'Gagal memuat antrean follow-up.');
     } finally {
       setRefreshing(false);
     }
@@ -813,14 +846,14 @@ export function FollowUpDashboard() {
                 setSearchQuery(e.target.value);
                 setSelectedId(null);
               }}
-              className="mt-1 min-h-11 w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground sm:min-h-9"
+              className="mt-1 min-h-11 w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground md:min-h-9"
             />
           </div>
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as 'oldest' | 'newest')}
             title="Urutkan (lama/baru ghosting)"
-            className="shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm text-foreground"
+            className="min-h-11 shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm text-foreground md:min-h-9"
           >
             <option value="oldest">Lama</option>
             <option value="newest">Baru</option>
@@ -830,7 +863,7 @@ export function FollowUpDashboard() {
             onClick={loadSnapshot}
             disabled={refreshing}
             title="Muat ulang daftar"
-            className="shrink-0 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+            className="min-h-11 min-w-11 shrink-0 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50 md:min-h-9 md:min-w-9"
           >
             {refreshing ? '…' : '↻'}
           </button>
@@ -843,7 +876,7 @@ export function FollowUpDashboard() {
                 setSelectedIds(new Set());
               }}
               title="Filter per CS"
-              className="max-w-[38%] shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm font-medium text-foreground"
+              className="min-h-11 max-w-[38%] shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm font-medium text-foreground md:min-h-9"
             >
               <option value="all">Semua CS</option>
               {csList.map((c) => (
@@ -857,15 +890,24 @@ export function FollowUpDashboard() {
 
         <div className="flex items-center gap-2">
           <div role="tablist" aria-label="Antrean follow-up" className="flex flex-1 gap-1.5 overflow-x-auto">
-            {tabs.map((t) => (
+            {tabs.map((t, index) => (
               <button
                 key={t.key}
+                ref={(node) => { tabRefs.current[index] = node; }}
                 id={`follow-up-tab-${t.key}`}
                 type="button"
                 role="tab"
                 aria-selected={activeTab === t.key}
                 aria-controls="follow-up-queue"
+                tabIndex={activeTab === t.key ? 0 : -1}
                 onClick={() => switchTab(t.key)}
+                onKeyDown={(event) => {
+                  const nextIndex = getNextFollowUpTabIndex(event.key, index, tabs.length);
+                  if (nextIndex === null) return;
+                  event.preventDefault();
+                  switchTab(tabs[nextIndex].key);
+                  tabRefs.current[nextIndex]?.focus();
+                }}
                   className={`inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium transition-colors md:min-h-9 ${
                   activeTab === t.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent'
                 }`}
@@ -896,6 +938,15 @@ export function FollowUpDashboard() {
         </div>
       </div>
 
+      {snapshotError && data !== undefined && (
+        <div role="alert" className="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <span>{snapshotError}</span>
+          <Button onClick={loadSnapshot} disabled={refreshing} variant="outline" size="sm" className="min-h-11 shrink-0 md:min-h-9">
+            {refreshing ? 'Memuat…' : 'Coba lagi'}
+          </Button>
+        </div>
+      )}
+
       {/* Bulk status banner */}
       {(bulkStatus || feedback) && (
         <div
@@ -922,7 +973,11 @@ export function FollowUpDashboard() {
           )}
 
           <div id="follow-up-queue" role="tabpanel" aria-labelledby={`follow-up-tab-${activeTab}`} className="flex-1 overflow-y-auto">
-            {isLoading ? (
+            {snapshotError && data === undefined && activeTab !== 'archived' && activeTab !== 'closing' ? (
+              <div className="p-3">
+                <FollowUpSnapshotError message={snapshotError} retrying={refreshing} onRetry={loadSnapshot} />
+              </div>
+            ) : isLoading ? (
               <div className="space-y-2 p-3">
                 <Skeleton className="h-20 w-full" />
                 <Skeleton className="h-20 w-full" />
