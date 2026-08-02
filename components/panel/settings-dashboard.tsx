@@ -132,7 +132,7 @@ function OrgSection() {
             <div className="flex flex-wrap items-center gap-2">
               <input
                 id="organization-name"
-                className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                className="min-h-11 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
               />
@@ -162,7 +162,7 @@ function OrgSection() {
                   {phone}
                   <button
                     type="button"
-                    className="text-muted-foreground hover:text-destructive"
+                    className="inline-flex size-11 items-center justify-center text-muted-foreground hover:text-destructive sm:size-7"
                     disabled={busy}
                     aria-label={`Hapus ${phone}`}
                     onClick={() => setRemovingPhone(phone)}
@@ -175,7 +175,7 @@ function OrgSection() {
             <div className="flex gap-2">
               <input
                 id="internal-phone"
-                className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm"
+                className="min-h-11 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm sm:min-h-9"
                 placeholder="08xxx / 62xxx"
                 value={newPhone}
                 onChange={(event) => setNewPhone(event.target.value)}
@@ -267,7 +267,7 @@ function CsvField({
       <div className="mt-1 flex gap-2">
         <input
           id={id}
-          className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs"
+          className="min-h-11 min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs sm:min-h-7"
           placeholder={placeholder}
           value={value}
           disabled={disabled || busy}
@@ -303,16 +303,46 @@ function CsvField({
   );
 }
 
+type TeamUser = {
+  email: string;
+  name: string;
+  role: "admin" | "cs";
+  csName?: string;
+  isActive: boolean;
+};
+
+async function responseError(response: Response, fallback: string) {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === "string" && body.error ? body.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function loadTeamUsers(fetcher: typeof fetch = fetch) {
+  const response = await fetcher("/api/admin/users");
+  if (!response.ok) throw new Error(await responseError(response, "Gagal memuat tim"));
+  const body = (await response.json()) as { users?: unknown };
+  if (!Array.isArray(body.users)) throw new Error("Respons data tim tidak valid");
+  return body.users as TeamUser[];
+}
+
+export async function postTeamUser(
+  payload: Record<string, unknown>,
+  fetcher: typeof fetch = fetch,
+) {
+  const response = await fetcher("/api/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await responseError(response, "Gagal menyimpan user"));
+  return loadTeamUsers(fetcher);
+}
+
 function TeamSection() {
-  const [users, setUsers] = useState<
-    Array<{
-      email: string;
-      name: string;
-      role: "admin" | "cs";
-      csName?: string;
-      isActive: boolean;
-    }>
-  >([]);
+  const [users, setUsers] = useState<TeamUser[]>([]);
   const [form, setForm] = useState({
     email: "",
     name: "",
@@ -330,8 +360,12 @@ function TeamSection() {
   const [busy, setBusy] = useState(false);
   const csOptions = (useQuery(api.cs.listCs, {}) ?? []).map((cs) => cs.csName);
   async function load() {
-    const response = await fetch("/api/admin/users");
-    if (response.ok) setUsers((await response.json()).users);
+    setErr(null);
+    try {
+      setUsers(await loadTeamUsers());
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Gagal memuat tim");
+    }
   }
   useEffect(() => {
     void load();
@@ -340,17 +374,11 @@ function TeamSection() {
     setBusy(true);
     setErr(null);
     try {
-      const response = await fetch("/api/admin/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) {
-        setErr((await response.json()).error || "Gagal");
-        return false;
-      }
-      await load();
+      setUsers(await postTeamUser(payload));
       return true;
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Gagal menyimpan user");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -418,7 +446,7 @@ function TeamSection() {
                         </label>
                         <select
                           id={`assign-${user.email}`}
-                          className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                          className="min-h-11 rounded-md border border-input bg-background px-2 py-1 text-xs sm:min-h-7"
                           value={user.csName ?? ""}
                           disabled={busy}
                           onChange={(event) =>
@@ -505,7 +533,7 @@ function TeamSection() {
                       <input
                         id={`edit-${user.email}`}
                         type={editing.action === "reset" ? "password" : "text"}
-                        className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+                        className="min-h-11 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm sm:min-h-9"
                         value={editing.value}
                         onChange={(event) =>
                           setEditing({ ...editing, value: event.target.value })
@@ -554,7 +582,7 @@ function TeamSection() {
               </label>
               <input
                 id="new-user-name"
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
                 value={form.name}
                 onChange={(event) =>
                   setForm({ ...form, name: event.target.value })
@@ -568,7 +596,7 @@ function TeamSection() {
               <input
                 id="new-user-email"
                 type="email"
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
                 value={form.email}
                 onChange={(event) =>
                   setForm({ ...form, email: event.target.value })
@@ -581,7 +609,7 @@ function TeamSection() {
               </label>
               <select
                 id="new-user-role"
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
                 value={form.role}
                 onChange={(event) =>
                   setForm({
@@ -601,7 +629,7 @@ function TeamSection() {
                 </label>
                 <select
                   id="new-user-cs"
-                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
                   value={form.csName}
                   onChange={(event) =>
                     setForm({ ...form, csName: event.target.value })
@@ -626,7 +654,7 @@ function TeamSection() {
               <input
                 id="new-user-password"
                 type="password"
-                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
                 value={form.password}
                 onChange={(event) =>
                   setForm({ ...form, password: event.target.value })
@@ -940,7 +968,7 @@ export function SettingsDashboard() {
                       </label>
                       <input
                         id={`rename-${cs.key}`}
-                        className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                        className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
                         value={renaming.value}
                         onChange={(event) =>
                           setRenaming((current) =>
