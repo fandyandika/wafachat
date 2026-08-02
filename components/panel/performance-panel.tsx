@@ -36,13 +36,18 @@ function rangeLabel(range: DateRange): string {
   return startMonth === endMonth ? `${start.split(" ")[0]}–${endDay} ${endMonth}` : `${start}–${end}`;
 }
 
-function MetricCard({ label, value, delta }: { label: string; value: React.ReactNode; delta?: number }) {
+function MetricCard({ label, value, delta, deltaFormat }: {
+  label: string;
+  value: React.ReactNode;
+  delta?: number;
+  deltaFormat?: (value: number) => string;
+}) {
   return (
     <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-1 flex items-center gap-2 text-xl font-semibold tabular-nums">
         <span>{value}</span>
-        {delta !== undefined && <DeltaPill value={delta} />}
+        {delta !== undefined && <DeltaPill value={delta} format={deltaFormat} />}
       </div>
     </div>
   );
@@ -110,8 +115,8 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             <MetricCard label="Leads" value={number.format(s.leads)} delta={s.deltaLeads} />
             <MetricCard label="Closing" value={number.format(s.closings)} delta={s.deltaClosings} />
-            <MetricCard label="Conversion rate" value={pct(s.cr)} delta={s.deltaCr} />
-            <MetricCard label="Omzet" value={formatRupiah(s.revenue)} delta={s.deltaRevenue} />
+            <MetricCard label="Conversion rate" value={pct(s.cr)} delta={s.deltaCr} deltaFormat={pct} />
+            <MetricCard label="Omzet" value={formatRupiah(s.revenue)} delta={s.deltaRevenue} deltaFormat={formatRupiah} />
             <MetricCard label="Diskon" value={formatRupiah(s.discount)} />
             <MetricCard label="COD" value={number.format(s.cod)} />
             <MetricCard label="Transfer" value={number.format(s.transfer)} />

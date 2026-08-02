@@ -31,6 +31,9 @@ test("performance stays idle until the owner submits a period", () => {
   expect(snapshotMock).toHaveBeenCalledTimes(1);
   expect(snapshotMock).toHaveBeenLastCalledWith(api.performanceReports.getPerformanceReport, "skip");
   expect(html).toContain('aria-label="Filter laporan kinerja"');
+  expect(html).toContain('data-testid="performance-filter-grid"');
+  expect(html).toContain("md:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)_auto]");
+  expect(html).toContain("grid gap-1.5 text-sm font-medium");
   expect(html).toContain('aria-pressed="true"');
   expect(html).toContain("min-h-11");
   expect(html).toContain('type="date" class="min-h-11');

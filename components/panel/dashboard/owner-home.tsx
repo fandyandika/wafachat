@@ -144,28 +144,41 @@ function ProductRanking({ rows, periodLabel }: { rows: PerformanceData['products
   );
 }
 
-function DuplicateSheet({ open, onOpenChange, rows }: { open: boolean; onOpenChange: (open: boolean) => void; rows: DuplicateOrder[] }) {
+export function DuplicateSheet({ open, onOpenChange, rows }: { open: boolean; onOpenChange: (open: boolean) => void; rows: DuplicateOrder[] }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
-        <SheetHeader>
+      <SheetContent side="right" className="w-full gap-0 overflow-hidden sm:max-w-xl">
+        <SheetHeader className="border-b border-ledger-rule pr-14">
           <SheetTitle>Order ganda</SheetTitle>
           <SheetDescription>Periksa di Berdu sebelum membatalkan order.</SheetDescription>
         </SheetHeader>
-        <div className="mt-4 divide-y divide-ledger-rule border-y border-ledger-rule">
+        <ul aria-label="Daftar order ganda" className="flex-1 overflow-y-auto">
           {rows.map((row) => (
-            <div key={row.phone} className="py-4 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">{row.customerName || 'Tanpa nama'}</span>
-                <span className="text-muted-foreground">{row.phone}</span>
+            <li key={row.phone} className="border-b border-ledger-rule px-5 py-5 text-sm last:border-b-0">
+              <header className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-ledger-ink">{row.customerName || 'Tanpa nama'}</p>
+                  <p className="mt-0.5 tabular-nums text-muted-foreground">{row.phone}</p>
+                </div>
                 <Badge variant="warning"><CircleAlert className="size-3" /> {row.count} order</Badge>
-              </div>
-              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                {row.orders.map((order) => <li key={order.orderId}>{order.orderId} · {order.productName || '—'} · {fmtTime(order.createdAt)}</li>)}
+              </header>
+              <ul className="mt-4 divide-y divide-ledger-rule border-y border-ledger-rule">
+                {row.orders.map((order) => (
+                  <li key={order.orderId} className="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+                    <div className="min-w-0">
+                      <p className="font-medium tabular-nums text-ledger-ink">#{order.orderId}</p>
+                      <p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">{order.productName || '—'}</p>
+                    </div>
+                    <div className="flex items-center justify-between gap-4 text-xs tabular-nums text-muted-foreground sm:block sm:text-right">
+                      <span>{fmtTime(order.createdAt)}</span>
+                      <span className="font-medium text-ledger-ink sm:mt-1 sm:block">{formatRupiah(Number(order.total))}</span>
+                    </div>
+                  </li>
+                ))}
               </ul>
-            </div>
+            </li>
           ))}
-        </div>
+        </ul>
       </SheetContent>
     </Sheet>
   );

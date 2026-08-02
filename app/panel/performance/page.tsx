@@ -99,27 +99,30 @@ export default function PerformancePage() {
             ))}
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px_auto] md:items-end">
-            <div className="grid gap-3 sm:grid-cols-2">
+          <div
+            data-testid="performance-filter-grid"
+            className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)_auto] md:items-end"
+          >
+            <div className={cn("min-w-0", period === "custom" && "grid gap-3 sm:grid-cols-2")}>
               {period === "week" && (
-                <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                <label className="grid gap-1.5 text-sm font-medium">
                   Tanggal dalam pekan
                   <input type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} className={inputClass} />
                 </label>
               )}
               {period === "month" && (
-                <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                <label className="grid gap-1.5 text-sm font-medium">
                   Bulan
                   <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className={inputClass} />
                 </label>
               )}
               {period === "custom" && (
                 <>
-                  <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                  <label className="grid gap-1.5 text-sm font-medium">
                     Mulai
                     <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className={inputClass} />
                   </label>
-                  <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+                  <label className="grid gap-1.5 text-sm font-medium">
                     Sampai
                     <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className={inputClass} />
                   </label>
@@ -127,7 +130,7 @@ export default function PerformancePage() {
               )}
             </div>
 
-            <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
+            <label className="grid gap-1.5 text-sm font-medium">
               CS
               <Select value={csName || "__all"} onValueChange={(value) => setCsName(value === "__all" || !value ? "" : value)}>
                 <SelectTrigger className="min-h-11 w-full sm:min-h-9"><SelectValue>{csName || "Semua CS"}</SelectValue></SelectTrigger>
@@ -139,7 +142,7 @@ export default function PerformancePage() {
             </label>
 
             <div className="flex gap-2">
-              <Button size="lg" className="flex-1" onClick={submit} disabled={report.loading}>
+              <Button size="lg" className="w-full md:w-auto" onClick={submit} disabled={report.loading}>
                 {report.loading ? "Menyiapkan..." : "Tampilkan laporan"}
               </Button>
               {submitted && (
