@@ -113,7 +113,7 @@ export function QueenRecap() {
     <div className="space-y-4">
       <div role="toolbar" aria-label="Kontrol rekap Queen" className="flex items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3">
         <label htmlFor="queen-recap-month" className="text-sm font-medium">Bulan rekap</label>
-        <input id="queen-recap-month" aria-label="Bulan rekap" type="month" min="2026-07" max={currentMonth} value={month} onChange={(event) => setMonth(event.target.value)} className="h-9 rounded-lg border border-input bg-background px-2 text-sm" />
+        <input id="queen-recap-month" aria-label="Bulan rekap" type="month" min="2026-07" max={currentMonth} value={month} onChange={(event) => setMonth(event.target.value)} className="h-11 rounded-lg border border-input bg-background px-2 text-sm sm:h-9" />
       </div>
       {recap ? <QueenRecapView recap={recap} month={month} currentMonth={currentMonth} onBackfill={onBackfill} busy={busy} /> : <PanelState kind="empty" title="Memuat Queen recap" description="Menyiapkan rekap pemenang untuk bulan terpilih." />}
     </div>
