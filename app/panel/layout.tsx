@@ -39,8 +39,11 @@ function PanelShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      <a href="#panel-main" className="sr-only fixed left-3 top-3 z-50 rounded-lg bg-primary px-3 py-2 text-primary-foreground focus:not-sr-only">
+        Lewati navigasi
+      </a>
       <div className="flex min-h-screen">
-        <aside className={cn('hidden w-64 shrink-0 border-r border-border bg-card/60 md:flex md:flex-col', navHidden && 'md:hidden')}>
+        <aside className={cn('hidden w-60 shrink-0 border-r border-border bg-card/60 md:flex md:flex-col', navHidden && 'md:hidden')}>
           <div className="px-6 py-6">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -84,9 +87,9 @@ function PanelShell({ children }: { children: React.ReactNode }) {
           )}
         </aside>
 
-        <main className="min-w-0 flex-1">
-          <header className="sticky top-0 z-10 border-b border-border bg-background/80 px-4 py-4 backdrop-blur md:px-8">
-            <div className="mx-auto flex w-full max-w-6xl items-center">
+        <main id="panel-main" className="min-w-0 flex-1">
+          <header className="sticky top-0 z-10 border-b border-border bg-background px-4 py-4 md:px-8">
+            <div className="mx-auto flex w-full max-w-[1440px] items-center">
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -97,17 +100,10 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                   {navHidden ? <PanelLeft className="size-5" /> : <PanelLeftClose className="size-5" />}
                 </button>
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
-                <span className="hidden h-6 w-px bg-border sm:block" />
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src="/brand/wafachat-wordmark.png"
-                  alt="WaFaChat"
-                  className="hidden h-6 w-auto max-w-[140px] object-contain sm:block"
-                />
               </div>
             </div>
           </header>
-          <div className={cn('mx-auto w-full max-w-6xl space-y-6', isFollowUp ? 'p-2 pb-20 md:p-4 md:pb-4' : 'p-4 pb-24 md:p-6 md:pb-8')}>{children}</div>
+          <div className={cn('mx-auto w-full max-w-[1440px] space-y-6', isFollowUp ? 'p-2 pb-20 md:p-4 md:pb-4' : 'p-4 pb-24 md:p-6 md:pb-8')}>{children}</div>
         </main>
       </div>
 
@@ -122,7 +118,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 aria-current={active ? 'page' : undefined}
                 className={cn(
-                  'flex flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium transition-colors active:scale-95',
+                  'flex min-h-11 flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium transition-colors active:scale-95',
                   active ? 'text-primary' : 'text-muted-foreground',
                 )}
               >
@@ -137,7 +133,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
             <button
               type="button"
               onClick={logout}
-              className="flex flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium text-muted-foreground transition-colors active:scale-95"
+              className="flex min-h-11 flex-1 flex-col items-center gap-1 py-2 text-[11px] font-medium text-muted-foreground transition-colors active:scale-95"
             >
               <span className="flex size-9 items-center justify-center rounded-xl">
                 <LogOut className="size-5" />
