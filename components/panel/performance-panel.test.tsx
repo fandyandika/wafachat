@@ -49,6 +49,7 @@ test("shows the running summary and clipped monthly weeks", () => {
 
   expect(html).toContain('role="tablist"');
   expect(html).toContain('aria-selected="true"');
+  expect(html).toContain("min-h-11");
   expect(html).toContain("Ringkasan periode");
   expect(html).toContain("Rincian pekanan");
   expect(html).toContain("Berjalan");

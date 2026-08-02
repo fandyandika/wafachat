@@ -71,7 +71,7 @@ export default function PerformancePage() {
         <div className="min-w-0 flex-1">
           <p className="text-xs text-muted-foreground">Laporan evaluasi hanya dimuat saat diminta.</p>
         </div>
-        <Link href="/panel/queen" className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted">
+        <Link href="/panel/queen" className="inline-flex min-h-11 min-w-11 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted sm:min-h-9 sm:min-w-0">
           <Crown className="size-4 text-gold" /> Queen Recap
         </Link>
       </div>
@@ -87,9 +87,10 @@ export default function PerformancePage() {
               <button
                 key={value}
                 type="button"
+                aria-pressed={period === value}
                 onClick={() => setPeriod(value)}
                 className={cn(
-                  "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                  "min-h-11 min-w-11 rounded-md px-3 py-1.5 text-sm font-medium transition-colors sm:min-h-9 sm:min-w-0",
                   period === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
                 )}
               >
@@ -129,7 +130,7 @@ export default function PerformancePage() {
             <label className="space-y-1.5 text-xs font-medium text-muted-foreground">
               CS
               <Select value={csName || "__all"} onValueChange={(value) => setCsName(value === "__all" || !value ? "" : value)}>
-                <SelectTrigger className="h-9 w-full"><SelectValue>{csName || "Semua CS"}</SelectValue></SelectTrigger>
+                <SelectTrigger className="min-h-11 w-full sm:min-h-9"><SelectValue>{csName || "Semua CS"}</SelectValue></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__all">Semua CS</SelectItem>
                   {csList.map((cs) => <SelectItem key={cs.key} value={cs.csName}>{cs.csName.replace(/^CS\s+/i, "")}</SelectItem>)}
@@ -148,7 +149,7 @@ export default function PerformancePage() {
               )}
             </div>
           </div>
-          {validationError && <p className="text-sm text-destructive">{validationError}</p>}
+          {validationError && <p role="alert" className="text-sm text-destructive">{validationError}</p>}
         </CardContent>
       </Card>
 

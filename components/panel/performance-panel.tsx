@@ -69,7 +69,7 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
             aria-controls={`performance-panel-${value}`}
             onClick={() => setTab(value)}
             className={cn(
-              "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+              "min-h-11 min-w-11 rounded-md px-3 py-1.5 text-sm font-medium transition-colors sm:min-h-9 sm:min-w-0",
               tab === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -183,10 +183,13 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
               <CardTitle>Performa per produk</CardTitle>
               <CardDescription>Ringkas, tanpa grafik; urutkan sesuai kebutuhan evaluasi.</CardDescription>
             </div>
-            <select value={productSort} onChange={(event) => setProductSort(event.target.value as "closing" | "cr")} className="h-8 rounded-lg border border-input bg-background px-2 text-sm">
-              <option value="closing">Closing terbanyak</option>
-              <option value="cr">CR terendah</option>
-            </select>
+            <label className="space-y-1 text-xs font-medium text-muted-foreground">
+              <span>Urutkan produk</span>
+              <select aria-label="Urutkan produk" value={productSort} onChange={(event) => setProductSort(event.target.value as "closing" | "cr")} className="block min-h-11 rounded-lg border border-input bg-background px-2 text-sm text-foreground sm:min-h-8">
+                <option value="closing">Closing terbanyak</option>
+                <option value="cr">CR terendah</option>
+              </select>
+            </label>
           </CardHeader>
           <CardContent className="overflow-x-auto">
             <table className="w-full min-w-[820px] text-sm">
