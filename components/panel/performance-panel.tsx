@@ -9,6 +9,17 @@ import { cn } from "@/lib/utils";
 
 const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
 const pct = (value: number) => `${number.format(value)}%`;
+const tabs = [['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per produk']] as const;
+type PerformanceTab = typeof tabs[number][0];
+
+export function nextPerformanceTab(current: PerformanceTab, key: string): PerformanceTab | null {
+  const index = tabs.findIndex(([value]) => value === current);
+  if (key === "ArrowRight") return tabs[(index + 1) % tabs.length][0];
+  if (key === "ArrowLeft") return tabs[(index - 1 + tabs.length) % tabs.length][0];
+  if (key === "Home") return tabs[0][0];
+  if (key === "End") return tabs[tabs.length - 1][0];
+  return null;
+}
 
 function dateLabel(value: string): string {
   return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", timeZone: "UTC" })
@@ -38,14 +49,21 @@ function MetricCard({ label, value, delta }: { label: string; value: React.React
 }
 
 export function PerformancePanel({ report }: { report: PerformanceReport }) {
-  const [tab, setTab] = useState<"summary" | "cs" | "product">("summary");
+  const [tab, setTab] = useState<PerformanceTab>("summary");
   const [productSort, setProductSort] = useState<"closing" | "cr">("closing");
   const products = useMemo(() => [...report.products].sort((a, b) => productSort === "cr"
     ? a.cr - b.cr || b.closings - a.closings
     : b.closings - a.closings || a.product.localeCompare(b.product)), [productSort, report.products]);
   const s = report.summary;
-  const tabs = [['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per produk']] as const;
   const activePanelId = `performance-panel-${tab}`;
+
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, current: PerformanceTab) => {
+    const next = nextPerformanceTab(current, event.key);
+    if (!next) return;
+    event.preventDefault();
+    setTab(next);
+    event.currentTarget.ownerDocument.getElementById(`performance-tab-${next}`)?.focus();
+  };
 
   return (
     <div className="space-y-4">
@@ -67,7 +85,9 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
             role="tab"
             aria-selected={tab === value}
             aria-controls={`performance-panel-${value}`}
+            tabIndex={tab === value ? 0 : -1}
             onClick={() => setTab(value)}
+            onKeyDown={(event) => handleTabKeyDown(event, value)}
             className={cn(
               "min-h-11 min-w-11 rounded-md px-3 py-1.5 text-sm font-medium transition-colors sm:min-h-9 sm:min-w-0",
               tab === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",

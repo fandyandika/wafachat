@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import type { MetricRow, PerformanceReport } from "@/lib/performance-report";
-import { PerformancePanel } from "./performance-panel";
+import { nextPerformanceTab, PerformancePanel } from "./performance-panel";
 
 (globalThis as any).React = React;
 
@@ -49,6 +49,8 @@ test("shows the running summary and clipped monthly weeks", () => {
 
   expect(html).toContain('role="tablist"');
   expect(html).toContain('aria-selected="true"');
+  expect(html).toContain('tabindex="0"');
+  expect(html).toContain('tabindex="-1"');
   expect(html).toContain("min-h-11");
   expect(html).toContain("Ringkasan periode");
   expect(html).toContain("Rincian pekanan");
@@ -59,6 +61,17 @@ test("shows the running summary and clipped monthly weeks", () => {
   expect(html).toContain("1–2 Agu");
   expect(html).toContain("Pekan parsial");
   expect(html).toContain("31 Agu");
+});
+
+test.each([
+  ["summary", "ArrowRight", "cs"],
+  ["summary", "ArrowLeft", "product"],
+  ["product", "ArrowRight", "summary"],
+  ["cs", "Home", "summary"],
+  ["cs", "End", "product"],
+  ["summary", "Enter", null],
+] as const)("moves from %s with %s to %s", (current, key, expected) => {
+  expect(nextPerformanceTab(current, key)).toBe(expected);
 });
 
 test("keeps core metrics visible when response samples are limited", () => {

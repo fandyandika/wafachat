@@ -33,6 +33,7 @@ test("performance stays idle until the owner submits a period", () => {
   expect(html).toContain('aria-label="Filter laporan kinerja"');
   expect(html).toContain('aria-pressed="true"');
   expect(html).toContain("min-h-11");
+  expect(html).toContain('type="date" class="min-h-11');
   expect(html).not.toContain("<h1");
   expect(html).toContain("Pilih periode lalu tampilkan laporan");
   expect(html).toContain("Semua CS");
