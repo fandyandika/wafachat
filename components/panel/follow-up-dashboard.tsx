@@ -801,19 +801,21 @@ export function FollowUpDashboard() {
       {/* Controls — compact; hidden on mobile while a chat is open (WhatsApp behavior) */}
       <div role="toolbar" aria-label="Kontrol follow-up" className={`shrink-0 space-y-2 border-b border-border bg-card p-2.5 ${showConvOnMobile ? 'hidden md:block' : ''}`}>
         <div className="flex gap-2">
-          <label className="sr-only" htmlFor="follow-up-search">Cari customer</label>
-          <input
-            id="follow-up-search"
-            type="text"
-            placeholder="Cari nama/nomor…"
-            aria-label="Cari customer"
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setSelectedId(null);
-            }}
-            className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground"
-          />
+          <div className="min-w-0 flex-1">
+            <label htmlFor="follow-up-search" className="text-xs font-medium text-muted-foreground">Cari customer</label>
+            <input
+              id="follow-up-search"
+              type="text"
+              placeholder="Cari nama/nomor…"
+              aria-label="Cari customer"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSelectedId(null);
+              }}
+              className="mt-1 min-h-11 w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground sm:min-h-9"
+            />
+          </div>
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as 'oldest' | 'newest')}
@@ -864,7 +866,7 @@ export function FollowUpDashboard() {
                 aria-selected={activeTab === t.key}
                 aria-controls="follow-up-queue"
                 onClick={() => switchTab(t.key)}
-                className={`shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium transition-colors ${
+                  className={`inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium transition-colors sm:min-h-9 ${
                   activeTab === t.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent'
                 }`}
               >
