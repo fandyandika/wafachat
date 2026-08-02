@@ -10,6 +10,8 @@ import LoginPage from "./page";
 test("login presents a labelled Wafachat sign-in form", () => {
   const html = renderToStaticMarkup(<LoginPage />);
 
+  expect((html.match(/<h1\b/g) ?? [])).toHaveLength(1);
+  expect(html).toMatch(/<h1[^>]*>Masuk ke Wafachat<\/h1>/);
   expect(html).toContain("Masuk ke Wafachat");
   expect(html).toContain('for="email"');
   expect(html).toContain('for="password"');

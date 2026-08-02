@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -54,7 +54,7 @@ export default function LoginPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Masuk ke Wafachat</CardTitle>
+            <h1 className="font-heading text-base font-semibold leading-snug tracking-tight">Masuk ke Wafachat</h1>
             <CardDescription>Masuk untuk melanjutkan ke panel operasional.</CardDescription>
           </CardHeader>
           <CardContent>
