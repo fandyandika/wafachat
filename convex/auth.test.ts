@@ -3,6 +3,8 @@ import { beforeEach, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
+const modules = (import.meta as any).glob("./**/*.{ts,js}");
+
 const SECRET = "test-auth-secret";
 beforeEach(() => {
   process.env.PANEL_AUTH_SECRET = SECRET;
@@ -23,7 +25,7 @@ test("seedFirstAdmin creates an admin only when the table is empty", async () =>
 });
 
 test("verifyCredentials: correct password ok; wrong/inactive/unknown not ok", async () => {
-  const t = convexTest(schema);
+  const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
   await asAdmin.mutation(api.auth.seedFirstAdmin, { authSecret: SECRET, email: "owner@x.com", name: "Owner", password: "ownerpw" });
@@ -33,6 +35,7 @@ test("verifyCredentials: correct password ok; wrong/inactive/unknown not ok", as
   expect(good.ok).toBe(true);
   expect(good.role).toBe("cs");
   expect(good.name).toBe("Risma");
+  expect(good.orgName).toBe("Pustaka Islam");
 
   expect((await asAdmin.mutation(api.auth.verifyCredentials, { authSecret: SECRET, email: "risma@x.com", password: "nope" })).ok).toBe(false);
   expect((await asAdmin.mutation(api.auth.verifyCredentials, { authSecret: SECRET, email: "ghost@x.com", password: "x" })).ok).toBe(false);

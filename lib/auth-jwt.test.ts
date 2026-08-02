@@ -30,12 +30,21 @@ test("routeGuard: unauth -> /login; cs scoped to Laporan+Follow-up; admin full",
   expect(routeGuard("/", null).redirect).toBe("/login");
 });
 
-test("signSession round-trips orgId; old token without orgId stays valid", async () => {
-  const withOrg = await signSession({ userId: "u1", role: "admin", name: "A", email: "a@t.co", orgId: "org123" });
+test("signSession round-trips organization context; old token without it stays valid", async () => {
+  const withOrg = await signSession({
+    userId: "u1",
+    role: "admin",
+    name: "A",
+    email: "a@t.co",
+    orgId: "org123",
+    orgName: "Pustaka Islam",
+  });
   const s1 = await verifySession(withOrg);
   expect(s1?.orgId).toBe("org123");
+  expect(s1?.orgName).toBe("Pustaka Islam");
   const withoutOrg = await signSession({ userId: "u2", role: "cs", name: "B", email: "b@t.co", csName: "B" });
   const s2 = await verifySession(withoutOrg);
   expect(s2).not.toBeNull();      // backward compat: absence is NOT invalid
   expect(s2?.orgId).toBeUndefined();
+  expect(s2?.orgName).toBeUndefined();
 });

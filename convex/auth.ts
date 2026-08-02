@@ -22,7 +22,17 @@ export const verifyCredentials = mutation({
     if (!user || !user.isActive) return { ok: false as const };
     if (!(await verifyPassword(args.password, user.passwordHash))) return { ok: false as const };
     await ctx.db.patch(user._id, { lastLoginAt: Date.now() });
-    return { ok: true as const, userId: user._id, role: user.role, name: user.name, email: user.email, csName: user.csName, orgId: String(user.orgId) };
+    const org = await ctx.db.get(user.orgId);
+    return {
+      ok: true as const,
+      userId: user._id,
+      role: user.role,
+      name: user.name,
+      email: user.email,
+      csName: user.csName,
+      orgId: String(user.orgId),
+      orgName: org?.name,
+    };
   },
 });
 
