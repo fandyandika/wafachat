@@ -34,6 +34,8 @@ The redesign must feel materially different from the current interface rather th
 
 Owner and CS use one coherent application shell. Navigation, route authorization, organization context, and account behavior remain shared. The home content changes according to the authenticated role and existing permissions.
 
+CS currently redirects away from `/panel`; Phase 1 intentionally changes that single route permission so a CS can reach the new CS Home. Performance, Queen, and Settings remain admin-only, and every Dashboard read for a CS must be scoped server-side to the CS identity assigned to that account.
+
 The shell contains:
 
 - a clear Wafachat identity;
@@ -75,6 +77,7 @@ Only data and actions permitted for that CS are rendered.
 - CS filters appear only where the data source supports per-CS analysis.
 - Existing 16:00 business cutoff semantics remain unchanged and are stated in plain language where relevant.
 - Refresh uses the existing mechanism. The redesign adds no polling interval, realtime subscription, or presentation-only query.
+- CS queue counts may use one manual-refreshable call to the existing bounded follow-up-candidates query; it must not load the follow-up effectiveness query or start a subscription.
 
 ## Interaction and state behavior
 
@@ -178,7 +181,8 @@ This phase is the proof of the new visual world. It must look materially differe
 
 ## Data and backend boundaries
 
-- No database schema, webhook, ingest, notification, deduplication, reconciliation, cutoff, Queen, report-formula, tenant-isolation, or permission change is authorized by this redesign.
+- No database schema, webhook, ingest, notification, deduplication, reconciliation, cutoff, Queen, report-formula, or tenant-isolation change is authorized by this redesign.
+- The sole route-permission change is CS access to `/panel`. Server-side CS-name scoping is mandatory for every query used by that page; no broader access is granted.
 - Reuse existing queries, snapshots, roles, permissions, components, and installed dependencies before adding code.
 - Presentation-only needs must be derived from existing results when practical.
 - Performance and Queen remain on-demand.
