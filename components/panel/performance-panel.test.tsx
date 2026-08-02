@@ -56,6 +56,8 @@ test("shows the running summary and clipped monthly weeks", () => {
   expect(html).toContain("Rincian pekanan");
   expect(html).toContain("Berjalan");
   expect(html).toContain("67,2%");
+  expect(html).toContain("↑ 3,1%");
+  expect(html).toContain("↑ Rp500.000");
   expect(html).toContain("COD 60%");
   expect(html).toContain("Transfer 40%");
   expect(html).toContain("1–2 Agu");

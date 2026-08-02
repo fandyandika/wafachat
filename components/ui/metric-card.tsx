@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils"
 
 type MetricTone = "default" | "lead" | "positive" | "negative" | "amber"
 
+const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 })
+
 const toneChip: Record<MetricTone, string> = {
   default: "bg-primary/10 text-primary",
   lead: "bg-lead-soft text-lead",
@@ -71,19 +73,29 @@ function MetricCard({
 }
 
 /** Compact colored delta pill (↑/↓ + value). Tone derives from sign unless inverted. */
-function DeltaPill({ value, suffix = "", invert = false }: { value: number; suffix?: string; invert?: boolean }) {
+function DeltaPill({
+  value,
+  suffix = "",
+  invert = false,
+  format = (delta) => number.format(delta),
+}: {
+  value: number
+  suffix?: string
+  invert?: boolean
+  format?: (value: number) => string
+}) {
   if (!value) return <span className="text-muted-foreground">—</span>
   const good = invert ? value < 0 : value > 0
+  const label = `${format(Math.abs(value))}${suffix}`
   return (
     <span
+      aria-label={`${value > 0 ? "Naik" : "Turun"} ${label} dibanding periode sebelumnya`}
       className={cn(
         "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium tabular-nums",
         good ? "bg-positive-soft text-positive" : "bg-negative-soft text-negative",
       )}
     >
-      {value > 0 ? "↑" : "↓"}
-      {Math.abs(value)}
-      {suffix}
+      {value > 0 ? "↑" : "↓"} {label}
     </span>
   )
 }
