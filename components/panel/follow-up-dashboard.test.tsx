@@ -16,6 +16,7 @@ test("follow-up exposes queue navigation and labelled search", () => {
   expect(html).toContain('aria-label="Cari customer"');
   expect(html).toContain('<label for="follow-up-search" class="text-xs font-medium text-muted-foreground">Cari customer</label>');
   expect(html).toContain('min-h-11');
+  expect(html).toContain('transition-colors md:min-h-9');
   expect(html).toContain("Semua");
   expect(html).toContain("Arsip");
 });

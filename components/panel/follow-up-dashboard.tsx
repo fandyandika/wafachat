@@ -866,7 +866,7 @@ export function FollowUpDashboard() {
                 aria-selected={activeTab === t.key}
                 aria-controls="follow-up-queue"
                 onClick={() => switchTab(t.key)}
-                  className={`inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium transition-colors sm:min-h-9 ${
+                  className={`inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium transition-colors md:min-h-9 ${
                   activeTab === t.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent'
                 }`}
               >
