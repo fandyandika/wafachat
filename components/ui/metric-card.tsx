@@ -59,7 +59,7 @@ function MetricCard({
           </span>
         ) : null}
       </div>
-      <div className="text-[1.75rem] font-semibold leading-none tracking-tight tabular-nums text-foreground">
+      <div className="text-3xl font-semibold leading-none tracking-tight tabular-nums text-foreground">
         {value}
       </div>
       {hint || delta ? (
@@ -91,7 +91,7 @@ function DeltaPill({
     <span
       aria-label={`${value > 0 ? "Naik" : "Turun"} ${label} dibanding periode sebelumnya`}
       className={cn(
-        "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-medium tabular-nums",
+        "inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-xs font-medium tabular-nums",
         good ? "bg-positive-soft text-positive" : "bg-negative-soft text-negative",
       )}
     >

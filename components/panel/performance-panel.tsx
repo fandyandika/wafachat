@@ -44,7 +44,7 @@ function MetricCard({ label, value, delta, deltaFormat }: {
 }) {
   return (
     <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-1 flex items-center gap-2 text-xl font-semibold tabular-nums">
         <span>{value}</span>
         {delta !== undefined && <DeltaPill value={delta} format={deltaFormat} />}
