@@ -18,7 +18,7 @@ const NAV = [
 
 export function navItemsForRole(role: 'admin' | 'cs' | undefined) {
   if (role !== 'cs') return NAV;
-  return NAV.filter((item) => item.href === '/panel/laporan' || item.href === '/panel/follow-up');
+  return NAV.filter((item) => item.href === '/panel' || item.href === '/panel/laporan' || item.href === '/panel/follow-up');
 }
 
 function PanelShell({ children }: { children: React.ReactNode }) {

@@ -46,7 +46,7 @@ export function routeGuard(pathname: string, session: Session | null): { redirec
     // Settings (hides total-business figures like omzet and the heaviest reads). Anything else
     // redirects to Laporan. Admins fall through with full access.
     if (session.role === "cs") {
-      const allowed = pathname.startsWith("/panel/laporan") || pathname.startsWith("/panel/follow-up");
+      const allowed = pathname === "/panel" || pathname.startsWith("/panel/laporan") || pathname.startsWith("/panel/follow-up");
       return { redirect: allowed ? null : "/panel/laporan" };
     }
   }
