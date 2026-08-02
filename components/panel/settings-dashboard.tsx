@@ -1,17 +1,48 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { useMutation, useQuery } from 'convex/react';
-import { Upload, Trash2, Zap, MessageSquare, TrendingUp, Power, LogOut, Pencil } from 'lucide-react';
-import { api } from '@/convex/_generated/api';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { CsAvatar } from '@/components/ui/cs-avatar';
-import { Switch } from '@/components/ui/switch';
-import { resizeImage } from '@/lib/resize-image';
-import { cn } from '@/lib/utils';
-import type { Doc } from '@/convex/_generated/dataModel';
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useMutation, useQuery } from "convex/react";
+import {
+  LogOut,
+  MessageSquare,
+  Pencil,
+  Power,
+  Trash2,
+  TrendingUp,
+  Upload,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
+import { api } from "@/convex/_generated/api";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CsAvatar } from "@/components/ui/cs-avatar";
+import { Switch } from "@/components/ui/switch";
+import { resizeImage } from "@/lib/resize-image";
+import { cn } from "@/lib/utils";
+
+export type SettingsSection = "account" | "organization" | "team" | "cs";
+const SETTINGS_SECTIONS: Array<{ value: SettingsSection; label: string }> = [
+  { value: "account", label: "Akun" },
+  { value: "organization", label: "Organisasi" },
+  { value: "team", label: "Tim" },
+  { value: "cs", label: "Konfigurasi CS" },
+];
+
+export function settingsSectionsForRole(role: "admin" | "cs" | null) {
+  return role === "admin" ? SETTINGS_SECTIONS : SETTINGS_SECTIONS.slice(0, 1);
+}
 
 type CsRow = {
   csName: string;
@@ -27,180 +58,648 @@ type CsRow = {
   key: string;
 };
 
+const CS_TOGGLES: Array<{
+  icon: LucideIcon;
+  label: string;
+  field: keyof Pick<
+    CsRow,
+    | "orderAutomationEnabled"
+    | "aiAssistantEnabled"
+    | "reportingEnabled"
+    | "autoFollowUpEnabled"
+    | "isActive"
+  >;
+}> = [
+  { icon: Zap, label: "Otomasi Order", field: "orderAutomationEnabled" },
+  { icon: MessageSquare, label: "AI Assistant", field: "aiAssistantEnabled" },
+  { icon: TrendingUp, label: "Reporting", field: "reportingEnabled" },
+  {
+    icon: MessageSquare,
+    label: "Auto Follow-up",
+    field: "autoFollowUpEnabled",
+  },
+  { icon: Power, label: "Aktif", field: "isActive" },
+];
+
+function Failure({ children }: { children: string | null }) {
+  return children ? (
+    <div
+      role="alert"
+      className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive"
+    >
+      {children}
+    </div>
+  ) : null;
+}
+
 function OrgSection() {
   const org = useQuery(api.orgSettings.get, {});
   const update = useMutation(api.orgSettings.update);
-  const [name, setName] = useState('');
-  const [newPhone, setNewPhone] = useState('');
+  const [name, setName] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+  const [removingPhone, setRemovingPhone] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { if (org) setName(org.orgName); }, [org]);
+  useEffect(() => {
+    if (org) setName(org.orgName);
+  }, [org]);
 
   async function save(patch: { orgName?: string; internalPhones?: string[] }) {
-    setBusy(true); setErr(null);
-    try { await update(patch); } catch (e) { setErr(e instanceof Error ? e.message : 'Gagal menyimpan'); }
-    setBusy(false);
+    setBusy(true);
+    setErr(null);
+    try {
+      await update(patch);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Gagal menyimpan");
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!org) return null;
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">Organisasi</CardTitle></CardHeader>
-      <CardContent className="space-y-4">
-        {err && <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{err}</div>}
-        <div className="flex flex-wrap items-center gap-2">
-          <input className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Nama organisasi" value={name} onChange={(e) => setName(e.target.value)} />
-          <Button size="sm" disabled={busy || !name.trim() || name.trim() === org.orgName} onClick={() => save({ orgName: name.trim() })}>Simpan nama</Button>
-        </div>
-        <div className="space-y-2 border-t border-border pt-4">
-          <div className="text-sm font-medium text-foreground">Nomor internal (dikecualikan dari metrik)</div>
-          <p className="text-xs text-muted-foreground">Nomor owner/admin/line CS — order & closing dari nomor ini tidak dihitung leads/omzet.</p>
-          <div className="flex flex-wrap gap-1.5">
-            {org.internalPhones.map((p) => (
-              <span key={p} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 font-mono text-xs">
-                {p}
-                <button className="text-muted-foreground hover:text-destructive" disabled={busy} aria-label={`Hapus ${p}`}
-                  onClick={() => { if (confirm(`Hapus ${p} dari daftar internal? Nomor ini akan mulai DIHITUNG di metrik.`)) save({ internalPhones: org.internalPhones.filter((x) => x !== p) }); }}>
-                  ×
-                </button>
-              </span>
-            ))}
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Organisasi</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Failure>{err}</Failure>
+          <div className="space-y-1.5">
+            <label htmlFor="organization-name" className="text-sm font-medium">
+              Nama organisasi
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                id="organization-name"
+                className="min-h-11 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+              />
+              <Button
+                size="sm"
+                disabled={busy || !name.trim() || name.trim() === org.orgName}
+                onClick={() => save({ orgName: name.trim() })}
+              >
+                Simpan nama
+              </Button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <input className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm" placeholder="08xxx / 62xxx" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} />
-            <Button size="sm" variant="outline" disabled={busy || !newPhone.trim()} onClick={async () => { await save({ internalPhones: [...org.internalPhones, newPhone.trim()] }); setNewPhone(''); }}>Tambah</Button>
+          <div className="space-y-2 border-t border-border pt-4">
+            <label htmlFor="internal-phone" className="text-sm font-medium">
+              Nomor internal
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Nomor owner/admin/line CS tidak dihitung dalam metrik lead dan
+              omzet.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {org.internalPhones.map((phone) => (
+                <span
+                  key={phone}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 font-mono text-xs"
+                >
+                  {phone}
+                  <button
+                    type="button"
+                    className="inline-flex size-11 items-center justify-center text-muted-foreground hover:text-destructive sm:size-7"
+                    disabled={busy}
+                    aria-label={`Hapus ${phone}`}
+                    onClick={() => setRemovingPhone(phone)}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                id="internal-phone"
+                className="min-h-11 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 font-mono text-sm sm:min-h-9"
+                placeholder="08xxx / 62xxx"
+                value={newPhone}
+                onChange={(event) => setNewPhone(event.target.value)}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || !newPhone.trim()}
+                onClick={async () => {
+                  await save({
+                    internalPhones: [...org.internalPhones, newPhone.trim()],
+                  });
+                  setNewPhone("");
+                }}
+              >
+                Tambah
+              </Button>
+            </div>
           </div>
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+      <AlertDialog
+        open={Boolean(removingPhone)}
+        onOpenChange={(open) => {
+          if (!open) setRemovingPhone(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus nomor internal?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Nomor ini akan mulai dihitung dalam metrik setelah dihapus.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={busy}
+              onClick={() => {
+                if (removingPhone)
+                  void save({
+                    internalPhones: org.internalPhones.filter(
+                      (phone) => phone !== removingPhone,
+                    ),
+                  });
+                setRemovingPhone(null);
+              }}
+            >
+              Hapus nomor
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
-function BerduStaffIdsField({ csName, initial, disabled }: { csName: string; initial: string[]; disabled: boolean }) {
-  const setIds = useMutation(api.csConfigs.setBerduStaffIds);
-  const [value, setValue] = useState(initial.join(', '));
+function CsvField({
+  csName,
+  initial,
+  disabled,
+  label,
+  placeholder,
+  save,
+}: {
+  csName: string;
+  initial: string[];
+  disabled: boolean;
+  label: string;
+  placeholder: string;
+  save: (value: string[]) => Promise<unknown>;
+}) {
+  const [value, setValue] = useState(initial.join(", "));
   const [busy, setBusy] = useState(false);
-  useEffect(() => { setValue(initial.join(', ')); }, [initial]);
-  const parsed = value.split(',').map((s) => s.trim()).filter(Boolean);
-  const dirty = parsed.join(',') !== initial.join(',');
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => setValue(initial.join(", ")), [initial]);
+  const parsed = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const dirty = parsed.join(",") !== initial.join(",");
+  const id = `${label}-${csName}`;
   return (
     <div className="rounded-lg bg-muted/40 px-3 py-2">
-      <div className="text-xs font-medium text-muted-foreground">Berdu Staff ID</div>
+      <label htmlFor={id} className="text-xs font-medium text-muted-foreground">
+        {label}
+      </label>
       <div className="mt-1 flex gap-2">
-        <input className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 font-mono text-xs" placeholder="B-xxxxx, B-yyyyy" value={value} disabled={disabled || busy} onChange={(e) => setValue(e.target.value)} />
+        <input
+          id={id}
+          className="min-h-11 min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs sm:min-h-7"
+          placeholder={placeholder}
+          value={value}
+          disabled={disabled || busy}
+          onChange={(event) => setValue(event.target.value)}
+        />
         {dirty && (
-          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={disabled || busy}
-            onClick={async () => { setBusy(true); try { await setIds({ csName, berduStaffIds: parsed }); } catch (e) { alert(e instanceof Error ? e.message : 'Gagal'); setValue(initial.join(', ')); } setBusy(false); }}>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs"
+            disabled={disabled || busy}
+            onClick={async () => {
+              setBusy(true);
+              setErr(null);
+              try {
+                await save(parsed);
+              } catch (error) {
+                setErr(
+                  error instanceof Error ? error.message : "Gagal menyimpan",
+                );
+                setValue(initial.join(", "));
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
             Simpan
           </Button>
         )}
       </div>
+      <Failure>{err}</Failure>
     </div>
   );
 }
 
-function NameAliasesField({ csName, initial, disabled }: { csName: string; initial: string[]; disabled: boolean }) {
-  const setAliases = useMutation(api.agents.setNameAliases);
-  const [value, setValue] = useState(initial.join(', '));
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { setValue(initial.join(', ')); }, [initial]);
-  const parsed = value.split(',').map((s) => s.trim()).filter(Boolean);
-  const dirty = parsed.join(',') !== initial.join(',');
-  return (
-    <div className="rounded-lg bg-muted/40 px-3 py-2">
-      <div className="text-xs font-medium text-muted-foreground">Alias nama (bentuk lain yang dikenali)</div>
-      <div className="mt-1 flex gap-2">
-        <input className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs" placeholder="CS Aisyah, Kak Aisyah" value={value} disabled={disabled || busy} onChange={(e) => setValue(e.target.value)} />
-        {dirty && (
-          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={disabled || busy}
-            onClick={async () => { setBusy(true); try { await setAliases({ csName, nameAliases: parsed }); } catch (e) { alert(e instanceof Error ? e.message : 'Gagal'); setValue(initial.join(', ')); } setBusy(false); }}>
-            Simpan
-          </Button>
-        )}
-      </div>
-    </div>
-  );
+type TeamUser = {
+  email: string;
+  name: string;
+  role: "admin" | "cs";
+  csName?: string;
+  isActive: boolean;
+};
+
+async function responseError(response: Response, fallback: string) {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === "string" && body.error ? body.error : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+export async function loadTeamUsers(fetcher: typeof fetch = fetch) {
+  const response = await fetcher("/api/admin/users");
+  if (!response.ok) throw new Error(await responseError(response, "Gagal memuat tim"));
+  const body = (await response.json()) as { users?: unknown };
+  if (!Array.isArray(body.users)) throw new Error("Respons data tim tidak valid");
+  return body.users as TeamUser[];
+}
+
+export async function postTeamUser(
+  payload: Record<string, unknown>,
+  fetcher: typeof fetch = fetch,
+) {
+  const response = await fetcher("/api/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(await responseError(response, "Gagal menyimpan user"));
+  return loadTeamUsers(fetcher);
 }
 
 function TeamSection() {
-  const [users, setUsers] = useState<Array<{ email: string; name: string; role: 'admin' | 'cs'; csName?: string; isActive: boolean }>>([]);
-  const [form, setForm] = useState<{ email: string; name: string; role: 'admin' | 'cs'; password: string; csName: string }>({ email: '', name: '', role: 'cs', password: '', csName: '' });
+  const [users, setUsers] = useState<TeamUser[]>([]);
+  const [form, setForm] = useState({
+    email: "",
+    name: "",
+    role: "cs" as "admin" | "cs",
+    password: "",
+    csName: "",
+  });
+  const [editing, setEditing] = useState<{
+    email: string;
+    action: "rename" | "reset";
+    value: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const csOptions = (useQuery(api.cs.listCs, {}) ?? []).map((c) => c.csName);
-
+  const csOptions = (useQuery(api.cs.listCs, {}) ?? []).map((cs) => cs.csName);
   async function load() {
-    const r = await fetch('/api/admin/users');
-    if (r.ok) setUsers((await r.json()).users);
+    setErr(null);
+    try {
+      setUsers(await loadTeamUsers());
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Gagal memuat tim");
+    }
   }
-  useEffect(() => { load(); }, []);
-
+  useEffect(() => {
+    void load();
+  }, []);
   async function post(payload: Record<string, unknown>) {
-    setBusy(true); setErr(null);
-    const r = await fetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    setBusy(false);
-    if (!r.ok) { setErr((await r.json()).error || 'Gagal'); return false; }
-    await load();
-    return true;
+    setBusy(true);
+    setErr(null);
+    try {
+      setUsers(await postTeamUser(payload));
+      return true;
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Gagal menyimpan user");
+      return false;
+    } finally {
+      setBusy(false);
+    }
   }
   async function addUser() {
-    if (!form.email || !form.name || !form.password) { setErr('Lengkapi semua field'); return; }
-    if (form.role === 'cs' && !form.csName) { setErr('Pilih CS untuk akun ini'); return; }
-    if (await post({ action: 'create', ...form })) setForm({ email: '', name: '', role: 'cs', password: '', csName: '' });
+    if (!form.email || !form.name || !form.password) {
+      setErr("Lengkapi semua field");
+      return;
+    }
+    if (form.role === "cs" && !form.csName) {
+      setErr("Pilih CS untuk akun ini");
+      return;
+    }
+    if (await post({ action: "create", ...form }))
+      setForm({ email: "", name: "", role: "cs", password: "", csName: "" });
   }
-
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-base">Tim</CardTitle></CardHeader>
-      <CardContent className="space-y-4">
-        {err && <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">{err}</div>}
-        <div className="space-y-2">
-          {users.map((u) => (
-            <div key={u.email} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-foreground">
-                  {u.name} <span className="text-xs text-muted-foreground">({u.role})</span>
-                  {u.role === 'cs' && (
-                    <span className={cn('ml-1 text-xs', u.csName ? 'text-primary' : 'text-amber-600')}>· {u.csName ? `CS ${u.csName}` : 'belum di-assign'}</span>
-                  )}
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Tim</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Failure>{err}</Failure>
+          <div className="space-y-2">
+            {users.map((user) => (
+              <div
+                key={user.email}
+                className="rounded-lg border border-border px-3 py-2"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">
+                      {user.name}{" "}
+                      <span className="text-xs text-muted-foreground">
+                        ({user.role})
+                      </span>
+                      {user.role === "cs" && (
+                        <span
+                          className={cn(
+                            "ml-1 text-xs",
+                            user.csName ? "text-primary" : "text-amber-600",
+                          )}
+                        >
+                          ·{" "}
+                          {user.csName
+                            ? `CS ${user.csName}`
+                            : "belum di-assign"}
+                        </span>
+                      )}
+                    </div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {user.email}
+                      {!user.isActive && " — nonaktif"}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                    {user.role === "cs" && (
+                      <>
+                        <label
+                          htmlFor={`assign-${user.email}`}
+                          className="sr-only"
+                        >
+                          Assign CS untuk {user.email}
+                        </label>
+                        <select
+                          id={`assign-${user.email}`}
+                          className="min-h-11 rounded-md border border-input bg-background px-2 py-1 text-xs sm:min-h-7"
+                          value={user.csName ?? ""}
+                          disabled={busy}
+                          onChange={(event) =>
+                            void post({
+                              action: "update",
+                              email: user.email,
+                              csName: event.target.value,
+                            })
+                          }
+                        >
+                          <option value="">— pilih CS —</option>
+                          {csOptions.map((name) => (
+                            <option key={name} value={name}>
+                              {name}
+                            </option>
+                          ))}
+                        </select>
+                      </>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() =>
+                        setEditing({
+                          email: user.email,
+                          action: "rename",
+                          value: user.name,
+                        })
+                      }
+                    >
+                      Rename
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() =>
+                        setEditing({
+                          email: user.email,
+                          action: "reset",
+                          value: "",
+                        })
+                      }
+                    >
+                      Reset
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() =>
+                        void post({
+                          action: "setActive",
+                          email: user.email,
+                          isActive: !user.isActive,
+                        })
+                      }
+                    >
+                      {user.isActive ? "Nonaktifkan" : "Aktifkan"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => setDeleting(user.email)}
+                    >
+                      Hapus
+                    </Button>
+                  </div>
                 </div>
-                <div className="truncate text-xs text-muted-foreground">{u.email}{!u.isActive && ' — nonaktif'}</div>
-              </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-                {u.role === 'cs' && (
-                  <select className="rounded-md border border-input bg-background px-2 py-1 text-xs" value={u.csName ?? ''} disabled={busy} onChange={(e) => post({ action: 'update', email: u.email, csName: e.target.value })} title="Assign akun ini ke CS tertentu">
-                    <option value="">— pilih CS —</option>
-                    {csOptions.map((name) => <option key={name} value={name}>{name}</option>)}
-                  </select>
+                {editing?.email === user.email && (
+                  <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-border pt-3">
+                    <div className="min-w-48 flex-1 space-y-1">
+                      <label
+                        htmlFor={`edit-${user.email}`}
+                        className="text-xs font-medium"
+                      >
+                        {editing.action === "rename"
+                          ? "Nama baru"
+                          : "Password baru"}
+                      </label>
+                      <input
+                        id={`edit-${user.email}`}
+                        type={editing.action === "reset" ? "password" : "text"}
+                        className="min-h-11 w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm sm:min-h-9"
+                        value={editing.value}
+                        onChange={(event) =>
+                          setEditing({ ...editing, value: event.target.value })
+                        }
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      disabled={busy || !editing.value.trim()}
+                      onClick={async () => {
+                        const ok = await post(
+                          editing.action === "rename"
+                            ? {
+                                action: "update",
+                                email: user.email,
+                                name: editing.value.trim(),
+                              }
+                            : {
+                                action: "reset",
+                                email: user.email,
+                                password: editing.value,
+                              },
+                        );
+                        if (ok) setEditing(null);
+                      }}
+                    >
+                      Simpan
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => setEditing(null)}
+                    >
+                      Batal
+                    </Button>
+                  </div>
                 )}
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => { const n = prompt(`Nama baru untuk ${u.email}`, u.name); if (n && n.trim()) post({ action: 'update', email: u.email, name: n.trim() }); }}>Rename</Button>
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => { const p = prompt(`Password baru untuk ${u.email}`); if (p) post({ action: 'reset', email: u.email, password: p }); }}>Reset</Button>
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => post({ action: 'setActive', email: u.email, isActive: !u.isActive })}>{u.isActive ? 'Nonaktifkan' : 'Aktifkan'}</Button>
-                <Button variant="outline" size="sm" disabled={busy} className="text-destructive hover:text-destructive" onClick={() => { if (confirm(`Hapus user ${u.email}? Tidak bisa dibatalkan.`)) post({ action: 'delete', email: u.email }); }}>Hapus</Button>
               </div>
+            ))}
+          </div>
+          <div className="grid gap-2 border-t border-border pt-4 sm:grid-cols-2">
+            <div className="space-y-1">
+              <label htmlFor="new-user-name" className="text-sm font-medium">
+                Nama
+              </label>
+              <input
+                id="new-user-name"
+                className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
+                value={form.name}
+                onChange={(event) =>
+                  setForm({ ...form, name: event.target.value })
+                }
+              />
             </div>
-          ))}
-        </div>
-        <div className="grid gap-2 border-t border-border pt-4 sm:grid-cols-2">
-          <input className="rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Nama" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          <input className="rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-          <select className="rounded-lg border border-input bg-background px-3 py-2 text-sm" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as 'admin' | 'cs' })}>
-            <option value="cs">CS</option>
-            <option value="admin">Admin</option>
-          </select>
-          {form.role === 'cs' ? (
-            <select className="rounded-lg border border-input bg-background px-3 py-2 text-sm" value={form.csName} onChange={(e) => setForm({ ...form, csName: e.target.value })} title="Akun ini cuma bisa liat CS ini">
-              <option value="">— assign ke CS —</option>
-              {csOptions.map((name) => <option key={name} value={name}>{name}</option>)}
-            </select>
-          ) : (
-            <div />
-          )}
-          <input className="rounded-lg border border-input bg-background px-3 py-2 text-sm" placeholder="Password awal" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-          <Button disabled={busy} onClick={addUser} className="sm:col-span-2">Tambah user</Button>
-        </div>
-      </CardContent>
-    </Card>
+            <div className="space-y-1">
+              <label htmlFor="new-user-email" className="text-sm font-medium">
+                Email
+              </label>
+              <input
+                id="new-user-email"
+                type="email"
+                className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
+                value={form.email}
+                onChange={(event) =>
+                  setForm({ ...form, email: event.target.value })
+                }
+              />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="new-user-role" className="text-sm font-medium">
+                Peran
+              </label>
+              <select
+                id="new-user-role"
+                className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
+                value={form.role}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    role: event.target.value as "admin" | "cs",
+                  })
+                }
+              >
+                <option value="cs">CS</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            {form.role === "cs" && (
+              <div className="space-y-1">
+                <label htmlFor="new-user-cs" className="text-sm font-medium">
+                  CS
+                </label>
+                <select
+                  id="new-user-cs"
+                  className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
+                  value={form.csName}
+                  onChange={(event) =>
+                    setForm({ ...form, csName: event.target.value })
+                  }
+                >
+                  <option value="">— assign ke CS —</option>
+                  {csOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="space-y-1">
+              <label
+                htmlFor="new-user-password"
+                className="text-sm font-medium"
+              >
+                Password awal
+              </label>
+              <input
+                id="new-user-password"
+                type="password"
+                className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
+                value={form.password}
+                onChange={(event) =>
+                  setForm({ ...form, password: event.target.value })
+                }
+              />
+            </div>
+            <Button
+              disabled={busy}
+              onClick={() => void addUser()}
+              className="sm:col-span-2"
+            >
+              Tambah user
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+      <AlertDialog
+        open={Boolean(deleting)}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus user?</AlertDialogTitle>
+            <AlertDialogDescription>
+              User yang dihapus tidak dapat dipulihkan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={busy}
+              onClick={() => {
+                if (deleting) void post({ action: "delete", email: deleting });
+                setDeleting(null);
+              }}
+            >
+              Hapus user
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -213,286 +712,392 @@ export function SettingsDashboard() {
   const upsert = useMutation(api.csConfigs.upsert);
   const renameCs = useMutation(api.csConfigs.renameCs);
   const deleteCsConfig = useMutation(api.csConfigs.deleteCsConfig);
-
+  const setBerduStaffIds = useMutation(api.csConfigs.setBerduStaffIds);
+  const setNameAliases = useMutation(api.agents.setNameAliases);
+  const [section, setSection] = useState<SettingsSection>("account");
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs' } | null>(null);
+  const [renaming, setRenaming] = useState<{
+    name: string;
+    value: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [me, setMe] = useState<{ name: string; role: "admin" | "cs" } | null>(
+    null,
+  );
   useEffect(() => {
-    fetch('/api/me').then((r) => (r.ok ? r.json() : null)).then(setMe).catch(() => setMe(null));
+    fetch("/api/me")
+      .then((response) => (response.ok ? response.json() : null))
+      .then(setMe)
+      .catch(() => setMe(null));
   }, []);
+  const isAdmin = me?.role === "admin";
+  const sections = settingsSectionsForRole(me?.role ?? null);
+  useEffect(() => {
+    if (!isAdmin) setSection("account");
+  }, [isAdmin]);
   async function logout() {
-    await fetch('/api/auth/logout', { method: 'POST' });
-    router.push('/login');
+    await fetch("/api/auth/logout", { method: "POST" });
+    router.push("/login");
   }
-
-  async function onPick(file: File, csName: string) {
+  async function withCsBusy(csName: string, task: () => Promise<unknown>) {
     setBusy(csName);
     setErr(null);
     try {
-      if (file.size > 8 * 1024 * 1024) throw new Error('Maksimal 8 MB');
+      await task();
+    } catch (error) {
+      setErr(
+        `${csName}: ${error instanceof Error ? error.message : "Gagal menyimpan"}`,
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function onPick(file: File, csName: string) {
+    await withCsBusy(csName, async () => {
+      if (file.size > 8 * 1024 * 1024) throw new Error("Maksimal 8 MB");
       const blob = await resizeImage(file);
       const url = await genUrl({});
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'image/jpeg' },
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "image/jpeg" },
         body: blob,
       });
-      if (!res.ok) throw new Error('Upload gagal');
-      const { storageId } = await res.json();
-      await setAvatar({ csName, storageId });
-    } catch (e) {
-      setErr(`${csName}: ${(e as Error).message}`);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function onClear(csName: string) {
-    setBusy(csName);
-    setErr(null);
-    try {
-      await clearAvatar({ csName });
-    } catch (e) {
-      setErr(`${csName}: ${(e as Error).message}`);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function onRename(csName: string) {
-    const next = window.prompt(`Ganti nama "${csName}" menjadi:`, csName)?.trim();
-    if (!next || next === csName) return;
-    setBusy(csName);
-    setErr(null);
-    try {
-      const res = await renameCs({ fromCsName: csName, toCsName: next });
-      if (!res.ok) setErr(res.error);
-    } catch (e) {
-      setErr(`${csName}: ${(e as Error).message}`);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function onDelete(csName: string) {
-    if (!window.confirm(`Hapus CS "${csName}" dari registry? Data laporan lama tidak terhapus, hanya kartu pengaturan ini.`)) return;
-    setBusy(csName);
-    setErr(null);
-    try {
-      const res = await deleteCsConfig({ csName });
-      if (!res.ok) setErr(res.error);
-    } catch (e) {
-      setErr(`${csName}: ${(e as Error).message}`);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  function onToggle(c: CsRow, field: keyof Omit<CsRow, 'csName' | 'csPhone'>, value: boolean) {
-    upsert({
-      csName: c.csName,
-      csPhone: c.csPhone,
-      orderAutomationEnabled: c.orderAutomationEnabled,
-      aiAssistantEnabled: c.aiAssistantEnabled,
-      reportingEnabled: c.reportingEnabled,
-      autoFollowUpEnabled: c.autoFollowUpEnabled ?? undefined,
-      isActive: c.isActive,
-      [field]: value,
+      if (!response.ok) throw new Error("Upload gagal");
+      await setAvatar({ csName, storageId: (await response.json()).storageId });
     });
   }
-
+  async function saveRename() {
+    if (
+      !renaming ||
+      !renaming.value.trim() ||
+      renaming.value.trim() === renaming.name
+    )
+      return;
+    const current = renaming;
+    await withCsBusy(current.name, async () => {
+      const result = await renameCs({
+        fromCsName: current.name,
+        toCsName: current.value.trim(),
+      });
+      if (!result.ok) throw new Error(result.error);
+      setRenaming(null);
+    });
+  }
+  async function saveDelete() {
+    if (!deleting) return;
+    const csName = deleting;
+    await withCsBusy(csName, async () => {
+      const result = await deleteCsConfig({ csName });
+      if (!result.ok) throw new Error(result.error);
+      setDeleting(null);
+    });
+  }
+  function onToggle(
+    cs: CsRow,
+    field: keyof Omit<CsRow, "csName" | "csPhone">,
+    value: boolean,
+  ) {
+    void withCsBusy(cs.csName, async () => {
+      await upsert({
+        csName: cs.csName,
+        csPhone: cs.csPhone,
+        orderAutomationEnabled: cs.orderAutomationEnabled,
+        aiAssistantEnabled: cs.aiAssistantEnabled,
+        reportingEnabled: cs.reportingEnabled,
+        autoFollowUpEnabled: cs.autoFollowUpEnabled ?? undefined,
+        isActive: cs.isActive,
+        [field]: value,
+      });
+    });
+  }
   return (
     <div className="space-y-6">
-      {/* Akun — user identity + sign out (moved here from the header so it stays out of the way) */}
-      <Card>
-        <CardHeader className="pb-3"><CardTitle className="text-base">Akun</CardTitle></CardHeader>
-        <CardContent className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-foreground">{me?.name ?? '—'}</div>
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{me?.role ?? ''}</div>
-          </div>
-          <Button variant="outline" onClick={logout} className="shrink-0">
-            <LogOut className="size-4" /> Keluar
-          </Button>
-        </CardContent>
-      </Card>
-
-      {me?.role !== 'admin' ? null : (
-        <>
-          <OrgSection />
-          <TeamSection />
-
-          {err && (
-            <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive">
-              {err}
-            </div>
-          )}
-
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {csList.map((c) => (
-          <Card key={c.key} className="flex flex-col">
+      <div
+        className="flex flex-wrap gap-2 border-b border-border pb-3"
+        aria-label="Bagian pengaturan"
+      >
+        {sections.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            aria-pressed={section === item.value}
+            onClick={() => setSection(item.value)}
+            className={cn(
+              "min-h-11 rounded-lg px-3 text-sm font-medium transition-colors",
+              section === item.value
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      {section === "account" && (
+        <section aria-labelledby="settings-account">
+          <Card>
             <CardHeader className="pb-3">
-              <div className="flex items-center gap-3 mb-2">
-                <CsAvatar name={c.csName} size="md" src={c.avatarUrl ?? undefined} />
-                <div className="min-w-0 flex-1">
-                  <CardTitle className="text-base truncate">{c.csName}</CardTitle>
-                  <span className="font-mono text-[10px] text-muted-foreground" title="Kunci identitas — tetap walau nama diganti">#{c.registryKey ?? c.key}</span>
+              <CardTitle id="settings-account" className="text-base">
+                Akun
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium">
+                  {me?.name ?? "—"}
                 </div>
-                <div className="flex shrink-0 items-center gap-0.5">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy === c.csName}
-                    onClick={() => onRename(c.csName)}
-                    aria-label={`Ganti nama ${c.csName}`}
-                    className="size-8 p-0 text-muted-foreground hover:text-foreground"
-                  >
-                    <Pencil className="size-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={busy === c.csName}
-                    onClick={() => onDelete(c.csName)}
-                    aria-label={`Hapus ${c.csName}`}
-                    className="size-8 p-0 text-muted-foreground hover:text-destructive"
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                  {me?.role ?? ""}
                 </div>
               </div>
-            </CardHeader>
-
-            <CardContent className="space-y-4 flex-1">
-              {/* Upload / Hapus foto */}
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={busy === c.csName}
-                  onClick={() => {
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'image/*';
-                    input.onchange = (e) => {
-                      const file = (e.target as HTMLInputElement).files?.[0];
-                      if (file) onPick(file, c.csName);
-                    };
-                    input.click();
-                  }}
-                  className="flex-1 gap-2"
-                >
-                  <Upload className="size-4" />
-                  {busy === c.csName ? 'Memproses...' : c.avatarUrl ? 'Ganti foto' : 'Upload foto'}
-                </Button>
-                {c.avatarUrl && (
+              <Button
+                variant="outline"
+                onClick={() => void logout()}
+                className="shrink-0"
+              >
+                <LogOut className="size-4" /> Keluar
+              </Button>
+            </CardContent>
+          </Card>
+        </section>
+      )}
+      {isAdmin && section === "organization" && (
+        <section aria-labelledby="settings-organization">
+          <h2 id="settings-organization" className="sr-only">
+            Organisasi
+          </h2>
+          <OrgSection />
+        </section>
+      )}
+      {isAdmin && section === "team" && (
+        <section aria-labelledby="settings-team">
+          <h2 id="settings-team" className="sr-only">
+            Tim
+          </h2>
+          <TeamSection />
+        </section>
+      )}
+      {isAdmin && section === "cs" && (
+        <section aria-labelledby="settings-cs" className="space-y-4">
+          <h2 id="settings-cs" className="sr-only">
+            Konfigurasi CS
+          </h2>
+          <Failure>{err}</Failure>
+          {csList.map((cs) => (
+            <details
+              key={cs.key}
+              className="rounded-xl border border-border bg-card"
+            >
+              <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 px-4 py-3">
+                <CsAvatar
+                  name={cs.csName}
+                  size="md"
+                  src={cs.avatarUrl ?? undefined}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold">
+                    {cs.csName}
+                  </div>
+                  <div className="font-mono text-[10px] text-muted-foreground">
+                    #{cs.registryKey ?? cs.key}
+                  </div>
+                </div>
+                <span className="text-xs text-muted-foreground">Atur</span>
+              </summary>
+              <div className="space-y-4 border-t border-border p-4">
+                <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={busy === c.csName}
-                    onClick={() => onClear(c.csName)}
-                    aria-label="Hapus foto"
-                    className="gap-1.5 text-destructive hover:text-destructive"
+                    disabled={busy === cs.csName}
+                    onClick={() => {
+                      const input = document.createElement("input");
+                      input.type = "file";
+                      input.accept = "image/*";
+                      input.onchange = (event) => {
+                        const file = (event.target as HTMLInputElement)
+                          .files?.[0];
+                        if (file) void onPick(file, cs.csName);
+                      };
+                      input.click();
+                    }}
+                  >
+                    <Upload className="size-4" />
+                    {busy === cs.csName
+                      ? "Memproses..."
+                      : cs.avatarUrl
+                        ? "Ganti foto"
+                        : "Upload foto"}
+                  </Button>
+                  {cs.avatarUrl && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy === cs.csName}
+                      onClick={() =>
+                        void withCsBusy(cs.csName, () =>
+                          clearAvatar({ csName: cs.csName }),
+                        )
+                      }
+                    >
+                      <Trash2 className="size-4" />
+                      Hapus foto
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy === cs.csName}
+                    onClick={() =>
+                      setRenaming({ name: cs.csName, value: cs.csName })
+                    }
+                  >
+                    <Pencil className="size-4" />
+                    Ganti nama
+                  </Button>
+                </div>
+                {renaming?.name === cs.csName && (
+                  <div className="flex flex-wrap items-end gap-2 rounded-lg border border-border bg-muted/40 p-3">
+                    <div className="min-w-48 flex-1 space-y-1">
+                      <label
+                        htmlFor={`rename-${cs.key}`}
+                        className="text-sm font-medium"
+                      >
+                        Nama CS baru
+                      </label>
+                      <input
+                        id={`rename-${cs.key}`}
+                        className="min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm sm:min-h-9"
+                        value={renaming.value}
+                        onChange={(event) =>
+                          setRenaming((current) =>
+                            current
+                              ? { ...current, value: event.target.value }
+                              : current,
+                          )
+                        }
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      disabled={
+                        busy === cs.csName || !renaming.value.trim()
+                      }
+                      onClick={() => void saveRename()}
+                    >
+                      Simpan
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy === cs.csName}
+                      onClick={() => setRenaming(null)}
+                    >
+                      Batal
+                    </Button>
+                  </div>
+                )}
+                {cs.csPhone && (
+                  <div className="rounded-lg bg-muted/40 px-3 py-2">
+                    <div className="text-xs font-medium text-muted-foreground">
+                      WhatsApp
+                    </div>
+                    <div className="font-mono text-sm">{cs.csPhone}</div>
+                  </div>
+                )}
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <CsvField
+                    csName={cs.csName}
+                    initial={cs.berduStaffIds ?? []}
+                    disabled={busy === cs.csName}
+                    label="Berdu Staff IDs"
+                    placeholder="B-xxxxx, B-yyyyy"
+                    save={(berduStaffIds) =>
+                      setBerduStaffIds({ csName: cs.csName, berduStaffIds })
+                    }
+                  />
+                  <CsvField
+                    csName={cs.csName}
+                    initial={cs.nameAliases ?? []}
+                    disabled={busy === cs.csName}
+                    label="Alias nama"
+                    placeholder="CS Aisyah, Kak Aisyah"
+                    save={(nameAliases) =>
+                      setNameAliases({ csName: cs.csName, nameAliases })
+                    }
+                  />
+                </div>
+                <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2">
+                  {CS_TOGGLES.map(({ icon: Icon, label, field }) => (
+                    <label
+                      key={field}
+                      htmlFor={`${cs.key}-${field}`}
+                      className="flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-lg px-1 focus-within:ring-3 focus-within:ring-ring/50"
+                    >
+                      <span className="flex items-center gap-2 text-sm font-medium">
+                        <Icon className="size-4 text-muted-foreground" />
+                        {label}
+                      </span>
+                      <Switch
+                        id={`${cs.key}-${field}`}
+                        checked={Boolean(cs[field])}
+                        onCheckedChange={(value) => onToggle(cs, field, value)}
+                        disabled={busy === cs.csName}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="border-t border-destructive/20 pt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy === cs.csName}
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => setDeleting(cs.csName)}
                   >
                     <Trash2 className="size-4" />
+                    Hapus CS
                   </Button>
-                )}
-              </div>
-
-              {/* Phone (read-only) */}
-              {c.csPhone && (
-                <div className="rounded-lg bg-muted/40 px-3 py-2">
-                  <div className="text-xs text-muted-foreground font-medium">WhatsApp</div>
-                  <div className="text-sm font-mono text-foreground">{c.csPhone}</div>
-                </div>
-              )}
-
-              <BerduStaffIdsField csName={c.csName} initial={c.berduStaffIds ?? []} disabled={busy === c.csName} />
-
-              <NameAliasesField csName={c.csName} initial={c.nameAliases ?? []} disabled={busy === c.csName} />
-
-              {/* Toggles */}
-              <div className="space-y-3 border-t border-border pt-4">
-                {/* Order Automation */}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Zap className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="text-sm font-medium text-foreground truncate">Otomasi Order</span>
-                  </div>
-                  <Switch
-                    checked={c.orderAutomationEnabled}
-                    onCheckedChange={(value) => onToggle(c, 'orderAutomationEnabled', value)}
-                    disabled={busy === c.csName}
-                  />
-                </div>
-
-                {/* AI Assistant */}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="text-sm font-medium text-foreground truncate">AI Assistant</span>
-                  </div>
-                  <Switch
-                    checked={c.aiAssistantEnabled}
-                    onCheckedChange={(value) => onToggle(c, 'aiAssistantEnabled', value)}
-                    disabled={busy === c.csName}
-                  />
-                </div>
-
-                {/* Reporting */}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <TrendingUp className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="text-sm font-medium text-foreground truncate">Reporting</span>
-                  </div>
-                  <Switch
-                    checked={c.reportingEnabled}
-                    onCheckedChange={(value) => onToggle(c, 'reportingEnabled', value)}
-                    disabled={busy === c.csName}
-                  />
-                </div>
-
-                {/* Auto Follow-up */}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0 flex-1">
-                      <span className="text-sm font-medium text-foreground truncate block">Auto Follow-up</span>
-                      <span className="text-xs text-muted-foreground truncate block">Kirim H+1/H+2 otomatis 08–14 WIB</span>
-                    </div>
-                  </div>
-                  <Switch
-                    checked={c.autoFollowUpEnabled ?? false}
-                    onCheckedChange={(value) => onToggle(c, 'autoFollowUpEnabled', value)}
-                    disabled={busy === c.csName}
-                  />
-                </div>
-
-                {/* Aktif */}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Power className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="text-sm font-medium text-foreground truncate">Aktif</span>
-                  </div>
-                  <Switch
-                    checked={c.isActive}
-                    onCheckedChange={(value) => onToggle(c, 'isActive', value)}
-                    disabled={busy === c.csName}
-                  />
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
+            </details>
+          ))}
           {csList.length === 0 && (
-            <div className="rounded-xl border border-border bg-card p-8 text-center">
-              <p className="text-sm text-muted-foreground">Belum ada CS terdaftar.</p>
+            <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
+              Belum ada CS terdaftar.
             </div>
           )}
-        </>
+        </section>
       )}
+      <AlertDialog
+        open={Boolean(deleting)}
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus CS?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Data laporan lama tidak terhapus, tetapi konfigurasi ini tidak
+              dapat dipulihkan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(busy)}>
+              Batal
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={Boolean(busy)}
+              onClick={() => void saveDelete()}
+            >
+              Hapus CS
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

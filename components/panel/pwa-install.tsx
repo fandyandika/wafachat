@@ -36,9 +36,9 @@ export function PwaInstallButton() {
         await prompt.userChoice;
         setPrompt(null);
       }}
-      className="flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+      className="flex min-h-11 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
     >
-      <Download className="size-4" />
+      <Download aria-hidden className="size-4" />
       <span>Install WaFaChat</span>
     </button>
   );

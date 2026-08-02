@@ -28,6 +28,10 @@ test("shows a selected-month Queen with daily recap and an ongoing week", () => 
   expect(html).toContain("Akan datang");
   expect(html).toContain("22 Jul 2026 – 31 Jul 2026");
   expect(html).toContain("Menunggu penutupan 16:00");
+  expect(html).toContain('aria-label="Ringkasan Queen bulanan"');
+  expect(html).toContain('aria-label="Pemenang Queen pekanan"');
+  expect(html).toContain('aria-label="Riwayat Queen harian"');
+  expect(html).toContain("4 pekan bonus");
   expect((html.match(/Pekan /g) ?? [])).toHaveLength(4);
 });
 

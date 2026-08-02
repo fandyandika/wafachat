@@ -9,6 +9,17 @@ import { cn } from "@/lib/utils";
 
 const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
 const pct = (value: number) => `${number.format(value)}%`;
+const tabs = [['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per produk']] as const;
+type PerformanceTab = typeof tabs[number][0];
+
+export function nextPerformanceTab(current: PerformanceTab, key: string): PerformanceTab | null {
+  const index = tabs.findIndex(([value]) => value === current);
+  if (key === "ArrowRight") return tabs[(index + 1) % tabs.length][0];
+  if (key === "ArrowLeft") return tabs[(index - 1 + tabs.length) % tabs.length][0];
+  if (key === "Home") return tabs[0][0];
+  if (key === "End") return tabs[tabs.length - 1][0];
+  return null;
+}
 
 function dateLabel(value: string): string {
   return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", timeZone: "UTC" })
@@ -38,39 +49,47 @@ function MetricCard({ label, value, delta }: { label: string; value: React.React
 }
 
 export function PerformancePanel({ report }: { report: PerformanceReport }) {
-  const [tab, setTab] = useState<"summary" | "cs" | "product">("summary");
+  const [tab, setTab] = useState<PerformanceTab>("summary");
   const [productSort, setProductSort] = useState<"closing" | "cr">("closing");
   const products = useMemo(() => [...report.products].sort((a, b) => productSort === "cr"
     ? a.cr - b.cr || b.closings - a.closings
     : b.closings - a.closings || a.product.localeCompare(b.product)), [productSort, report.products]);
   const s = report.summary;
+  const activePanelId = `performance-panel-${tab}`;
+
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, current: PerformanceTab) => {
+    const next = nextPerformanceTab(current, event.key);
+    if (!next) return;
+    event.preventDefault();
+    setTab(next);
+    event.currentTarget.ownerDocument.getElementById(`performance-tab-${next}`)?.focus();
+  };
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
         <div>
-          <p className="font-medium">{rangeLabel({ startDate: report.startDate, endDate: report.endDate })}</p>
+          <p className="font-medium">Ringkasan periode</p>
           <p className="text-xs text-muted-foreground">
-            Data sampai {dateLabel(report.effectiveEndDate)} · dibuat {new Intl.DateTimeFormat("id-ID", { hour: "2-digit", minute: "2-digit" }).format(report.generatedAt)}
+            {rangeLabel({ startDate: report.startDate, endDate: report.endDate })} · Data sampai {dateLabel(report.effectiveEndDate)} · dibuat {new Intl.DateTimeFormat("id-ID", { hour: "2-digit", minute: "2-digit" }).format(report.generatedAt)} · {report.status === "running" ? "Berjalan" : "Selesai"}
           </p>
         </div>
-        <span className={cn(
-          "rounded-full px-2.5 py-1 text-xs font-medium",
-          report.status === "running" ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800",
-        )}>
-          {report.status === "running" ? "Berjalan" : "Selesai"}
-        </span>
       </div>
 
-      <div className="flex w-fit gap-1 rounded-lg border border-border bg-muted/30 p-1">
-        {([['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per Produk']] as const).map(([value, label]) => (
+      <div role="tablist" aria-label="Tampilan laporan kinerja" className="flex w-fit gap-1 rounded-lg border border-border bg-muted/30 p-1">
+        {tabs.map(([value, label]) => (
           <button
             key={value}
             type="button"
-            aria-pressed={tab === value}
+            id={`performance-tab-${value}`}
+            role="tab"
+            aria-selected={tab === value}
+            aria-controls={`performance-panel-${value}`}
+            tabIndex={tab === value ? 0 : -1}
             onClick={() => setTab(value)}
+            onKeyDown={(event) => handleTabKeyDown(event, value)}
             className={cn(
-              "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+              "min-h-11 min-w-11 rounded-md px-3 py-1.5 text-sm font-medium transition-colors sm:min-h-9 sm:min-w-0",
               tab === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -85,17 +104,18 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
         </div>
       )}
 
+      <div id={activePanelId} role="tabpanel" aria-labelledby={`performance-tab-${tab}`}>
       {tab === "summary" && (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             <MetricCard label="Leads" value={number.format(s.leads)} delta={s.deltaLeads} />
             <MetricCard label="Closing" value={number.format(s.closings)} delta={s.deltaClosings} />
-            <MetricCard label="Conversion Rate" value={pct(s.cr)} delta={s.deltaCr} />
+            <MetricCard label="Conversion rate" value={pct(s.cr)} delta={s.deltaCr} />
             <MetricCard label="Omzet" value={formatRupiah(s.revenue)} delta={s.deltaRevenue} />
             <MetricCard label="Diskon" value={formatRupiah(s.discount)} />
             <MetricCard label="COD" value={number.format(s.cod)} />
             <MetricCard label="Transfer" value={number.format(s.transfer)} />
-            <MetricCard label="Rasio Pembayaran" value={<span className="text-sm">COD {pct(s.codPct)} · Transfer {pct(s.transferPct)}</span>} />
+            <MetricCard label="Rasio pembayaran" value={<span className="text-sm">COD {pct(s.codPct)} · Transfer {pct(s.transferPct)}</span>} />
             <MetricCard label="Terkirim" value={number.format(s.delivered)} />
             <MetricCard label="Dibatalkan" value={number.format(s.cancelled)} />
           </div>
@@ -103,11 +123,12 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
           {report.period === "month" && (
             <Card>
               <CardHeader>
-                <CardTitle>Rincian Pekanan</CardTitle>
+                <CardTitle>Rincian pekanan</CardTitle>
                 <CardDescription>Senin sampai Ahad, dipotong di batas bulan agar total tetap sama.</CardDescription>
               </CardHeader>
               <CardContent className="overflow-x-auto">
                 <table className="w-full min-w-[720px] text-sm">
+                  <caption className="sr-only">Rincian kinerja per pekan</caption>
                   <thead className="text-left text-xs text-muted-foreground">
                     <tr>
                       <th className="pb-2 font-medium">Pekan</th><th className="pb-2 font-medium">Status</th>
@@ -143,11 +164,12 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
       {tab === "cs" && (
         <Card>
           <CardHeader>
-            <CardTitle>Performance per CS</CardTitle>
+            <CardTitle>Performa per CS</CardTitle>
             <CardDescription>Semua metrik mengikuti periode dan filter CS yang sama.</CardDescription>
           </CardHeader>
           <CardContent className="overflow-x-auto">
             <table className="w-full min-w-[900px] text-sm">
+              <caption className="sr-only">Perbandingan kinerja per CS</caption>
               <thead className="text-left text-xs text-muted-foreground">
                 <tr>
                   <th className="pb-2 font-medium">CS</th><th className="pb-2 text-right font-medium">Leads</th>
@@ -178,16 +200,20 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
         <Card>
           <CardHeader className="sm:grid-cols-[1fr_auto]">
             <div>
-              <CardTitle>Performance per Produk</CardTitle>
+              <CardTitle>Performa per produk</CardTitle>
               <CardDescription>Ringkas, tanpa grafik; urutkan sesuai kebutuhan evaluasi.</CardDescription>
             </div>
-            <select value={productSort} onChange={(event) => setProductSort(event.target.value as "closing" | "cr")} className="h-8 rounded-lg border border-input bg-background px-2 text-sm">
-              <option value="closing">Closing terbanyak</option>
-              <option value="cr">CR terendah</option>
-            </select>
+            <label className="space-y-1 text-xs font-medium text-muted-foreground">
+              <span>Urutkan produk</span>
+              <select aria-label="Urutkan produk" value={productSort} onChange={(event) => setProductSort(event.target.value as "closing" | "cr")} className="block min-h-11 rounded-lg border border-input bg-background px-2 text-sm text-foreground sm:min-h-8">
+                <option value="closing">Closing terbanyak</option>
+                <option value="cr">CR terendah</option>
+              </select>
+            </label>
           </CardHeader>
           <CardContent className="overflow-x-auto">
             <table className="w-full min-w-[820px] text-sm">
+              <caption className="sr-only">Perbandingan kinerja per produk</caption>
               <thead className="text-left text-xs text-muted-foreground">
                 <tr>
                   <th className="pb-2 font-medium">Produk</th><th className="pb-2 text-right font-medium">Leads</th>
@@ -214,6 +240,7 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
           </CardContent>
         </Card>
       )}
+      </div>
     </div>
   );
 }

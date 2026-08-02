@@ -7,6 +7,17 @@ import type { Id } from '@/convex/_generated/dataModel';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { PanelState } from '@/components/panel/panel-state';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
 
 type Candidate = {
@@ -21,6 +32,9 @@ type Candidate = {
   lastMessageText: string;
 };
 type Staged = Candidate & { stage: 1 | 2 | 3 };
+type CandidatesData = { stage1: Candidate[]; stage2: Candidate[]; stage3: Candidate[] };
+type KpiData = { totalClosings: number; fromFollowUp: number; byStage: { h1: number; h2: number; h3: number } };
+type SnapshotData = { candidates: CandidatesData; kpi: KpiData };
 
 type Tab = 'all' | 'stage1' | 'stage2' | 'stage3' | 'closing' | 'archived';
 
@@ -52,6 +66,25 @@ const STAGE_TEMPLATE_LABELS: Record<1 | 2 | 3, string> = {
   3: 'H+3 · Penawaran terakhir (penutup)',
 };
 
+export async function fetchFollowUpSnapshot(csName: string | undefined, request: typeof fetch = fetch): Promise<SnapshotData> {
+  const response = await request('/api/follow-up/snapshot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ csName }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.error || 'Gagal memuat antrean follow-up.');
+  return { candidates: result.candidates, kpi: result.kpi };
+}
+
+export function getNextFollowUpTabIndex(key: string, currentIndex: number, tabCount: number): number | null {
+  if (key === 'ArrowRight') return (currentIndex + 1) % tabCount;
+  if (key === 'ArrowLeft') return (currentIndex - 1 + tabCount) % tabCount;
+  if (key === 'Home') return 0;
+  if (key === 'End') return tabCount - 1;
+  return null;
+}
+
 const formatRelativeTime = (ms: number): string => {
   const now = Date.now();
   const diffH = Math.round((now - ms) / 3.6e6);
@@ -69,7 +102,6 @@ function Avatar({ name }: { name: string }) {
   );
 }
 
-// Stage progress: 1 2 3 — filled green when that follow-up touch has gone out.
 function ProgressDots({ touchAts }: { touchAts: number[] }) {
   return (
     <div className="flex items-center gap-1" title={`${touchAts.length} follow-up terkirim`}>
@@ -95,8 +127,7 @@ function truncateText(text: string, maxLen = 50): string {
   return text.length > maxLen ? text.substring(0, maxLen) + '…' : text;
 }
 
-// Minimal checkbox that doesn't open the chat when toggled.
-function RowCheck({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
+export function RowCheck({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
   return (
     <button
       type="button"
@@ -106,16 +137,31 @@ function RowCheck({ checked, onToggle }: { checked: boolean; onToggle: () => voi
       }}
       aria-pressed={checked}
       aria-label={checked ? 'Batalkan pilih' : 'Pilih'}
-      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border transition-colors ${
-        checked ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-input bg-background text-transparent hover:border-emerald-500'
-      }`}
+      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md md:h-9 md:w-9"
     >
-      <span className="text-[11px] font-bold leading-none">✓</span>
+      <span
+        aria-hidden
+        className={`flex h-5 w-5 items-center justify-center rounded border text-[11px] font-bold leading-none transition-colors ${
+          checked ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-input bg-background text-transparent hover:border-emerald-500'
+        }`}
+      >
+        ✓
+      </span>
     </button>
   );
 }
 
-// Chat list item (funnel)
+export function FollowUpSnapshotError({ message, retrying, onRetry }: { message: string; retrying: boolean; onRetry: () => void }) {
+  return (
+    <PanelState
+      kind="error"
+      title="Antrean follow-up gagal dimuat"
+      description={message}
+      action={<Button onClick={onRetry} disabled={retrying}>{retrying ? 'Memuat…' : 'Coba lagi'}</Button>}
+    />
+  );
+}
+
 function ChatListItem({
   candidate,
   isSelected,
@@ -143,12 +189,14 @@ function ChatListItem({
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <h3 className="truncate font-semibold text-foreground">{candidate.customerName || candidate.customerPhone || 'Unknown'}</h3>
-          <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelativeTime(candidate.lastInboundAt)}</span>
+          <span className={`whitespace-nowrap text-xs font-medium ${Date.now() - candidate.lastInboundAt >= 24 * 60 * 60 * 1000 ? 'text-destructive' : 'text-muted-foreground'}`}>
+            Tertunda {formatRelativeTime(candidate.lastInboundAt)}
+          </span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800 dark:bg-sky-900 dark:text-sky-100">
-              {STAGE_LABEL[candidate.stage]}
+              Tahap {STAGE_LABEL[candidate.stage]}
             </span>
             <span className="truncate text-[11px] text-muted-foreground" title={`CS: ${candidate.csName}`}>
               {candidate.csName?.replace(/^CS\s+/i, '') || '—'}
@@ -156,7 +204,8 @@ function ChatListItem({
           </div>
           <ProgressDots touchAts={candidate.touchAts} />
         </div>
-        <p className="mt-1 truncate text-xs text-muted-foreground">{truncateText(candidate.lastMessageText)}</p>
+        <p className="mt-1 truncate text-xs text-muted-foreground">Pesan: {truncateText(candidate.lastMessageText)}</p>
+        <p className="mt-1 text-xs font-medium text-primary">Tindakan berikutnya: kirim {STAGE_LABEL[candidate.stage]}</p>
       </div>
     </div>
   );
@@ -245,6 +294,7 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
   const [sending, setSending] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [movingStage, setMovingStage] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [status, setStatus] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -298,7 +348,6 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
 
   async function handleArchive() {
     if (!candidate) return;
-    if (!window.confirm('Arsipkan chat ini? Keluar dari daftar follow-up.')) return;
     setArchiving(true);
     setStatus(null);
     try {
@@ -386,8 +435,10 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto bg-muted/20 p-2.5">
         {messages === undefined ? (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-muted-foreground">Memuat…</p>
+          <div className="space-y-3 p-2">
+            <Skeleton className="h-12 w-3/4" />
+            <Skeleton className="ml-auto h-16 w-2/3" />
+            <Skeleton className="h-10 w-1/2" />
           </div>
         ) : messages.length === 0 ? (
           <div className="flex h-full items-center justify-center">
@@ -406,6 +457,8 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
       {/* Status */}
       {status && (
         <div
+          role={status.type === 'error' ? 'alert' : 'status'}
+          aria-live={status.type === 'error' ? undefined : 'polite'}
           className={`shrink-0 px-4 py-2 text-sm font-medium ${
             status.type === 'ok'
               ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100'
@@ -436,11 +489,31 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
           >
             {sending ? 'Mengirim…' : isStageDone ? `${STAGE_LABEL[selectedStage]} sudah dikirim` : `Kirim ${STAGE_LABEL[selectedStage]}`}
           </Button>
-          <Button onClick={handleArchive} disabled={busy} variant="outline" className="h-10 px-4">
+          <Button onClick={() => setArchiveConfirmOpen(true)} disabled={busy} variant="outline" className="h-10 px-4">
             {archiving ? '…' : 'Arsip'}
           </Button>
         </div>
       </div>
+      <AlertDialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Arsipkan chat?</AlertDialogTitle>
+            <AlertDialogDescription>Chat ini keluar dari daftar follow-up dan dapat dipulihkan dari Arsip.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                setArchiveConfirmOpen(false);
+                handleArchive();
+              }}
+            >
+              Arsipkan
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -475,8 +548,10 @@ function ReadOnlyConversation({ row, onBack }: { row: ClosedRow; onBack?: () => 
       </div>
       <div className="flex-1 overflow-y-auto bg-muted/20 p-2.5">
         {messages === undefined ? (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-muted-foreground">Memuat…</p>
+          <div className="space-y-3 p-2">
+            <Skeleton className="h-12 w-3/4" />
+            <Skeleton className="ml-auto h-16 w-2/3" />
+            <Skeleton className="h-10 w-1/2" />
           </div>
         ) : messages.length === 0 ? (
           <div className="flex h-full items-center justify-center">
@@ -513,7 +588,9 @@ export function FollowUpDashboard() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; action: string } | null>(null);
-  const [bulkStatus, setBulkStatus] = useState<string | null>(null);
+  const [bulkStatus, setBulkStatus] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
+  const [bulkConfirmation, setBulkConfirmation] = useState<'kirim' | 'arsip' | null>(null);
+  const [feedback, setFeedback] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
     fetch('/api/me')
@@ -536,27 +613,22 @@ export function FollowUpDashboard() {
   // filter change / after an action / manual Refresh) instead of a live subscription —
   // a live subscription re-read the whole conversations table on every inbound message,
   // which is what blew the DB I/O budget. (Also fails gracefully if Convex is down.)
-  type CandidatesData = { stage1: Candidate[]; stage2: Candidate[]; stage3: Candidate[] };
-  type KpiData = { totalClosings: number; fromFollowUp: number; byStage: { h1: number; h2: number; h3: number } };
   const [data, setData] = useState<CandidatesData | undefined>(undefined);
   const [kpiData, setKpiData] = useState<KpiData | undefined>(undefined);
   const [refreshing, setRefreshing] = useState(false);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const loadSnapshot = useCallback(async () => {
     if (!me) return;
     setRefreshing(true);
+    setSnapshotError(null);
     try {
-      const r = await fetch('/api/follow-up/snapshot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csName }),
-      }).then((x) => x.json());
-      if (r.ok) {
-        setData(r.candidates);
-        setKpiData(r.kpi);
-      }
-    } catch {
-      /* keep last data on failure */
+      const snapshot = await fetchFollowUpSnapshot(csName);
+      setData(snapshot.candidates);
+      setKpiData(snapshot.kpi);
+    } catch (error) {
+      setSnapshotError(error instanceof Error ? error.message : 'Gagal memuat antrean follow-up.');
     } finally {
       setRefreshing(false);
     }
@@ -657,8 +729,6 @@ export function FollowUpDashboard() {
   async function runBulk(action: 'kirim' | 'arsip') {
     const ids = [...selectedIds];
     if (ids.length === 0 || bulkBusy) return;
-    const verb = action === 'kirim' ? 'Kirim follow-up ke' : 'Arsipkan';
-    if (ids.length > 20 && !window.confirm(`${verb} ${ids.length} lead sekaligus?`)) return;
     setBulkBusy(true);
     setBulkStatus(null);
     let ok = 0;
@@ -688,7 +758,10 @@ export function FollowUpDashboard() {
     setBulkBusy(false);
     setSelectedIds(new Set());
     loadSnapshot();
-    setBulkStatus(`${action === 'kirim' ? 'Kirim massal' : 'Arsip massal'}: ${ok} berhasil${fail ? `, ${fail} gagal` : ''}.`);
+    setBulkStatus({
+      type: fail ? 'error' : 'ok',
+      message: `${action === 'kirim' ? 'Kirim massal' : 'Arsip massal'}: ${ok} berhasil${fail ? `, ${fail} gagal` : ''}.`,
+    });
     setTimeout(() => setBulkStatus(null), 5000);
   }
 
@@ -701,9 +774,14 @@ export function FollowUpDashboard() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ csName, enabled: newState }),
       }).then((x) => x.json());
-      if (r.ok) setAutoSendEnabled(newState);
-    } catch (e) {
-      console.error('Failed to toggle auto-send:', e);
+      if (r.ok) {
+        setAutoSendEnabled(newState);
+        setFeedback({ type: 'ok', message: `Auto-send ${newState ? 'diaktifkan' : 'dinonaktifkan'}.` });
+      } else {
+        setFeedback({ type: 'error', message: r.error || 'Gagal mengubah auto-send.' });
+      }
+    } catch {
+      setFeedback({ type: 'error', message: 'Gagal menghubungi server untuk mengubah auto-send.' });
     } finally {
       setTogglingAutoSend(false);
     }
@@ -720,9 +798,12 @@ export function FollowUpDashboard() {
       if (r.ok) {
         setSelectedId(null);
         loadSnapshot();
+        setFeedback({ type: 'ok', message: 'Follow-up dipulihkan ke antrean.' });
+      } else {
+        setFeedback({ type: 'error', message: r.error || 'Gagal memulihkan follow-up.' });
       }
-    } catch (e) {
-      console.error('Failed to restore:', e);
+    } catch {
+      setFeedback({ type: 'error', message: 'Gagal menghubungi server untuk memulihkan follow-up.' });
     } finally {
       setRestoringId(null);
     }
@@ -751,23 +832,28 @@ export function FollowUpDashboard() {
       )}
 
       {/* Controls — compact; hidden on mobile while a chat is open (WhatsApp behavior) */}
-      <div className={`shrink-0 space-y-2 border-b border-border bg-card p-2.5 ${showConvOnMobile ? 'hidden md:block' : ''}`}>
+      <div role="toolbar" aria-label="Kontrol follow-up" className={`shrink-0 space-y-2 border-b border-border bg-card p-2.5 ${showConvOnMobile ? 'hidden md:block' : ''}`}>
         <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="Cari nama/nomor…"
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              setSelectedId(null);
-            }}
-            className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground"
-          />
+          <div className="min-w-0 flex-1">
+            <label htmlFor="follow-up-search" className="text-xs font-medium text-muted-foreground">Cari customer</label>
+            <input
+              id="follow-up-search"
+              type="text"
+              placeholder="Cari nama/nomor…"
+              aria-label="Cari customer"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSelectedId(null);
+              }}
+              className="mt-1 min-h-11 w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground md:min-h-9"
+            />
+          </div>
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value as 'oldest' | 'newest')}
             title="Urutkan (lama/baru ghosting)"
-            className="shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm text-foreground"
+            className="min-h-11 shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm text-foreground md:min-h-9"
           >
             <option value="oldest">Lama</option>
             <option value="newest">Baru</option>
@@ -777,7 +863,7 @@ export function FollowUpDashboard() {
             onClick={loadSnapshot}
             disabled={refreshing}
             title="Muat ulang daftar"
-            className="shrink-0 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+            className="min-h-11 min-w-11 shrink-0 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50 md:min-h-9 md:min-w-9"
           >
             {refreshing ? '…' : '↻'}
           </button>
@@ -790,7 +876,7 @@ export function FollowUpDashboard() {
                 setSelectedIds(new Set());
               }}
               title="Filter per CS"
-              className="max-w-[38%] shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm font-medium text-foreground"
+              className="min-h-11 max-w-[38%] shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm font-medium text-foreground md:min-h-9"
             >
               <option value="all">Semua CS</option>
               {csList.map((c) => (
@@ -803,13 +889,26 @@ export function FollowUpDashboard() {
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="flex flex-1 gap-1.5 overflow-x-auto">
-            {tabs.map((t) => (
+          <div role="tablist" aria-label="Antrean follow-up" className="flex flex-1 gap-1.5 overflow-x-auto">
+            {tabs.map((t, index) => (
               <button
                 key={t.key}
+                ref={(node) => { tabRefs.current[index] = node; }}
+                id={`follow-up-tab-${t.key}`}
                 type="button"
+                role="tab"
+                aria-selected={activeTab === t.key}
+                aria-controls="follow-up-queue"
+                tabIndex={activeTab === t.key ? 0 : -1}
                 onClick={() => switchTab(t.key)}
-                className={`shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium transition-colors ${
+                onKeyDown={(event) => {
+                  const nextIndex = getNextFollowUpTabIndex(event.key, index, tabs.length);
+                  if (nextIndex === null) return;
+                  event.preventDefault();
+                  switchTab(tabs[nextIndex].key);
+                  tabRefs.current[nextIndex]?.focus();
+                }}
+                  className={`inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium transition-colors md:min-h-9 ${
                   activeTab === t.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent'
                 }`}
               >
@@ -839,17 +938,30 @@ export function FollowUpDashboard() {
         </div>
       </div>
 
+      {snapshotError && data !== undefined && (
+        <div role="alert" className="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <span>{snapshotError}</span>
+          <Button onClick={loadSnapshot} disabled={refreshing} variant="outline" size="sm" className="min-h-11 shrink-0 md:min-h-9">
+            {refreshing ? 'Memuat…' : 'Coba lagi'}
+          </Button>
+        </div>
+      )}
+
       {/* Bulk status banner */}
-      {bulkStatus && (
-        <div className="shrink-0 bg-emerald-100 px-4 py-2 text-sm font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100">
-          {bulkStatus}
+      {(bulkStatus || feedback) && (
+        <div
+          role={(bulkStatus ?? feedback)?.type === 'error' ? 'alert' : 'status'}
+          aria-live={(bulkStatus ?? feedback)?.type === 'error' ? undefined : 'polite'}
+          className={`shrink-0 px-4 py-2 text-sm font-medium ${(bulkStatus ?? feedback)?.type === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100'}`}
+        >
+          {(bulkStatus ?? feedback)?.message}
         </div>
       )}
 
       {/* Two-pane */}
       <div className="flex flex-1 overflow-hidden">
         {/* List pane */}
-        <div className={`flex w-full flex-col border-r border-border bg-background md:w-96 ${showConvOnMobile ? 'hidden md:flex' : 'flex'}`}>
+        <div className={`flex w-full flex-col border-r border-border bg-background md:w-96 md:shrink-0 ${showConvOnMobile ? 'hidden md:flex' : 'flex'}`}>
           {/* Select-all toolbar */}
           {selectable && !isLoading && activeList.length > 0 && (
             <div className="flex shrink-0 items-center gap-2.5 border-b border-border bg-muted/30 px-3 py-1.5">
@@ -860,8 +972,12 @@ export function FollowUpDashboard() {
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto">
-            {isLoading ? (
+          <div id="follow-up-queue" role="tabpanel" aria-labelledby={`follow-up-tab-${activeTab}`} className="flex-1 overflow-y-auto">
+            {snapshotError && data === undefined && activeTab !== 'archived' && activeTab !== 'closing' ? (
+              <div className="p-3">
+                <FollowUpSnapshotError message={snapshotError} retrying={refreshing} onRetry={loadSnapshot} />
+              </div>
+            ) : isLoading ? (
               <div className="space-y-2 p-3">
                 <Skeleton className="h-20 w-full" />
                 <Skeleton className="h-20 w-full" />
@@ -869,7 +985,7 @@ export function FollowUpDashboard() {
               </div>
             ) : activeTab === 'archived' ? (
               archivedList.length === 0 ? (
-                <EmptyState text="Belum ada yang diarsipkan" />
+                <div className="p-3"><PanelState kind="empty" title="Belum ada yang diarsipkan" description="Arsip follow-up akan muncul di sini." /></div>
               ) : (
                 archivedList.map((c) => (
                   <ArchivedListItem
@@ -882,7 +998,7 @@ export function FollowUpDashboard() {
               )
             ) : activeTab === 'closing' ? (
               closingList.length === 0 ? (
-                <EmptyState text="Belum ada closing 7 hari terakhir" />
+                <div className="p-3"><PanelState kind="empty" title="Belum ada closing 7 hari terakhir" description="Closing dari follow-up akan muncul di sini." /></div>
               ) : (
                 closingList.map((c, i) => (
                   <ClosingListItem
@@ -901,7 +1017,7 @@ export function FollowUpDashboard() {
                 ))
               )
             ) : activeList.length === 0 ? (
-              <EmptyState text="Tidak ada yang perlu di-follow-up" />
+              <div className="p-3"><PanelState kind="empty" title="Tidak ada yang perlu di-follow-up" description="Antrean baru akan muncul saat ada tindakan berikutnya." /></div>
             ) : (
               activeList.map((c) => (
                 <ChatListItem
@@ -924,17 +1040,17 @@ export function FollowUpDashboard() {
           {selectable && selectedIds.size > 0 && (
             <div className="shrink-0 space-y-2 border-t border-border bg-card p-3">
               {bulkProgress ? (
-                <p className="text-center text-xs text-muted-foreground">
+                <p role="status" aria-live="polite" className="text-center text-xs text-muted-foreground">
                   {bulkProgress.action === 'kirim' ? 'Mengirim' : 'Mengarsip'} {bulkProgress.done + 1}/{bulkProgress.total}…
                 </p>
               ) : (
                 <p className="text-xs font-medium text-foreground">{selectedIds.size} lead dipilih</p>
               )}
               <div className="flex gap-2">
-                <Button onClick={() => runBulk('kirim')} disabled={bulkBusy} className="h-10 flex-1 bg-emerald-600 font-semibold text-white hover:bg-emerald-700">
+                <Button onClick={() => setBulkConfirmation('kirim')} disabled={bulkBusy} className="h-10 flex-1 bg-emerald-600 font-semibold text-white hover:bg-emerald-700">
                   Kirim massal
                 </Button>
-                <Button onClick={() => runBulk('arsip')} disabled={bulkBusy} variant="outline" className="h-10">
+                <Button onClick={() => setBulkConfirmation('arsip')} disabled={bulkBusy} variant="outline" className="h-10">
                   Arsip massal
                 </Button>
                 <Button onClick={() => setSelectedIds(new Set())} disabled={bulkBusy} variant="ghost" className="h-10">
@@ -956,15 +1072,30 @@ export function FollowUpDashboard() {
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-function EmptyState({ text }: { text: string }) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center px-6 py-12 text-center">
-      <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-muted text-xl text-muted-foreground">✓</div>
-      <p className="text-sm text-muted-foreground">{text}</p>
+      <AlertDialog open={bulkConfirmation !== null} onOpenChange={(open) => !open && setBulkConfirmation(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{bulkConfirmation === 'kirim' ? 'Kirim follow-up massal?' : 'Arsipkan follow-up massal?'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {bulkConfirmation === 'kirim'
+                ? `Kirim follow-up ke ${selectedIds.size} lead yang dipilih.`
+                : `Arsipkan ${selectedIds.size} lead yang dipilih dari antrean follow-up.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              variant={bulkConfirmation === 'arsip' ? 'destructive' : 'default'}
+              onClick={() => {
+                if (bulkConfirmation) runBulk(bulkConfirmation);
+                setBulkConfirmation(null);
+              }}
+            >
+              {bulkConfirmation === 'kirim' ? 'Kirim follow-up' : 'Arsipkan'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

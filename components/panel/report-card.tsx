@@ -83,7 +83,7 @@ export function ReportCard({
   return (
     <div ref={captureRef} className="h-full">
     <Card className={cn(
-      'h-full transition-all duration-300 hover:-translate-y-0.5 hover:shadow-elevate hover:border-primary/30',
+      'h-full transition-[border-color,box-shadow] duration-200 hover:border-primary/30',
       rank === 1 && 'ring-1 ring-primary/20',
       isQueen && 'ring-2 ring-primary/50',
     )}>
@@ -204,8 +204,7 @@ export function ReportCard({
           </div>
         </div>
 
-        {/* Per-product breakdown — bars + top 5, the rest collapsed (sinks the 0-lead SKU fragments) */}
-        <div className="space-y-2 border-t pt-3">
+        <div className="space-y-2 pt-1">
           {card.products.length === 0 ? (
             <div className="text-sm text-muted-foreground">Belum ada produk.</div>
           ) : (
@@ -237,7 +236,7 @@ export function ReportCard({
         </div>
 
         {resp && resp.firstReplyCount > 0 && (
-          <div className={cn('flex items-center justify-between gap-2 border-t pt-3 text-sm', resp.firstReplyCount < 3 && 'opacity-50')}>
+          <div className={cn('flex items-center justify-between gap-2 pt-1 text-sm', resp.firstReplyCount < 3 && 'opacity-50')}>
             <span className="flex items-center gap-1.5 text-muted-foreground"><Zap className="size-3.5 text-primary" /> Balas chat baru</span>
             <span className="font-medium tabular-nums text-foreground">
               {formatDuration(resp.firstReplyMedianMs)} <span className="font-normal text-muted-foreground">· {resp.firstReplyCount} chat</span>
@@ -248,9 +247,9 @@ export function ReportCard({
         {/* Reconcile the CS's raw Berdu count with the panel's unique-customer leads:
             Berdu order rows = leads + duplicates; duplicates = repeat-customer orders. */}
         {card.duplicates > 0 && (
-          <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
+          <div className="flex items-center gap-2 rounded-xl bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground">
             <Copy className="size-3.5 shrink-0" />
-            <span>{card.duplicates} order double → {card.leads + card.duplicates} order Berdu</span>
+            <span>{card.duplicates} order double dari {card.leads + card.duplicates} order Berdu</span>
           </div>
         )}
 

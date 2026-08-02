@@ -18,8 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { MetricCard, type MetricTone } from '@/components/ui/metric-card';
 import { AnimatedNumber } from '@/components/ui/animated-number';
 import { CsAvatar } from '@/components/ui/cs-avatar';
-import { TrendChart } from '@/components/ui/trend-chart';
-import { StatsWidget } from '@/components/ui/stats-widget';
+import { PanelState } from '@/components/panel/panel-state';
 import { cn } from '@/lib/utils';
 import { crBarClass } from '@/lib/cr';
 import {
@@ -95,9 +94,6 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
   }>>(api.metrics.getDuplicateOrders, filteredRangeArgs);
 
   const performanceData = useConvexSnapshotQuery<PerformanceData>(api.shippingRecaps.getPerformance, performanceArgs);
-  // Temporary: raw 7-day trend exceeds the exact-read cap in production.
-  // Skip it instead of retrying an expensive query; KPI data remains live.
-  const trendData = useConvexSnapshotQuery<Array<{ bucket: string; leads: number; closings: number; cr: number }>>(api.metrics.getTrend, 'skip');
   // "Respon CS" = seberapa cepat bales chat baru → cukup 24 jam terakhir (paling relevan) dan
   // ini motong read messages paling berat (dulu ikut range 7 hari). Anchored ke endAt yang sudah
   // memoized (BUKAN Date.now()) supaya args tetap stabil — ga refetch tiap render.
@@ -125,9 +121,8 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
     summaryData.lastUpdatedAt ?? 0,
     duplicateOrders.lastUpdatedAt ?? 0,
     performanceData.lastUpdatedAt ?? 0,
-    trendData.lastUpdatedAt ?? 0,
   ) || null;
-  const error = summaryData.error || duplicateOrders.error || performanceData.error || trendData.error;
+  const error = summaryData.error || duplicateOrders.error || performanceData.error;
 
   // Dashboard-only derivations
   const totalClosing = performance?.totalClosing ?? 0;
@@ -138,19 +133,6 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
 
   const topCs = [...(performance?.cs ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
   const topProducts = [...(performance?.products ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5);
-  const trendPoints = (trendData.data ?? []).map((b) => ({ label: b.bucket, leads: b.leads, closings: b.closings }));
-  const leadsSeries = trendPoints.map((p) => p.leads);
-  const closingSeries = trendPoints.map((p) => p.closings);
-  const crSeries = (trendData.data ?? []).map((b) => b.cr);
-  // Momentum = second half vs first half of the period (a real signal, not vs a phantom prev query).
-  const momentum = (s: number[]): number | null => {
-    if (s.length < 4) return null;
-    const mid = Math.floor(s.length / 2);
-    const a = s.slice(0, mid).reduce((x, y) => x + y, 0);
-    const b = s.slice(mid).reduce((x, y) => x + y, 0);
-    if (a === 0) return null;
-    return Math.round(((b - a) / a) * 100);
-  };
 
   const cards = useMemo(
     (): Array<{
@@ -187,7 +169,6 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
         summaryData.refresh(),
         duplicateOrders.refresh(),
         performanceData.refresh(),
-        trendData.refresh(),
       ]);
       setRespRefreshKey((n) => n + 1);
     } finally {
@@ -197,12 +178,12 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
 
   return (
     <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div role="toolbar" aria-label="Kontrol dashboard" className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm text-muted-foreground">
             Metrik <span className="font-medium text-foreground">{periodLabel}</span>
           </p>
-          <p className="text-xs text-muted-foreground">Snapshot analytics · update {fmtUpdatedAt(lastUpdatedAt)}</p>
+          <p className="text-xs text-muted-foreground">Diperbarui {fmtUpdatedAt(lastUpdatedAt)}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <WindowModeToggle mode={mode} onChange={onModeChange} />
@@ -210,61 +191,37 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
             <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
-          <Button
-            variant="outline"
-            onClick={() => setDupOpen(true)}
-            disabled={dupCount === 0}
-            className="gap-2"
-          >
-            <CircleAlert className="size-4" />
-            Order Double
-            <Badge variant={dupCount > 0 ? 'warning' : 'secondary'}>{dupCount}</Badge>
-          </Button>
+          {dupCount > 0 ? (
+            <Button variant="outline" onClick={() => setDupOpen(true)} className="gap-2">
+              <CircleAlert className="size-4" />
+              Order Double
+              <Badge variant="warning">{dupCount}</Badge>
+            </Button>
+          ) : null}
         </div>
       </div>
 
-      {error && (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {error}
-        </div>
-      )}
-
-      {/* Hero stats — figure + momentum + sparkline */}
-      <section className="grid gap-4 sm:grid-cols-3">
-        <StatsWidget label="Leads" value={<AnimatedNumber value={stats.orders} />} hint={periodLabel} series={leadsSeries} deltaPct={momentum(leadsSeries)} />
-        <StatsWidget label="Closing" value={<AnimatedNumber value={totalClosing} />} hint={periodLabel} series={closingSeries} deltaPct={momentum(closingSeries)} />
-        <StatsWidget label="Closing Rate" value={<AnimatedNumber value={crPerf} format={(n) => `${(Math.round(n * 10) / 10).toFixed(1)}%`} />} hint={periodLabel} series={crSeries} deltaPct={momentum(crSeries)} />
-      </section>
-
-      <section className="grid gap-4 sm:grid-cols-3">
-        {loading ? (
-          Array.from({ length: 3 }).map((_, index) => <MetricSkeleton key={index} />)
-        ) : (
-          <>
-            {cards.map((card) => <DashboardStatCard key={card.label} {...card} />)}
-            <MetricCard
-              label="Respon CS"
-              value={respData?.overall.firstReplyMedianMs != null ? formatDuration(respData.overall.firstReplyMedianMs) : '–'}
-              hint={`balas chat baru · 24 jam${respData ? ` · ${respData.overall.firstReplyCount} chat` : ''}`}
-              icon={Clock}
-              tone="default"
-            />
-          </>
-        )}
-      </section>
-
-      {trendPoints.length >= 2 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Trend Harian</CardTitle>
-            <CardDescription>Leads &amp; closing per hari · 7 hari terakhir</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="max-w-2xl">
-              <TrendChart data={trendPoints} />
-            </div>
-          </CardContent>
-        </Card>
+      {error ? (
+        <PanelState
+          kind="error"
+          title="Data dashboard gagal dimuat"
+          description={error}
+          action={<Button variant="outline" onClick={refreshAll} disabled={refreshing}>Coba lagi</Button>}
+        />
+      ) : (
+        <section aria-label="Ringkasan hari ini" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {loading ? (
+            Array.from({ length: 6 }).map((_, index) => <MetricSkeleton key={index} />)
+          ) : (
+            <>
+              <MetricCard label="Leads" value={<AnimatedNumber value={stats.orders} />} hint={periodLabel} tone="lead" />
+              <MetricCard label="Closing" value={<AnimatedNumber value={totalClosing} />} hint={periodLabel} tone="positive" />
+              <MetricCard label="Closing Rate" value={`${crPerf.toFixed(1)}%`} hint={periodLabel} tone="positive" />
+              {cards.map((card) => <DashboardStatCard key={card.label} {...card} />)}
+              <MetricCard label="Respon CS" value={respData?.overall.firstReplyMedianMs != null ? formatDuration(respData.overall.firstReplyMedianMs) : '-'} hint="Median balasan pertama, 24 jam" icon={Clock} />
+            </>
+          )}
+        </section>
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -275,7 +232,7 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
           </CardHeader>
           <CardContent className="space-y-3">
             {performanceData.data === undefined ? (
-              <p className="text-sm text-muted-foreground">Memuat…</p>
+              <RankedSummarySkeleton />
             ) : topCs.length === 0 ? (
               <p className="text-sm text-muted-foreground">Belum ada data.</p>
             ) : (
@@ -301,7 +258,7 @@ function DashboardWork({ mode, onModeChange }: { mode: WindowMode; onModeChange:
           </CardHeader>
           <CardContent className="space-y-3">
             {performanceData.data === undefined ? (
-              <p className="text-sm text-muted-foreground">Memuat…</p>
+              <ProductSummarySkeleton />
             ) : topProducts.length === 0 ? (
               <p className="text-sm text-muted-foreground">Belum ada data.</p>
             ) : (
@@ -398,9 +355,41 @@ function DashboardStatCard({
   );
 }
 
+function RankedSummarySkeleton() {
+  return (
+    <div className="space-y-3" aria-label="Memuat ringkasan CS">
+      {Array.from({ length: 3 }).map((_, index) => (
+        <div key={index} className="flex items-center gap-3">
+          <Skeleton className="h-3 w-3" />
+          <Skeleton className="size-8 rounded-full" />
+          <Skeleton className="h-4 w-16" />
+          <Skeleton className="h-1.5 flex-1" />
+          <Skeleton className="h-3 w-12" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProductSummarySkeleton() {
+  return (
+    <div className="space-y-3" aria-label="Memuat ringkasan produk">
+      {Array.from({ length: 3 }).map((_, index) => (
+        <div key={index} className="space-y-1.5">
+          <div className="flex justify-between gap-2">
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="h-4 w-12" />
+          </div>
+          <Skeleton className="h-1.5 w-full" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MetricSkeleton() {
   return (
-    <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card p-5 shadow-sm">
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-sm">
       <div className="flex items-center justify-between">
         <Skeleton className="h-3 w-20" />
         <Skeleton className="size-8 rounded-xl" />

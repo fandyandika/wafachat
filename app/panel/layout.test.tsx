@@ -20,11 +20,14 @@ vi.mock("@/components/panel/pwa-install", () => ({ PwaInstallButton: () => null 
 
 import PanelLayout from "./layout";
 
-test("shared panel layout has no analytics filters or propagated query state", () => {
+test("panel shell exposes one accessible content target without legacy global filters", () => {
   const html = renderToStaticMarkup(<PanelLayout><div>Settings content</div></PanelLayout>);
+  expect(html).toContain('href="#panel-main"');
+  expect(html).toContain('id="panel-main"');
+  expect(html).toContain("Lewati navigasi");
   expect(html).not.toContain("30 hari");
-  expect(html).not.toContain("Bulan ini");
   expect(html).not.toContain("Semua CS");
+  expect((html.match(/wafachat-wordmark\.png/g) ?? [])).toHaveLength(1);
   expect(html).toContain('href="/panel/performance"');
   expect(html).not.toContain("range=");
   expect(html).not.toContain("cs=");

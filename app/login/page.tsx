@@ -1,6 +1,10 @@
 'use client';
-import { useState, FormEvent } from 'react';
+
+import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
+
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -9,76 +13,98 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
     setLoading(true);
     setError('');
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-    if (res.ok) {
-      router.push('/panel');
-    } else {
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (res.ok) {
+        router.push('/panel');
+        return;
+      }
+
       setError('Email atau password salah');
-      setLoading(false);
+    } catch {
+      setError('Tidak dapat terhubung. Coba lagi.');
     }
+
+    setLoading(false);
   }
 
+  const errorId = 'login-error';
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
+    <main className="grid min-h-screen place-items-center bg-background p-4 text-foreground sm:p-6">
+      <div className="w-full max-w-sm space-y-6">
+        <div className="text-center">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src="/brand/wafachat-wordmark.png"
             alt="WaFaChat"
-            className="mx-auto h-16 w-auto max-w-[260px] object-contain"
+            className="mx-auto h-12 w-auto max-w-[220px] object-contain"
           />
-          <p className="mt-2 text-sm text-muted-foreground">CS AI Panel</p>
         </div>
-        <form
-          onSubmit={handleSubmit}
-          className="bg-card border border-border rounded-2xl p-7 space-y-5 shadow-sm"
-        >
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-              Email
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
-              placeholder="nama@email.com"
-              autoComplete="email"
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
-              Password
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full bg-background border border-input rounded-xl px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
-              placeholder="Masukkan password"
-              required
-            />
-          </div>
-          {error && <p className="text-xs text-destructive">{error}</p>}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-sm py-2.5 rounded-xl transition disabled:opacity-50"
-          >
-            {loading ? 'Masuk...' : 'Masuk'}
-          </button>
-        </form>
+
+        <Card>
+          <CardHeader>
+            <h1 className="font-heading text-base font-semibold leading-snug tracking-tight">Masuk ke Wafachat</h1>
+            <CardDescription>Masuk untuk melanjutkan ke panel operasional.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <label htmlFor="email" className="block text-sm font-medium">
+                  Email
+                </label>
+                <input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  placeholder="nama@email.com"
+                  autoComplete="email"
+                  aria-invalid={Boolean(error)}
+                  aria-describedby={error ? errorId : undefined}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="password" className="block text-sm font-medium">
+                  Password
+                </label>
+                <input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                  placeholder="Masukkan password"
+                  autoComplete="current-password"
+                  aria-invalid={Boolean(error)}
+                  aria-describedby={error ? errorId : undefined}
+                  required
+                />
+              </div>
+              {error ? (
+                <p id={errorId} role="alert" className="text-sm text-destructive">
+                  {error}
+                </p>
+              ) : null}
+              <Button type="submit" className="w-full" disabled={loading}>
+                {loading ? 'Masuk...' : 'Masuk'}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
       </div>
-    </div>
+    </main>
   );
 }
