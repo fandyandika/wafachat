@@ -13,7 +13,7 @@ import { ConvexProviderWithAuth, ConvexReactClient, useConvexAuth } from 'convex
 // pathname changes keeps the state correct across login/logout navigations without
 // remounting the provider.
 export function requiresPanelAuth(pathname: string) {
-  return pathname.startsWith('/panel');
+  return pathname === '/panel' || pathname.startsWith('/panel/');
 }
 
 function useSessionAuth() {
