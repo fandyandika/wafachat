@@ -6,6 +6,7 @@ import { useQuery } from "convex/react";
 import { Crown, RefreshCw } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { PerformancePanel } from "@/components/panel/performance-panel";
+import { PanelState } from "@/components/panel/panel-state";
 import { useConvexSnapshotQuery } from "@/components/panel/use-convex-snapshot-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -68,7 +69,6 @@ export default function PerformancePage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1">
-          <h1 className="text-base font-semibold tracking-tight">Performance</h1>
           <p className="text-xs text-muted-foreground">Laporan evaluasi hanya dimuat saat diminta.</p>
         </div>
         <Link href="/panel/queen" className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted">
@@ -78,7 +78,7 @@ export default function PerformancePage() {
 
       <Card>
         <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-1 rounded-lg bg-muted/50 p-1 sm:w-fit">
+          <div role="group" aria-label="Filter laporan kinerja" className="flex flex-wrap gap-1 rounded-lg bg-muted/50 p-1 sm:w-fit">
             {([
               ["week", "Pekanan"],
               ["month", "Bulanan"],
@@ -152,19 +152,18 @@ export default function PerformancePage() {
         </CardContent>
       </Card>
 
-      {!submitted && (
-        <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-          Pilih periode lalu tampilkan laporan
-        </div>
-      )}
-      {report.error && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          <span>{report.error}</span>
-          <Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>
-        </div>
-      )}
-      {empty && <div className="rounded-xl border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">Belum ada data pada periode ini</div>}
-      {report.data && !empty && <PerformancePanel report={report.data} />}
+      {!submitted ? (
+        <PanelState kind="empty" title="Pilih periode lalu tampilkan laporan" />
+      ) : report.error ? (
+        <PanelState
+          kind="error"
+          title="Laporan gagal dimuat"
+          description={report.error}
+          action={<Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>}
+        />
+      ) : empty ? (
+        <PanelState kind="empty" title="Belum ada data pada periode ini" />
+      ) : report.data ? <PerformancePanel report={report.data} /> : null}
     </div>
   );
 }

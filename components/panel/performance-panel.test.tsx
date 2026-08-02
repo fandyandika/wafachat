@@ -47,6 +47,10 @@ const report: PerformanceReport = {
 test("shows the running summary and clipped monthly weeks", () => {
   const html = renderToStaticMarkup(<PerformancePanel report={report} />);
 
+  expect(html).toContain('role="tablist"');
+  expect(html).toContain('aria-selected="true"');
+  expect(html).toContain("Ringkasan periode");
+  expect(html).toContain("Rincian pekanan");
   expect(html).toContain("Berjalan");
   expect(html).toContain("67,2%");
   expect(html).toContain("COD 60%");

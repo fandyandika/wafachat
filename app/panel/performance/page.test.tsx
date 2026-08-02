@@ -30,6 +30,8 @@ test("performance stays idle until the owner submits a period", () => {
 
   expect(snapshotMock).toHaveBeenCalledTimes(1);
   expect(snapshotMock).toHaveBeenLastCalledWith(api.performanceReports.getPerformanceReport, "skip");
+  expect(html).toContain('aria-label="Filter laporan kinerja"');
+  expect(html).not.toContain("<h1");
   expect(html).toContain("Pilih periode lalu tampilkan laporan");
   expect(html).toContain("Semua CS");
   expect(html).not.toContain(">all<");
