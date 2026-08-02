@@ -15,9 +15,9 @@ const config: Config = {
       },
       boxShadow: {
         // Indigo-tinted shadows (match the brand accent) — softer + more cohesive than flat black.
-        sm: '0 1px 2px -1px oklch(0.45 0.04 280 / 0.10), 0 1px 3px 0 oklch(0.45 0.04 280 / 0.05)',
-        DEFAULT: '0 2px 4px -2px oklch(0.45 0.05 280 / 0.10), 0 4px 10px -3px oklch(0.45 0.05 280 / 0.06)',
-        elevate: '0 10px 28px -10px oklch(0.45 0.10 280 / 0.18), 0 4px 12px -4px oklch(0.45 0.08 280 / 0.09)',
+        sm: '0 1px 2px 0 oklch(0.22 0.025 258 / 0.08)',
+        DEFAULT: '0 8px 24px -18px oklch(0.22 0.025 258 / 0.28)',
+        elevate: '0 14px 34px -22px oklch(0.22 0.025 258 / 0.34)',
       },
       colors: {
         background: 'var(--background)',
@@ -62,6 +62,8 @@ const config: Config = {
         gold: 'var(--gold)',
         'gold-soft': 'var(--gold-soft)',
         'gold-foreground': 'var(--gold-foreground)',
+        'ledger-ink': 'var(--ledger-ink)',
+        'ledger-rule': 'var(--ledger-rule)',
       },
     },
   },

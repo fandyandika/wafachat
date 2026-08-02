@@ -16,6 +16,11 @@ const NAV = [
   { href: '/panel/settings', label: 'Settings', icon: Settings },
 ] as const;
 
+export function navItemsForRole(role: 'admin' | 'cs' | undefined) {
+  if (role !== 'cs') return NAV;
+  return NAV.filter((item) => item.href === '/panel/laporan' || item.href === '/panel/follow-up');
+}
+
 function PanelShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -26,9 +31,9 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   // CS staff only get Laporan + Follow-up in the menu; admins get everything. Middleware
   // enforces the same server-side — this just hides links CS can't reach anyway.
   const isCs = me?.role === 'cs';
-  const navItems = isCs
-    ? NAV.filter((n) => n.href === '/panel/laporan' || n.href === '/panel/follow-up')
-    : NAV;
+  const navItems = navItemsForRole(me?.role);
+  const organizationName = me?.orgName || 'Organisasi aktif';
+  const roleLabel = isCs ? 'CS' : 'Owner';
   const isFollowUp = pathname === '/panel/follow-up'; // CRM page: hide header filters + tighten padding for more room.
 
   // CS have no Settings access (where the admin logout lives) — give them one here.
@@ -43,8 +48,8 @@ function PanelShell({ children }: { children: React.ReactNode }) {
         Lewati navigasi
       </a>
       <div className="flex min-h-screen">
-        <aside className={cn('hidden w-60 shrink-0 border-r border-border bg-card/60 md:flex md:flex-col', navHidden && 'md:hidden')}>
-          <div className="px-6 py-6">
+        <aside className={cn('hidden w-60 shrink-0 border-r border-ledger-rule bg-card md:flex md:flex-col', navHidden && 'md:hidden')}>
+          <div className="border-b border-ledger-rule px-6 py-5">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/wafachat-wordmark.png"
@@ -52,16 +57,19 @@ function PanelShell({ children }: { children: React.ReactNode }) {
               className="h-10 w-auto max-w-full object-contain object-left"
             />
           </div>
-          <nav className="flex-1 space-y-1 px-4">
+          <nav className="flex-1 py-4">
             {navItems.map((item) => {
               const active = pathname === item.href;
               return (
                 <Link
                   key={item.href}
                   href={item.href}
+                  aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'flex h-10 w-full items-center gap-3 rounded-xl px-3 text-left text-sm font-medium transition-colors',
-                    active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                    'flex min-h-11 w-full items-center gap-3 border-y border-transparent px-6 text-left text-sm font-medium transition-colors',
+                    active
+                      ? 'border-ledger-rule bg-secondary text-ledger-ink'
+                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
                   )}
                 >
                   <item.icon className="size-4" />
@@ -88,9 +96,9 @@ function PanelShell({ children }: { children: React.ReactNode }) {
         </aside>
 
         <main id="panel-main" className="min-w-0 flex-1">
-          <header className="sticky top-0 z-10 border-b border-border bg-background px-4 py-4 md:px-8">
-            <div className="mx-auto flex w-full max-w-[1440px] items-center">
-              <div className="flex flex-wrap items-center gap-2">
+          <header className="sticky top-0 z-10 border-b border-ledger-rule bg-card px-4 py-3 md:px-8">
+            <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-4">
+              <div className="flex min-w-0 items-center gap-3">
                 <button
                   type="button"
                   onClick={() => setNavHidden((v) => !v)}
@@ -99,7 +107,11 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                 >
                   {navHidden ? <PanelLeft className="size-5" /> : <PanelLeftClose className="size-5" />}
                 </button>
-                <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
+                <h1 className="truncate text-xl font-semibold tracking-tight text-ledger-ink md:text-2xl">{title}</h1>
+              </div>
+              <div className="min-w-0 text-right leading-tight">
+                <p className="truncate text-sm font-semibold text-ledger-ink">{organizationName}</p>
+                <p className="text-xs text-muted-foreground">{roleLabel}</p>
               </div>
             </div>
           </header>
@@ -108,7 +120,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Mobile bottom nav — thumb-reachable, app-like. Replaces the badge row. Hidden on md+. */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-border bg-background md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-20 border-t border-ledger-rule bg-card md:hidden">
         <div className="mx-auto flex max-w-md items-stretch justify-around px-2 pb-[env(safe-area-inset-bottom)]">
           {navItems.map((item) => {
             const active = pathname === item.href;

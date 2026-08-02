@@ -14,11 +14,25 @@ vi.mock("@/components/panel/use-panel-filters", () => ({
   usePanelFilters: () => ({ range: "30d", cs: "Aisyah" }),
 }));
 vi.mock("@/components/panel/use-me", () => ({
-  useMe: () => ({ name: "Admin", role: "admin", email: "admin@wafachat" }),
+  useMe: () => ({ name: "Admin", role: "admin", email: "admin@wafachat", orgName: "Pustaka Islam" }),
 }));
 vi.mock("@/components/panel/pwa-install", () => ({ PwaInstallButton: () => null }));
 
-import PanelLayout from "./layout";
+import PanelLayout, { navItemsForRole } from "./layout";
+
+test("panel navigation exposes only routes allowed for each role", () => {
+  expect(navItemsForRole("admin").map((item) => item.href)).toEqual([
+    "/panel",
+    "/panel/performance",
+    "/panel/laporan",
+    "/panel/follow-up",
+    "/panel/settings",
+  ]);
+  expect(navItemsForRole("cs").map((item) => item.href)).toEqual([
+    "/panel/laporan",
+    "/panel/follow-up",
+  ]);
+});
 
 test("panel shell exposes one accessible content target without legacy global filters", () => {
   const html = renderToStaticMarkup(<PanelLayout><div>Settings content</div></PanelLayout>);
@@ -31,4 +45,6 @@ test("panel shell exposes one accessible content target without legacy global fi
   expect(html).toContain('href="/panel/performance"');
   expect(html).not.toContain("range=");
   expect(html).not.toContain("cs=");
+  expect(html).toContain("Pustaka Islam");
+  expect(html).toContain("Owner");
 });
