@@ -29,6 +29,7 @@ Add a compact Meta-style date control to the Dashboard context bar:
 - Default selection is today.
 - The user can select one past date, but not a future date.
 - A basis selector offers **Hari kalender** and **Periode kerja CS 16:00**.
+- In work-basis mode the selected date names the date the 16:00 window opens. Before 16:00 WIB, the current work period therefore shows the previous calendar date and an explicit cross-date boundary.
 - Editing the picker does not query. The selection is applied explicitly.
 - Today remains the ordinary operational state.
 - Any past date shows a visible `Mode histori` status with the selected date and exact boundary.
@@ -59,6 +60,8 @@ Daily presets and `Pilih tanggal` expose a **Basis data** choice:
 
 - Hari kalender
 - Periode kerja CS 16:00
+
+`Hari ini` in work-basis mode means the currently open work window, even before 16:00 WIB; its resolved opening date may therefore be yesterday. `Kemarin` means the work window immediately before it. `Pilih tanggal` always names the opening date directly.
 
 Week, month, and custom reports continue to use the established 16:00 CS-report boundary. This preserves the meaning of existing reports and keeps their rollup-backed query path.
 
