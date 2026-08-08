@@ -1,11 +1,12 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { MetricRow, PerformanceReport } from "@/lib/performance-report";
 import {
   nextPerformanceTab,
   PerformanceBreakdownContent,
   PerformancePanel,
+  submitPerformanceRequest,
 } from "./performance-panel";
 
 (globalThis as any).React = React;
@@ -94,6 +95,21 @@ test("formats large revenue deltas in Indonesian Rupiah", () => {
   );
 
   expect(html).toContain("↑ Rp33.703.258");
+});
+
+test("treats a basis change as a new explicit report request", () => {
+  const submitted = { period: "day" as const, basis: "calendar" as const, startDate: "2026-08-08", endDate: "2026-08-08" };
+  const replaceSubmitted = vi.fn();
+  const refresh = vi.fn();
+
+  expect(submitPerformanceRequest({
+    submitted,
+    next: { ...submitted, basis: "work" },
+    replaceSubmitted,
+    refresh,
+  })).toBe("replace");
+  expect(replaceSubmitted).toHaveBeenCalledOnce();
+  expect(refresh).not.toHaveBeenCalled();
 });
 
 test.each([

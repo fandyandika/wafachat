@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { Crown } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -18,11 +19,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
-  inclusiveDateCount,
-  resolvePerformanceRange,
-  type PerformancePeriod,
   type PerformanceReport,
 } from "@/lib/performance-report";
+import {
+  parsePerformanceDeepLink,
+  resolvePerformanceSelection,
+  type DayBasis,
+  type PerformancePreset,
+} from "@/lib/history-period";
 import { cn } from "@/lib/utils";
 
 function jakartaDate(): string {
@@ -34,14 +38,33 @@ function jakartaDate(): string {
 }
 
 const inputClass = "min-h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 sm:min-h-9";
+const presetLabels: Record<PerformancePreset, string> = {
+  today: "Hari ini",
+  yesterday: "Kemarin",
+  date: "Pilih tanggal",
+  this_week: "Pekan ini",
+  last_week: "Pekan lalu",
+  week: "Pilih pekan",
+  this_month: "Bulan ini",
+  last_month: "Bulan lalu",
+  month: "Pilih bulan",
+  custom: "Rentang khusus",
+};
 
 export default function PerformancePage() {
   const today = useMemo(jakartaDate, []);
-  const [period, setPeriod] = useState<PerformancePeriod>("week");
-  const [anchorDate, setAnchorDate] = useState(today);
-  const [month, setMonth] = useState(today.slice(0, 7));
-  const [startDate, setStartDate] = useState(today);
-  const [endDate, setEndDate] = useState(today);
+  const searchParams = useSearchParams();
+  const initialSelection = useMemo(
+    () => parsePerformanceDeepLink(searchParams, today),
+    [searchParams, today],
+  );
+  const [preset, setPreset] = useState<PerformancePreset>(initialSelection.preset);
+  const [basis, setBasis] = useState<DayBasis>(initialSelection.basis);
+  const [date, setDate] = useState(initialSelection.date ?? today);
+  const [anchorDate, setAnchorDate] = useState(initialSelection.anchorDate ?? today);
+  const [month, setMonth] = useState(initialSelection.month ?? today.slice(0, 7));
+  const [startDate, setStartDate] = useState(initialSelection.startDate ?? today);
+  const [endDate, setEndDate] = useState(initialSelection.endDate ?? today);
   const [csName, setCsName] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<SubmittedArgs | null>(null);
@@ -57,12 +80,13 @@ export default function PerformancePage() {
 
   const submit = () => {
     try {
-      const range = resolvePerformanceRange(period, { anchorDate, month, startDate, endDate });
-      if (inclusiveDateCount(range) > 35) throw new Error("Maksimal 35 hari");
+      const resolved = resolvePerformanceSelection({
+        preset, basis, date, anchorDate, month, startDate, endDate,
+      }, today);
       setValidationError(null);
       submitPerformanceRequest({
         submitted,
-        next: { period, ...range, csName: csName || undefined },
+        next: { ...resolved, csName: csName || undefined },
         replaceSubmitted: setSubmitted,
         refresh: report.refresh,
       });
@@ -84,45 +108,65 @@ export default function PerformancePage() {
 
       <Card>
         <CardContent className="space-y-4">
-          <div role="group" aria-label="Filter laporan kinerja" className="flex flex-wrap gap-1 rounded-lg bg-muted/50 p-1 sm:w-fit">
-            {([
-              ["week", "Pekanan"],
-              ["month", "Bulanan"],
-              ["custom", "Rentang khusus"],
-            ] as const).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                aria-pressed={period === value}
-                onClick={() => setPeriod(value)}
-                className={cn(
-                  "min-h-11 min-w-11 rounded-md px-3 py-1.5 text-sm font-medium transition-colors sm:min-h-9 sm:min-w-0",
-                  period === value ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
           <div
+            role="group"
+            aria-label="Filter laporan kinerja"
             data-testid="performance-filter-grid"
-            className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)_auto] md:items-end"
+            className="grid gap-4 lg:grid-cols-[minmax(12rem,1fr)_minmax(0,1.35fr)_minmax(12rem,16rem)_auto] lg:items-end"
           >
-            <div className={cn("min-w-0", period === "custom" && "grid gap-3 sm:grid-cols-2")}>
-              {period === "week" && (
+            <label className="grid gap-1.5 text-sm font-medium">
+              Periode laporan
+              <Select value={preset} onValueChange={(value) => setPreset(value as PerformancePreset)}>
+                <SelectTrigger className="min-h-11 w-full sm:min-h-9"><SelectValue>{presetLabels[preset]}</SelectValue></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="today">Hari ini</SelectItem>
+                  <SelectItem value="yesterday">Kemarin</SelectItem>
+                  <SelectItem value="date">Pilih tanggal</SelectItem>
+                  <SelectItem value="this_week">Pekan ini</SelectItem>
+                  <SelectItem value="last_week">Pekan lalu</SelectItem>
+                  <SelectItem value="week">Pilih pekan</SelectItem>
+                  <SelectItem value="this_month">Bulan ini</SelectItem>
+                  <SelectItem value="last_month">Bulan lalu</SelectItem>
+                  <SelectItem value="month">Pilih bulan</SelectItem>
+                  <SelectItem value="custom">Rentang khusus</SelectItem>
+                </SelectContent>
+              </Select>
+            </label>
+
+            <div className={cn("min-w-0", preset === "custom" && "grid gap-3 sm:grid-cols-2")}>
+              {(preset === "today" || preset === "yesterday" || preset === "date") && (
+                <div className={cn("grid gap-3", preset === "date" && "sm:grid-cols-2")}>
+                  {preset === "date" && (
+                    <label className="grid gap-1.5 text-sm font-medium">
+                      Tanggal
+                      <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className={inputClass} />
+                    </label>
+                  )}
+                  <label className="grid gap-1.5 text-sm font-medium">
+                    Basis hari
+                    <Select value={basis} onValueChange={(value) => setBasis(value as DayBasis)}>
+                      <SelectTrigger className="min-h-11 w-full sm:min-h-9"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="calendar">Hari kalender (00.00–24.00)</SelectItem>
+                        <SelectItem value="work">Cutoff kerja (16.00–16.00)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
+                </div>
+              )}
+              {preset === "week" && (
                 <label className="grid gap-1.5 text-sm font-medium">
                   Tanggal dalam pekan
                   <input type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} className={inputClass} />
                 </label>
               )}
-              {period === "month" && (
+              {preset === "month" && (
                 <label className="grid gap-1.5 text-sm font-medium">
                   Bulan
                   <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className={inputClass} />
                 </label>
               )}
-              {period === "custom" && (
+              {preset === "custom" && (
                 <>
                   <label className="grid gap-1.5 text-sm font-medium">
                     Mulai
@@ -133,6 +177,11 @@ export default function PerformancePage() {
                     <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className={inputClass} />
                   </label>
                 </>
+              )}
+              {(["this_week", "last_week", "this_month", "last_month"] as PerformancePreset[]).includes(preset) && (
+                <div className="flex min-h-11 items-center rounded-lg border border-dashed border-border px-3 text-sm text-muted-foreground sm:min-h-9">
+                  Rentang dihitung otomatis saat laporan ditampilkan.
+                </div>
               )}
             </div>
 

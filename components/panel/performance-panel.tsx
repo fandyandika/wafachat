@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { DeltaPill } from "@/components/ui/metric-card";
 import { formatRupiah } from "@/lib/format";
 import type { DateRange, PerformancePeriod, PerformanceReport } from "@/lib/performance-report";
+import type { DayBasis } from "@/lib/history-period";
 import { cn } from "@/lib/utils";
 
 const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
@@ -22,6 +23,7 @@ type PerformanceTab = typeof tabs[number][0];
 
 export type SubmittedArgs = {
   period: PerformancePeriod;
+  basis: DayBasis;
   startDate: string;
   endDate: string;
   csName?: string;
@@ -52,6 +54,7 @@ export function submitPerformanceRequest({
 }): "refresh" | "replace" {
   const unchanged = submitted !== null
     && submitted.period === next.period
+    && submitted.basis === next.basis
     && submitted.startDate === next.startDate
     && submitted.endDate === next.endDate
     && submitted.csName === next.csName;

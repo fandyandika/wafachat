@@ -18,6 +18,7 @@ vi.mock("@/components/panel/use-panel-filters", () => ({
   usePanelFilters: () => ({ startAt: 1, endAt: 2, csName: undefined }),
 }));
 vi.mock("@/components/panel/use-response-times", () => ({ useResponseTimes: () => null }));
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
 import PerformancePage from "./page";
 import {
   associatePerformanceResult,
@@ -71,11 +72,9 @@ test("performance stays idle until the owner submits a period", () => {
   expect(snapshotMock).toHaveBeenLastCalledWith(api.performanceReports.getPerformanceReport, "skip");
   expect(html).toContain('aria-label="Filter laporan kinerja"');
   expect(html).toContain('data-testid="performance-filter-grid"');
-  expect(html).toContain("md:grid-cols-[minmax(0,1fr)_minmax(12rem,16rem)_auto]");
-  expect(html).toContain("grid gap-1.5 text-sm font-medium");
-  expect(html).toContain('aria-pressed="true"');
+  expect(html).toContain("Pekan ini");
+  expect(html).toContain("Periode laporan");
   expect(html).toContain("min-h-11");
-  expect(html).toContain('type="date" class="min-h-11');
   expect(html).not.toContain("<h1");
   expect(html).toContain("Pilih periode lalu tampilkan laporan");
   expect(html).toContain("Semua CS");
@@ -85,7 +84,7 @@ test("performance stays idle until the owner submits a period", () => {
 test("keeps a stable loading region before the first result", () => {
   const html = renderToStaticMarkup(
     <PerformanceResultRegion
-      submitted={{ period: "week", startDate: "2026-08-03", endDate: "2026-08-09" }}
+      submitted={{ period: "week", basis: "work", startDate: "2026-08-03", endDate: "2026-08-09" }}
       report={{ data: undefined, loading: true, error: null, refresh: vi.fn() }}
     />,
   );
@@ -97,7 +96,7 @@ test("keeps a stable loading region before the first result", () => {
 test("keeps a stable loading region while the first submitted request is pending its loading update", () => {
   const html = renderToStaticMarkup(
     <PerformanceResultRegion
-      submitted={{ period: "week", startDate: "2026-08-03", endDate: "2026-08-09" }}
+      submitted={{ period: "week", basis: "work", startDate: "2026-08-03", endDate: "2026-08-09" }}
       report={{ data: undefined, loading: false, error: null, refresh: vi.fn() }}
     />,
   );
@@ -110,7 +109,7 @@ test("keeps a stable loading region while the first submitted request is pending
 test("keeps the prior result visible while refreshing", () => {
   const html = renderToStaticMarkup(
     <PerformanceResultRegion
-      submitted={{ period: "week", startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" }}
+      submitted={{ period: "week", basis: "work", startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" }}
       report={{ data: reportFixture, loading: true, error: null, refresh: vi.fn() }}
     />,
   );
@@ -119,8 +118,8 @@ test("keeps the prior result visible while refreshing", () => {
 });
 
 test("keeps retained data associated with its submitted scope until replacement data arrives", () => {
-  const aisyahRequest = { period: "week" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
-  const bungaRequest = { period: "week" as const, startDate: "2026-08-10", endDate: "2026-08-16", csName: "CS Bunga" };
+  const aisyahRequest = { period: "week" as const, basis: "work" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
+  const bungaRequest = { period: "week" as const, basis: "work" as const, startDate: "2026-08-10", endDate: "2026-08-16", csName: "CS Bunga" };
   const aisyahResult = associatePerformanceResult(null, aisyahRequest, reportFixture);
   const retainedResult = associatePerformanceResult(aisyahResult, bungaRequest, reportFixture);
 
@@ -156,7 +155,7 @@ test("keeps retained data associated with its submitted scope until replacement 
 });
 
 test("an identical explicit submission refreshes exactly once instead of replacing submitted args", () => {
-  const submitted = { period: "week" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
+  const submitted = { period: "week" as const, basis: "work" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
   const next = Object.freeze({ ...submitted });
   const replaceSubmitted = vi.fn();
   const refresh = vi.fn();
@@ -167,7 +166,7 @@ test("an identical explicit submission refreshes exactly once instead of replaci
 });
 
 test("a changed explicit submission replaces submitted args without refreshing", () => {
-  const submitted = { period: "week" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
+  const submitted = { period: "week" as const, basis: "work" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
   const next = Object.freeze({ ...submitted, startDate: "2026-08-10", endDate: "2026-08-16" });
   const replaceSubmitted = vi.fn();
   const refresh = vi.fn();
@@ -181,7 +180,7 @@ test("a changed explicit submission replaces submitted args without refreshing",
 test("shows the header refresh action only for a retained success without an error retry", () => {
   const displayed = {
     data: reportFixture,
-    submitted: { period: "week" as const, startDate: "2026-08-03", endDate: "2026-08-09" },
+    submitted: { period: "week" as const, basis: "work" as const, startDate: "2026-08-03", endDate: "2026-08-09" },
   };
   const state = { data: undefined, loading: false, error: null, refresh: vi.fn() };
   const firstLoadHtml = renderToStaticMarkup(
@@ -200,7 +199,7 @@ test("shows the header refresh action only for a retained success without an err
 });
 
 test("shows a retryable error without hiding the retained result", () => {
-  const aisyahRequest = { period: "week" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
+  const aisyahRequest = { period: "week" as const, basis: "work" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
   const displayed = associatePerformanceResult(null, aisyahRequest, reportFixture);
   const html = renderToStaticMarkup(
     <PerformanceResultRegion
@@ -219,7 +218,7 @@ test("shows a retryable error without hiding the retained result", () => {
 test("shows scoped empty and retryable error states", () => {
   const emptyHtml = renderToStaticMarkup(
     <PerformanceResultRegion
-      submitted={{ period: "week", startDate: "2026-08-03", endDate: "2026-08-09", csName: "Aisyah" }}
+      submitted={{ period: "week", basis: "work", startDate: "2026-08-03", endDate: "2026-08-09", csName: "Aisyah" }}
       report={{ data: { ...reportFixture, summary: { ...reportFixture.summary, leads: 0, closings: 0 } }, loading: false, error: null, refresh: vi.fn() }}
     />,
   );
@@ -232,7 +231,7 @@ test("shows scoped empty and retryable error states", () => {
 
   const errorHtml = renderToStaticMarkup(
     <PerformanceResultRegion
-      submitted={{ period: "week", startDate: "2026-08-03", endDate: "2026-08-09" }}
+      submitted={{ period: "week", basis: "work", startDate: "2026-08-03", endDate: "2026-08-09" }}
       report={{ data: undefined, loading: false, error: "Server error", refresh: vi.fn() }}
     />,
   );
