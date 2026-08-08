@@ -1,7 +1,7 @@
 # Performance P2A Operational Ledger Design
 
 **Date:** 2026-08-08  
-**Status:** Approved concept, pending specification review
+**Status:** Approved for implementation planning
 
 ## 1. Objective
 
@@ -208,4 +208,3 @@ Automated verification must cover:
 - TypeScript, the full test suite, and the production build pass.
 
 Browser verification uses real production-shaped data at desktop and mobile widths. Acceptance is reached when an owner can identify the strongest or weakest CS/product without deciphering cramped columns, while the generated totals and Convex request count remain unchanged from P1.
-
