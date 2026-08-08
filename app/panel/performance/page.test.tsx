@@ -22,7 +22,10 @@ vi.mock("@/components/panel/performance-panel", () => ({
   PerformancePanel: ({ scopeLabel }: { scopeLabel: string }) => <div>Report loaded for {scopeLabel}</div>,
 }));
 
-import PerformancePage, { PerformanceResultRegion } from "./page";
+import PerformancePage, {
+  associatePerformanceResult,
+  PerformanceResultRegion,
+} from "./page";
 import { api } from "@/convex/_generated/api";
 import type { PerformanceReport } from "@/lib/performance-report";
 
@@ -94,6 +97,57 @@ test("keeps the prior result visible while refreshing", () => {
   );
   expect(html).toContain("Report loaded for Aisyah");
   expect(html).not.toContain("Menyiapkan laporan</p>");
+});
+
+test("keeps retained data associated with its submitted scope until replacement data arrives", () => {
+  const aisyahRequest = { period: "week" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
+  const bungaRequest = { period: "week" as const, startDate: "2026-08-10", endDate: "2026-08-16", csName: "CS Bunga" };
+  const aisyahResult = associatePerformanceResult(null, aisyahRequest, reportFixture);
+  const retainedResult = associatePerformanceResult(aisyahResult, bungaRequest, reportFixture);
+
+  const retainedHtml = renderToStaticMarkup(
+    <PerformanceResultRegion
+      submitted={bungaRequest}
+      report={{ data: reportFixture, loading: true, error: null, refresh: vi.fn() }}
+      displayed={retainedResult}
+    />,
+  );
+  expect(retainedHtml).toContain("Report loaded for Aisyah");
+  expect(retainedHtml).not.toContain("Report loaded for Bunga");
+
+  const bungaReport = {
+    ...reportFixture,
+    startDate: "2026-08-10",
+    endDate: "2026-08-16",
+    generatedAt: Date.parse("2026-08-15T14:00:00Z"),
+  };
+  const bungaResult = associatePerformanceResult(retainedResult, bungaRequest, bungaReport);
+  const replacedHtml = renderToStaticMarkup(
+    <PerformanceResultRegion
+      submitted={bungaRequest}
+      report={{ data: bungaReport, loading: false, error: null, refresh: vi.fn() }}
+      displayed={bungaResult}
+    />,
+  );
+  expect(replacedHtml).toContain("Report loaded for Bunga");
+  expect(replacedHtml).not.toContain("Report loaded for Aisyah");
+});
+
+test("shows a retryable error without hiding the retained result", () => {
+  const aisyahRequest = { period: "week" as const, startDate: "2026-08-03", endDate: "2026-08-09", csName: "CS Aisyah" };
+  const displayed = associatePerformanceResult(null, aisyahRequest, reportFixture);
+  const html = renderToStaticMarkup(
+    <PerformanceResultRegion
+      submitted={{ ...aisyahRequest, csName: "CS Bunga" }}
+      report={{ data: reportFixture, loading: false, error: "Server error", refresh: vi.fn() }}
+      displayed={displayed}
+    />,
+  );
+
+  expect(html).toContain("Laporan gagal dimuat");
+  expect(html).toContain("Coba lagi");
+  expect(html).toContain("Report loaded for Aisyah");
+  expect(html).not.toContain("Report loaded for Bunga");
 });
 
 test("shows scoped empty and retryable error states", () => {

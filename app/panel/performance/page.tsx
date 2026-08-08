@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import { Crown, RefreshCw } from "lucide-react";
@@ -33,6 +33,20 @@ type SnapshotState = {
   refresh: () => void | Promise<void>;
 };
 
+type DisplayedPerformanceResult = {
+  data: PerformanceReport;
+  submitted: SubmittedArgs;
+};
+
+export function associatePerformanceResult(
+  previous: DisplayedPerformanceResult | null,
+  submitted: SubmittedArgs | null,
+  data: PerformanceReport | undefined,
+): DisplayedPerformanceResult | null {
+  if (!data || !submitted || data === previous?.data) return previous;
+  return { data, submitted };
+}
+
 function jakartaDate(): string {
   const parts = new Intl.DateTimeFormat("en", {
     timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit",
@@ -46,26 +60,34 @@ const inputClass = "min-h-11 w-full rounded-lg border border-input bg-background
 export function PerformanceResultRegion({
   submitted,
   report,
+  displayed,
 }: {
   submitted: SubmittedArgs | null;
   report: SnapshotState;
+  displayed?: DisplayedPerformanceResult | null;
 }) {
-  if (!submitted) {
+  const active = displayed === undefined
+    ? report.data && submitted ? { data: report.data, submitted } : null
+    : displayed;
+
+  if (!submitted && !active) {
     return <PanelState kind="empty" title="Pilih periode lalu tampilkan laporan" />;
   }
 
-  if (report.error && !report.data) {
-    return (
-      <PanelState
-        kind="error"
-        title="Laporan gagal dimuat"
-        description={report.error}
-        action={<Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>}
-      />
-    );
+  const errorState = report.error ? (
+    <PanelState
+      kind="error"
+      title="Laporan gagal dimuat"
+      description={report.error}
+      action={<Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>}
+    />
+  ) : null;
+
+  if (errorState && !active) {
+    return errorState;
   }
 
-  if (report.loading && !report.data) {
+  if (report.loading && !active) {
     return (
       <div role="status" aria-live="polite" className="grid min-h-40 place-items-center rounded-xl border border-dashed px-6 py-10 text-center">
         <p className="text-sm font-medium">Menyiapkan laporan…</p>
@@ -73,15 +95,15 @@ export function PerformanceResultRegion({
     );
   }
 
-  if (!report.data) return null;
+  if (!active) return null;
 
-  const scopeLabel = submitted.csName?.replace(/^CS\s+/i, "") || "Semua CS";
-  const empty = report.data.summary.leads === 0 && report.data.summary.closings === 0;
-  if (empty) {
-    return <PanelState kind="empty" title={`Belum ada data untuk ${scopeLabel} pada periode ini`} />;
-  }
+  const scopeLabel = active.submitted.csName?.replace(/^CS\s+/i, "") || "Semua CS";
+  const empty = active.data.summary.leads === 0 && active.data.summary.closings === 0;
+  const content = empty
+    ? <PanelState kind="empty" title={`Belum ada data untuk ${scopeLabel} pada periode ini`} />
+    : <PerformancePanel report={active.data} scopeLabel={scopeLabel} />;
 
-  return <PerformancePanel report={report.data} scopeLabel={scopeLabel} />;
+  return errorState ? <>{errorState}{content}</> : content;
 }
 
 export default function PerformancePage() {
@@ -99,6 +121,8 @@ export default function PerformancePage() {
     api.performanceReports.getPerformanceReport,
     submitted ?? "skip",
   );
+  const displayedRef = useRef<DisplayedPerformanceResult | null>(null);
+  displayedRef.current = associatePerformanceResult(displayedRef.current, submitted, report.data);
 
   const submit = () => {
     try {
@@ -202,7 +226,7 @@ export default function PerformancePage() {
         </CardContent>
       </Card>
 
-      <PerformanceResultRegion submitted={submitted} report={report} />
+      <PerformanceResultRegion submitted={submitted} report={report} displayed={displayedRef.current} />
     </div>
   );
 }
