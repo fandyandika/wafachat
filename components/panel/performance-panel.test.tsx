@@ -61,15 +61,33 @@ test("shows the running summary and clipped monthly weeks", () => {
   expect(html).toContain("min-h-11");
   expect(html).toContain("Ringkasan periode");
   expect(html).toContain("Rincian pekanan");
+  expect(html).toContain('aria-label="Metrik utama"');
+  expect(html).toContain('aria-label="Metrik pendukung"');
   expect(html).toContain("Berjalan");
   expect(html).toContain("67,2%");
-  expect(html).toContain("↑ 3,1%");
+  expect(html).toContain("↑ 3,1 poin");
   expect(html).toContain("↑ Rp500.000");
+  expect(html).not.toContain("↑ 3,1%");
+  expect(html).not.toContain("33703258");
   expect(html).toContain("COD 60%");
   expect(html).toContain("Transfer 40%");
   expect(html).toContain("1–2 Agu");
   expect(html).toContain("Pekan parsial");
   expect(html).toContain("31 Agu");
+});
+
+test("formats large revenue deltas in Indonesian Rupiah", () => {
+  const html = renderToStaticMarkup(
+    <PerformancePanel
+      report={{
+        ...report,
+        summary: { ...report.summary, deltaRevenue: 33_703_258 },
+      }}
+      scopeLabel="Semua CS"
+    />,
+  );
+
+  expect(html).toContain("↑ Rp33.703.258");
 });
 
 test.each([

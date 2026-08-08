@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 
 const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
 const pct = (value: number) => `${number.format(value)}%`;
+const points = (value: number) => `${number.format(value)} poin`;
 const tabs = [['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per produk']] as const;
 type PerformanceTab = typeof tabs[number][0];
 
@@ -36,18 +37,25 @@ function rangeLabel(range: DateRange): string {
   return startMonth === endMonth ? `${start.split(" ")[0]}–${endDay} ${endMonth}` : `${start}–${end}`;
 }
 
-function MetricCard({ label, value, delta, deltaFormat }: {
+function SummaryMetricCard({ label, value, delta, deltaFormat, density }: {
   label: string;
   value: React.ReactNode;
   delta?: number;
   deltaFormat?: (value: number) => string;
+  density: "primary" | "secondary";
 }) {
   return (
-    <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm">
+    <div className={cn(
+      "rounded-xl border border-border bg-card shadow-sm",
+      density === "primary" ? "p-4" : "p-3.5",
+    )}>
       <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-1 flex items-center gap-2 text-xl font-semibold tabular-nums">
+      <div className={cn(
+        "mt-1 flex flex-wrap items-center gap-2 font-semibold tabular-nums",
+        density === "primary" ? "text-xl sm:text-2xl" : "text-lg",
+      )}>
         <span>{value}</span>
-        {delta !== undefined && <DeltaPill value={delta} format={deltaFormat} />}
+        {delta !== undefined ? <DeltaPill value={delta} format={deltaFormat} /> : null}
       </div>
     </div>
   );
@@ -133,18 +141,21 @@ export function PerformancePanel({
       <div id={activePanelId} role="tabpanel" aria-labelledby={`performance-tab-${tab}`}>
       {tab === "summary" && (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            <MetricCard label="Leads" value={number.format(s.leads)} delta={s.deltaLeads} />
-            <MetricCard label="Closing" value={number.format(s.closings)} delta={s.deltaClosings} />
-            <MetricCard label="Conversion rate" value={pct(s.cr)} delta={s.deltaCr} deltaFormat={pct} />
-            <MetricCard label="Omzet" value={formatRupiah(s.revenue)} delta={s.deltaRevenue} deltaFormat={formatRupiah} />
-            <MetricCard label="Diskon" value={formatRupiah(s.discount)} />
-            <MetricCard label="COD" value={number.format(s.cod)} />
-            <MetricCard label="Transfer" value={number.format(s.transfer)} />
-            <MetricCard label="Rasio pembayaran" value={<span className="text-sm">COD {pct(s.codPct)} · Transfer {pct(s.transferPct)}</span>} />
-            <MetricCard label="Terkirim" value={number.format(s.delivered)} />
-            <MetricCard label="Dibatalkan" value={number.format(s.cancelled)} />
-          </div>
+          <section aria-label="Metrik utama" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <SummaryMetricCard density="primary" label="Leads" value={number.format(s.leads)} delta={s.deltaLeads} />
+            <SummaryMetricCard density="primary" label="Closing" value={number.format(s.closings)} delta={s.deltaClosings} />
+            <SummaryMetricCard density="primary" label="Conversion rate" value={pct(s.cr)} delta={s.deltaCr} deltaFormat={points} />
+            <SummaryMetricCard density="primary" label="Omzet" value={formatRupiah(s.revenue)} delta={s.deltaRevenue} deltaFormat={formatRupiah} />
+          </section>
+
+          <section aria-label="Metrik pendukung" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <SummaryMetricCard density="secondary" label="Diskon" value={formatRupiah(s.discount)} />
+            <SummaryMetricCard density="secondary" label="COD" value={number.format(s.cod)} />
+            <SummaryMetricCard density="secondary" label="Transfer" value={number.format(s.transfer)} />
+            <SummaryMetricCard density="secondary" label="Rasio pembayaran" value={<span className="text-sm">COD {pct(s.codPct)} · Transfer {pct(s.transferPct)}</span>} />
+            <SummaryMetricCard density="secondary" label="Terkirim" value={number.format(s.delivered)} />
+            <SummaryMetricCard density="secondary" label="Dibatalkan" value={number.format(s.cancelled)} />
+          </section>
 
           {report.period === "month" && (
             <Card>
