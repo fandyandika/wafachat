@@ -167,7 +167,12 @@ export default function PerformancePage() {
         />
       ) : empty ? (
         <PanelState kind="empty" title="Belum ada data pada periode ini" />
-      ) : report.data ? <PerformancePanel report={report.data} /> : null}
+      ) : report.data ? (
+        <PerformancePanel
+          report={report.data}
+          scopeLabel={submitted.csName?.replace(/^CS\s+/i, "") || "Semua CS"}
+        />
+      ) : null}
     </div>
   );
 }

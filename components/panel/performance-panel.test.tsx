@@ -45,8 +45,15 @@ const report: PerformanceReport = {
 };
 
 test("shows the running summary and clipped monthly weeks", () => {
-  const html = renderToStaticMarkup(<PerformancePanel report={report} />);
+  const html = renderToStaticMarkup(
+    <PerformancePanel report={report} scopeLabel="Semua CS" />,
+  );
 
+  expect(html).toContain("1–31 Agu");
+  expect(html).toContain("Semua CS");
+  expect(html).toContain("Berjalan");
+  expect(html).toContain("Data sampai 5 Agu");
+  expect(html).toContain('aria-label="Status laporan"');
   expect(html).toContain('role="tablist"');
   expect(html).toContain('aria-selected="true"');
   expect(html).toContain('tabindex="0"');
@@ -77,10 +84,15 @@ test.each([
 });
 
 test("keeps core metrics visible when response samples are limited", () => {
-  const html = renderToStaticMarkup(<PerformancePanel report={{
-    ...report,
-    responseNotice: "Response time membutuhkan rentang lebih pendek",
-  }} />);
+  const html = renderToStaticMarkup(
+    <PerformancePanel
+      report={{
+        ...report,
+        responseNotice: "Response time membutuhkan rentang lebih pendek",
+      }}
+      scopeLabel="Semua CS"
+    />,
+  );
 
   expect(html).toContain("Response time membutuhkan rentang lebih pendek");
   expect(html).toContain("Rp3.000.000");

@@ -53,7 +53,13 @@ function MetricCard({ label, value, delta, deltaFormat }: {
   );
 }
 
-export function PerformancePanel({ report }: { report: PerformanceReport }) {
+export function PerformancePanel({
+  report,
+  scopeLabel,
+}: {
+  report: PerformanceReport;
+  scopeLabel: string;
+}) {
   const [tab, setTab] = useState<PerformanceTab>("summary");
   const [productSort, setProductSort] = useState<"closing" | "cr">("closing");
   const products = useMemo(() => [...report.products].sort((a, b) => productSort === "cr"
@@ -72,14 +78,29 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
-        <div>
+      <section
+        aria-label="Status laporan"
+        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"
+      >
+        <div className="min-w-0">
           <p className="font-medium">Ringkasan periode</p>
-          <p className="text-xs text-muted-foreground">
-            {rangeLabel({ startDate: report.startDate, endDate: report.endDate })} · Data sampai {dateLabel(report.effectiveEndDate)} · dibuat {new Intl.DateTimeFormat("id-ID", { hour: "2-digit", minute: "2-digit" }).format(report.generatedAt)} · {report.status === "running" ? "Berjalan" : "Selesai"}
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {rangeLabel({ startDate: report.startDate, endDate: report.endDate })}
+            {" · "}{scopeLabel}{" · Data sampai "}{dateLabel(report.effectiveEndDate)}
           </p>
         </div>
-      </div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="rounded-full border border-border bg-muted/40 px-2 py-1 font-medium text-foreground">
+            {report.status === "running" ? "Berjalan" : "Selesai"}
+          </span>
+          <span>
+            Dibuat {new Intl.DateTimeFormat("id-ID", {
+              hour: "2-digit",
+              minute: "2-digit",
+            }).format(report.generatedAt)}
+          </span>
+        </div>
+      </section>
 
       <div role="tablist" aria-label="Tampilan laporan kinerja" className="flex w-fit gap-1 rounded-lg border border-border bg-muted/30 p-1">
         {tabs.map(([value, label]) => (
