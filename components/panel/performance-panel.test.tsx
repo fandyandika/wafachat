@@ -2,7 +2,11 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import type { MetricRow, PerformanceReport } from "@/lib/performance-report";
-import { nextPerformanceTab, PerformancePanel } from "./performance-panel";
+import {
+  nextPerformanceTab,
+  PerformanceBreakdownContent,
+  PerformancePanel,
+} from "./performance-panel";
 
 (globalThis as any).React = React;
 
@@ -99,6 +103,21 @@ test.each([
   ["summary", "Enter", null],
 ] as const)("moves from %s with %s to %s", (current, key, expected) => {
   expect(nextPerformanceTab(current, key)).toBe(expected);
+});
+
+test.each([
+  ["cs", "Performa per CS", "Aisyah", "1 mnt"],
+  ["product", "Performa per produk", "Quran Mapping", "15 closing"],
+] as const)("mounts the extracted %s breakdown for the selected panel tab", (tab, title, rowLabel, metric) => {
+  const html = renderToStaticMarkup(
+    <PerformanceBreakdownContent tab={tab} report={report} />,
+  );
+
+  expect(html).toContain(title);
+  expect(html).toContain(rowLabel);
+  expect(html).toContain(metric);
+  expect(html).toContain('data-layout="desktop-table"');
+  expect(html).toContain('data-layout="mobile-ledger"');
 });
 
 test("keeps core metrics visible when response samples are limited", () => {

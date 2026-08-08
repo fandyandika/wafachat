@@ -65,6 +65,22 @@ function SummaryMetricCard({ label, value, delta, deltaFormat, density }: {
   );
 }
 
+export function PerformanceBreakdownContent({
+  tab,
+  report,
+}: {
+  tab: PerformanceTab;
+  report: PerformanceReport;
+}) {
+  if (tab === "cs") {
+    return <CsPerformanceBreakdown rows={report.cs} responseNotice={report.responseNotice} />;
+  }
+  if (tab === "product") {
+    return <ProductPerformanceBreakdown rows={report.products} />;
+  }
+  return null;
+}
+
 export function PerformancePanel({
   report,
   scopeLabel,
@@ -198,13 +214,7 @@ export function PerformancePanel({
         </>
       )}
 
-      {tab === "cs" ? (
-        <CsPerformanceBreakdown rows={report.cs} responseNotice={report.responseNotice} />
-      ) : null}
-
-      {tab === "product" ? (
-        <ProductPerformanceBreakdown rows={report.products} />
-      ) : null}
+      <PerformanceBreakdownContent tab={tab} report={report} />
       </div>
     </div>
   );
