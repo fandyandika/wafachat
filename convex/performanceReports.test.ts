@@ -84,6 +84,83 @@ test("aggregates additive rollups and excludes another organization", async () =
   expect(report.cs.map((row: any) => row.csName)).toEqual(["Aisyah", "Lila"]);
   expect(report.products[0]).toMatchObject({ product: "Quran Mapping", leads: 30, closings: 15 });
   expect(report.summary.leads).not.toBe(1029);
+  expect(report).toMatchObject({ basis: "work" });
+  expect(report.summary.responseMedianMs).toBeNull();
+});
+
+test("daily work reports use the selected opening-window date", async () => {
+  vi.useFakeTimers({ now: new Date("2026-08-10T12:00:00.000Z") });
+  const t = convexTest(schema, modules);
+  await seed(t);
+  const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
+
+  const report = await admin.query((api as any).performanceReports.getPerformanceReport, {
+    period: "day",
+    basis: "work",
+    startDate: "2026-06-30",
+    endDate: "2026-06-30",
+  });
+
+  expect(report).toMatchObject({
+    period: "day",
+    basis: "work",
+    startDate: "2026-06-30",
+    endDate: "2026-06-30",
+    summary: { leads: 15, closings: 7, cod: 4, transfer: 3 },
+  });
+});
+
+test("daily calendar reports use exact Jakarta midnight bounds and exclude another organization", async () => {
+  vi.useFakeTimers({ now: new Date("2026-08-10T12:00:00.000Z") });
+  const t = convexTest(schema, modules);
+  const orgId = await seed(t);
+  const otherOrgId = await t.run((ctx: any) => ctx.db
+    .query("organizations")
+    .withIndex("by_slug", (q: any) => q.eq("slug", "other"))
+    .unique()
+    .then((row: any) => row._id));
+  const inside = [
+    Date.parse("2026-08-07T00:30:00+07:00"),
+    Date.parse("2026-08-07T15:59:00+07:00"),
+  ];
+  const insertPair = async (targetOrgId: any, index: number, at: number, paymentMethod: "cod" | "transfer") => t.run(async (ctx: any) => {
+    const orderId = `CAL-${index}-${String(targetOrgId)}`;
+    const phone = `6285550000${index}${targetOrgId === orgId ? "1" : "9"}`;
+    await ctx.db.insert("orders", {
+      orgId: targetOrgId, orderId, customerPhone: phone, customerName: `Customer ${index}`,
+      assignedCsName: "Aisyah", csKey: "aisyah", productName: "Quran Mapping", products: "Quran Mapping",
+      productsSubtotal: "100000", shippingCost: "0", total: "100000", shippingAddress: "",
+      shippingDistrict: "", shippingCity: "", source: "berdu", aiEligible: false, createdAt: at, updatedAt: at,
+    });
+    await ctx.db.insert("shippingRecaps", {
+      orgId: targetOrgId, orderIdBerdu: orderId, customerPhone: phone, customerName: `Customer ${index}`,
+      csName: "Aisyah", csKey: "aisyah", closedAt: at, recipientName: `Customer ${index}`,
+      recipientPhone: phone, recipientAddress: "", recipientDistrict: "", recipientCity: "",
+      packageContent: "Quran Mapping", paymentMethod, total: 100000, status: "ready", flags: [],
+      sourceMessageText: "", version: 1, createdAt: at, updatedAt: at,
+    });
+  });
+  await insertPair(orgId, 1, inside[0], "cod");
+  await insertPair(orgId, 2, inside[1], "transfer");
+  await insertPair(orgId, 3, Date.parse("2026-08-08T00:01:00+07:00"), "cod");
+  await insertPair(otherOrgId, 4, inside[0], "cod");
+
+  const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
+  const report = await admin.query((api as any).performanceReports.getPerformanceReport, {
+    period: "day",
+    basis: "calendar",
+    startDate: "2026-08-07",
+    endDate: "2026-08-07",
+  });
+
+  expect(report).toMatchObject({
+    period: "day",
+    basis: "calendar",
+    summary: { leads: 2, closings: 2, cod: 1, transfer: 1, revenue: 200000 },
+  });
+  expect(report.products).toEqual([
+    expect.objectContaining({ product: "Quran Mapping", leads: 2, closings: 2, cod: 1, transfer: 1 }),
+  ]);
 });
 
 test("scopes every report section to one CS", async () => {

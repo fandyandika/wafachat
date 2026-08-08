@@ -138,6 +138,8 @@ test("getPerformance: closing groups under the order product name, not the messa
   const row = perf.products.find((p) => p.product === "Quran Mapping")!;
   expect(row.leads).toBe(1);
   expect(row.closing).toBe(1);
+  expect(row).toMatchObject({ cod: 0, transfer: 1, codPct: 0, transferPct: 100 });
+  expect(perf.cs[0]).toMatchObject({ cod: 0, transfer: 1, codPct: 0, transferPct: 100 });
 });
 
 test("renameCsName: renames CS across orders/recaps/conversations, others untouched", async () => {

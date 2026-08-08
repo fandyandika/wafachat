@@ -10,7 +10,7 @@ import {
   windowKeyToday,
   windowRangeForKey,
 } from "./lib";
-import { responseTimesForPerformanceReport } from "./rollupReaders";
+import { performanceFromRaw, responseTimesForPerformanceReport } from "./rollupReaders";
 import {
   effectivePerformanceRange,
   inclusiveDateCount,
@@ -38,7 +38,8 @@ const metricFields = {
 };
 
 const performanceReportValidator = v.object({
-  period: v.union(v.literal("week"), v.literal("month"), v.literal("custom")),
+  period: v.union(v.literal("day"), v.literal("week"), v.literal("month"), v.literal("custom")),
+  basis: v.union(v.literal("calendar"), v.literal("work")),
   startDate: v.string(),
   endDate: v.string(),
   effectiveEndDate: v.string(),
@@ -47,6 +48,7 @@ const performanceReportValidator = v.object({
   responseNotice: v.optional(v.string()),
   summary: v.object({
     ...metricFields,
+    responseMedianMs: v.union(v.number(), v.null()),
     deltaLeads: v.number(),
     deltaClosings: v.number(),
     deltaCr: v.number(),
@@ -172,9 +174,93 @@ function exactRange(period: PerformancePeriod, startDate: string, endDate: strin
   return resolved;
 }
 
+async function readWindowRollups(
+  ctx: any,
+  orgId: Id<"organizations">,
+  windowKey: string,
+  requestedCsKey?: string,
+): Promise<Doc<"dailyRollups">[]> {
+  const rows = await ctx.db.query("dailyRollups")
+    .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey))
+    .take(MAX_PERFORMANCE_ROLLUPS_PER_RANGE + 1);
+  if (rows.length > MAX_PERFORMANCE_ROLLUPS_PER_RANGE) {
+    throw new Error("Data laporan terlalu besar; persempit rentang");
+  }
+  return requestedCsKey ? rows.filter((row: Doc<"dailyRollups">) => row.csKey === requestedCsKey) : rows;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function jakartaCalendarRange(date: string) {
+  const startAt = Date.parse(`${date}T00:00:00+07:00`);
+  if (!Number.isFinite(startAt)) throw new Error("Tanggal tidak valid");
+  return { startAt, endAt: startAt + DAY_MS };
+}
+
+function rawMetric(raw: any): MetricRow {
+  const cod = raw.totalCod ?? 0;
+  const transfer = raw.totalTransfer ?? 0;
+  return {
+    leads: raw.totalLeads ?? 0,
+    closings: raw.totalClosing ?? 0,
+    cr: raw.overallCr ?? 0,
+    revenue: raw.totalRevenue ?? 0,
+    cod,
+    transfer,
+    codPct: percent(cod, cod + transfer),
+    transferPct: percent(transfer, cod + transfer),
+    delivered: raw.delivered ?? 0,
+    cancelled: raw.cancelled ?? 0,
+    discount: raw.totalDiscount ?? 0,
+  };
+}
+
+function rawProducts(raw: any) {
+  return raw.products.map((row: any) => ({
+    product: row.product,
+    leads: row.leads,
+    closings: row.closing,
+    cr: row.cr,
+    revenue: row.revenue,
+    cod: row.cod,
+    transfer: row.transfer,
+    codPct: row.codPct,
+    transferPct: row.transferPct,
+    delivered: 0,
+    cancelled: 0,
+    discount: row.discount,
+  })).sort((a: any, b: any) => b.closings - a.closings || a.product.localeCompare(b.product));
+}
+
+function rawCs(raw: any, priorRaw: any, medians: Map<string, number | null>) {
+  const priorByKey = new Map(priorRaw.cs.map((row: any) => [csKeyOf(row.csName), row]));
+  return raw.cs.map((row: any) => {
+    const csKey = csKeyOf(row.csName);
+    const previous = priorByKey.get(csKey) as any;
+    return {
+      csKey,
+      csName: row.csName,
+      leads: row.leads,
+      closings: row.closing,
+      cr: row.cr,
+      revenue: row.revenue,
+      cod: row.cod,
+      transfer: row.transfer,
+      codPct: row.codPct,
+      transferPct: row.transferPct,
+      delivered: 0,
+      cancelled: 0,
+      discount: row.discount,
+      responseMedianMs: medians.get(csKey) ?? null,
+      deltaCr: round1(row.cr - (previous?.cr ?? 0)),
+    };
+  }).sort((a: any, b: any) => b.closings - a.closings || a.csName.localeCompare(b.csName));
+}
+
 export const getPerformanceReport = query({
   args: {
-    period: v.union(v.literal("week"), v.literal("month"), v.literal("custom")),
+    period: v.union(v.literal("day"), v.literal("week"), v.literal("month"), v.literal("custom")),
+    basis: v.optional(v.union(v.literal("calendar"), v.literal("work"))),
     startDate: v.string(),
     endDate: v.string(),
     csName: v.optional(v.string()),
@@ -182,12 +268,94 @@ export const getPerformanceReport = query({
   returns: performanceReportValidator,
   handler: async (ctx, args): Promise<PerformanceReport> => {
     const { orgId } = await requireAdminOrg(ctx, "performanceReports.getPerformanceReport");
+    const basis = args.basis ?? "work";
+    if (args.period !== "day" && basis !== "work") {
+      throw new Error("Basis kalender hanya tersedia untuk laporan harian");
+    }
     const selected = exactRange(args.period, args.startDate, args.endDate);
     if (inclusiveDateCount(selected) > 35) throw new Error("Maksimal 35 hari");
+    const requestedCsKey = args.csName ? csKeyOf(args.csName) : undefined;
+
+    if (args.period === "day") {
+      const range = basis === "calendar"
+        ? jakartaCalendarRange(selected.startDate)
+        : windowRangeForKey(selected.startDate);
+      if (range.startAt > Date.now()) throw new Error("Periode belum dimulai");
+      const priorRange = { startAt: range.startAt - DAY_MS, endAt: range.endAt - DAY_MS };
+
+      if (basis === "calendar") {
+        const [currentRaw, priorRaw, response] = await Promise.all([
+          performanceFromRaw(ctx, orgId, { ...range, csName: args.csName }),
+          performanceFromRaw(ctx, orgId, { ...priorRange, csName: args.csName }),
+          responseTimesForPerformanceReport(ctx, orgId, { ...range, csName: args.csName }),
+        ]);
+        const medians = new Map<string, number | null>();
+        if (response.data) {
+          for (const row of response.data.cs) medians.set(csKeyOf(row.csName), row.firstReplyMedianMs);
+        }
+        const current = rawMetric(currentRaw);
+        const prior = rawMetric(priorRaw);
+        return {
+          period: "day",
+          basis,
+          startDate: selected.startDate,
+          endDate: selected.endDate,
+          effectiveEndDate: selected.endDate,
+          status: Date.now() < range.endAt ? "running" : "complete",
+          generatedAt: Date.now(),
+          responseNotice: response.limited ? "Response time membutuhkan rentang lebih pendek" : undefined,
+          summary: {
+            ...current,
+            responseMedianMs: response.data?.overall.firstReplyMedianMs ?? null,
+            deltaLeads: current.leads - prior.leads,
+            deltaClosings: current.closings - prior.closings,
+            deltaCr: round1(current.cr - prior.cr),
+            deltaRevenue: current.revenue - prior.revenue,
+          },
+          cs: rawCs(currentRaw, priorRaw, medians),
+          products: rawProducts(currentRaw),
+          weeks: [],
+        };
+      }
+
+      const previousDate = previousPerformanceRange("day", selected, selected).startDate;
+      const [currentRows, previousRows, response] = await Promise.all([
+        readWindowRollups(ctx, orgId, selected.startDate, requestedCsKey),
+        readWindowRollups(ctx, orgId, previousDate, requestedCsKey),
+        responseTimesForPerformanceReport(ctx, orgId, { ...range, csName: args.csName }),
+      ]);
+      const medians = new Map<string, number | null>();
+      if (response.data) {
+        for (const row of response.data.cs) medians.set(csKeyOf(row.csName), row.firstReplyMedianMs);
+      }
+      const current = aggregateRollups(currentRows);
+      const prior = aggregateRollups(previousRows);
+      return {
+        period: "day",
+        basis,
+        startDate: selected.startDate,
+        endDate: selected.endDate,
+        effectiveEndDate: selected.endDate,
+        status: Date.now() < range.endAt ? "running" : "complete",
+        generatedAt: Date.now(),
+        responseNotice: response.limited ? "Response time membutuhkan rentang lebih pendek" : undefined,
+        summary: {
+          ...current,
+          responseMedianMs: response.data?.overall.firstReplyMedianMs ?? null,
+          deltaLeads: current.leads - prior.leads,
+          deltaClosings: current.closings - prior.closings,
+          deltaCr: round1(current.cr - prior.cr),
+          deltaRevenue: current.revenue - prior.revenue,
+        },
+        cs: aggregateByCs(currentRows, previousRows, medians),
+        products: aggregateProducts(currentRows),
+        weeks: [],
+      };
+    }
+
     const today = businessDateKeyForWindowKey(windowKeyToday());
     const effective = effectivePerformanceRange(selected, today);
     const previous = previousPerformanceRange(args.period, selected, effective);
-    const requestedCsKey = args.csName ? csKeyOf(args.csName) : undefined;
     const [currentRows, previousRows] = await Promise.all([
       readRollups(ctx, orgId, effective, requestedCsKey),
       readRollups(ctx, orgId, previous, requestedCsKey),
@@ -221,6 +389,7 @@ export const getPerformanceReport = query({
       : [];
     return {
       period: args.period,
+      basis,
       startDate: selected.startDate,
       endDate: selected.endDate,
       effectiveEndDate: effective.endDate,
@@ -229,6 +398,7 @@ export const getPerformanceReport = query({
       responseNotice,
       summary: {
         ...current,
+        responseMedianMs: response.data?.overall.firstReplyMedianMs ?? null,
         deltaLeads: current.leads - prior.leads,
         deltaClosings: current.closings - prior.closings,
         deltaCr: round1(current.cr - prior.cr),

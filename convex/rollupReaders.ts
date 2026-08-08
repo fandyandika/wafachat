@@ -441,11 +441,11 @@ export async function performanceFromRaw(
   const fallbackOrderByPhone = new Map<string, any>();
   for (const { phone, order } of fbResults) if (order) fallbackOrderByPhone.set(phone, order);
 
-  const productMap = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number }>();
-  const csMap = new Map<string, { csName: string; phones: Set<string>; closing: number; revenue: number; discount: number }>();
+  const productMap = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number; cod: number; transfer: number }>();
+  const csMap = new Map<string, { csName: string; phones: Set<string>; closing: number; revenue: number; discount: number; cod: number; transfer: number }>();
   const getCs = (name: string) => {
     const ck = csKeyOf(name);
-    const entry = csMap.get(ck) ?? { csName: name, phones: new Set<string>(), closing: 0, revenue: 0, discount: 0 };
+    const entry = csMap.get(ck) ?? { csName: name, phones: new Set<string>(), closing: 0, revenue: 0, discount: 0, cod: 0, transfer: 0 };
     csMap.set(ck, entry);
     return entry;
   };
@@ -455,7 +455,7 @@ export async function performanceFromRaw(
 
   for (const o of uniqueOrders) {
     const p = canonicalizeProduct(o.productName || o.products);
-    const prod = productMap.get(p) ?? { product: p, leads: 0, closing: 0, revenue: 0, discount: 0 };
+    const prod = productMap.get(p) ?? { product: p, leads: 0, closing: 0, revenue: 0, discount: 0, cod: 0, transfer: 0 };
     prod.leads += 1;
     productMap.set(p, prod);
     getCs(o.assignedCsName).phones.add(normalizePhone(o.customerPhone));
@@ -467,24 +467,28 @@ export async function performanceFromRaw(
     const product = canonicalizeProduct(matchedOrder?.productName || matchedOrder?.products || r.packageContent);
     const revenue = r.total ?? r.codValue ?? r.nonCodItemPrice ?? 0;
     const discount = r.discount ?? (args.includeInferredDiscount ? r.inferredDiscount ?? 0 : 0);
-    const prod = productMap.get(product) ?? { product, leads: 0, closing: 0, revenue: 0, discount: 0 };
+    const prod = productMap.get(product) ?? { product, leads: 0, closing: 0, revenue: 0, discount: 0, cod: 0, transfer: 0 };
     prod.closing += 1;
     prod.revenue += revenue;
     prod.discount += discount;
+    if (r.paymentMethod === "cod") prod.cod += 1;
+    if (r.paymentMethod === "transfer") prod.transfer += 1;
     productMap.set(product, prod);
     closedCustomers.add(phone);
     const cs = getCs(r.csName);
     cs.closing += 1;
     cs.revenue += revenue;
     cs.discount += discount;
+    if (r.paymentMethod === "cod") cs.cod += 1;
+    if (r.paymentMethod === "transfer") cs.transfer += 1;
     totalRevenue += revenue;
     totalDiscount += discount;
   }
 
   const delivered = visibleRecaps.filter((r: any) => r.status === "delivered").length;
   const cancelled = visibleRecaps.filter((r: any) => r.status === "cancelled" || r.status === "cancelled_after_export").length;
-  const totalCod = visibleRecaps.filter((r: any) => r.paymentMethod === "cod").length;
-  const totalTransfer = visibleRecaps.filter((r: any) => r.paymentMethod === "transfer").length;
+  const totalCod = validClosings.filter((r: any) => r.paymentMethod === "cod").length;
+  const totalTransfer = validClosings.filter((r: any) => r.paymentMethod === "transfer").length;
 
   return {
     totalLeads: uniqueOrders.length,
@@ -499,6 +503,8 @@ export async function performanceFromRaw(
     products: Array.from(productMap.values()).map((row) => ({
       ...row,
       cr: cr(row.closing, row.leads),
+      codPct: cr(row.cod, row.cod + row.transfer),
+      transferPct: cr(row.transfer, row.cod + row.transfer),
     })),
     cs: Array.from(csMap.values()).map((row) => ({
       csName: row.csName,
@@ -506,6 +512,10 @@ export async function performanceFromRaw(
       closing: row.closing,
       revenue: row.revenue,
       discount: row.discount,
+      cod: row.cod,
+      transfer: row.transfer,
+      codPct: cr(row.cod, row.cod + row.transfer),
+      transferPct: cr(row.transfer, row.cod + row.transfer),
       cr: cr(row.closing, row.phones.size),
     })),
   };

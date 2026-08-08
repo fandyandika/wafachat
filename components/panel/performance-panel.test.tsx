@@ -26,6 +26,7 @@ const metrics: MetricRow = {
 
 const report: PerformanceReport = {
   period: "month",
+  basis: "work",
   startDate: "2026-08-01",
   endDate: "2026-08-31",
   effectiveEndDate: "2026-08-05",
@@ -33,6 +34,7 @@ const report: PerformanceReport = {
   generatedAt: Date.parse("2026-08-05T10:00:00Z"),
   summary: {
     ...metrics,
+    responseMedianMs: 60_000,
     cr: 67.2,
     deltaLeads: 5,
     deltaClosings: 2,

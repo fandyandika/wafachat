@@ -31,12 +31,14 @@ import type { PerformanceReport } from "@/lib/performance-report";
 
 const reportFixture: PerformanceReport = {
   period: "week",
+  basis: "work",
   startDate: "2026-08-03",
   endDate: "2026-08-09",
   effectiveEndDate: "2026-08-08",
   status: "running",
   generatedAt: Date.parse("2026-08-08T14:00:00Z"),
   summary: {
+    responseMedianMs: null,
     leads: 30,
     closings: 15,
     cr: 50,
