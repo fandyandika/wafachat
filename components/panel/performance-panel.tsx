@@ -1,16 +1,142 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import { RefreshCw } from "lucide-react";
+import {
+  CsPerformanceBreakdown,
+  ProductPerformanceBreakdown,
+} from "@/components/panel/performance-breakdowns";
+import { PanelState } from "@/components/panel/panel-state";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeltaPill } from "@/components/ui/metric-card";
-import { formatDuration, formatRupiah } from "@/lib/format";
-import type { DateRange, PerformanceReport } from "@/lib/performance-report";
+import { formatRupiah } from "@/lib/format";
+import type { DateRange, PerformancePeriod, PerformanceReport } from "@/lib/performance-report";
 import { cn } from "@/lib/utils";
 
 const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
 const pct = (value: number) => `${number.format(value)}%`;
+const points = (value: number) => `${number.format(value)} poin`;
 const tabs = [['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per produk']] as const;
 type PerformanceTab = typeof tabs[number][0];
+
+export type SubmittedArgs = {
+  period: PerformancePeriod;
+  startDate: string;
+  endDate: string;
+  csName?: string;
+};
+
+export type PerformanceSnapshotState = {
+  data: PerformanceReport | undefined;
+  loading: boolean;
+  error: string | null;
+  refresh: () => void | Promise<void>;
+};
+
+export type DisplayedPerformanceResult = {
+  data: PerformanceReport;
+  submitted: SubmittedArgs;
+};
+
+export function submitPerformanceRequest({
+  submitted,
+  next,
+  replaceSubmitted,
+  refresh,
+}: {
+  submitted: SubmittedArgs | null;
+  next: SubmittedArgs;
+  replaceSubmitted: (next: SubmittedArgs) => void;
+  refresh: () => void | Promise<void>;
+}): "refresh" | "replace" {
+  const unchanged = submitted !== null
+    && submitted.period === next.period
+    && submitted.startDate === next.startDate
+    && submitted.endDate === next.endDate
+    && submitted.csName === next.csName;
+
+  if (unchanged) {
+    void refresh();
+    return "refresh";
+  }
+
+  replaceSubmitted(next);
+  return "replace";
+}
+
+export function associatePerformanceResult(
+  previous: DisplayedPerformanceResult | null,
+  submitted: SubmittedArgs | null,
+  data: PerformanceReport | undefined,
+): DisplayedPerformanceResult | null {
+  if (!data || !submitted || data === previous?.data) return previous;
+  return { data, submitted };
+}
+
+export function PerformanceRefreshAction({
+  displayed,
+  report,
+}: {
+  displayed: DisplayedPerformanceResult | null;
+  report: PerformanceSnapshotState;
+}) {
+  if (!displayed || report.error) return null;
+
+  return (
+    <Button
+      size="icon-lg"
+      variant="outline"
+      onClick={() => report.refresh()}
+      disabled={report.loading}
+      aria-label="Refresh laporan"
+    >
+      <RefreshCw className={cn("size-4", report.loading && "animate-spin")} />
+    </Button>
+  );
+}
+
+export function PerformanceResultRegion({
+  submitted,
+  report,
+  displayed,
+}: {
+  submitted: SubmittedArgs | null;
+  report: PerformanceSnapshotState;
+  displayed?: DisplayedPerformanceResult | null;
+}) {
+  const active = displayed === undefined
+    ? report.data && submitted ? { data: report.data, submitted } : null
+    : displayed;
+
+  if (!submitted && !active) {
+    return <PanelState kind="empty" title="Pilih periode lalu tampilkan laporan" />;
+  }
+
+  const errorState = report.error ? (
+    <PanelState
+      kind="error"
+      title="Laporan gagal dimuat"
+      description={report.error}
+      action={<Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>}
+    />
+  ) : null;
+
+  if (errorState && !active) return errorState;
+
+  if (!active) {
+    return (
+      <div role="status" aria-live="polite" className="grid min-h-40 place-items-center rounded-xl border border-dashed px-6 py-10 text-center">
+        <p className="text-sm font-medium">Menyiapkan laporan…</p>
+      </div>
+    );
+  }
+
+  const scopeLabel = active.submitted.csName?.replace(/^CS\s+/i, "") || "Semua CS";
+  const content = <PerformancePanel report={active.data} scopeLabel={scopeLabel} />;
+
+  return errorState ? <>{errorState}{content}</> : content;
+}
 
 export function nextPerformanceTab(current: PerformanceTab, key: string): PerformanceTab | null {
   const index = tabs.findIndex(([value]) => value === current);
@@ -36,29 +162,76 @@ function rangeLabel(range: DateRange): string {
   return startMonth === endMonth ? `${start.split(" ")[0]}–${endDay} ${endMonth}` : `${start}–${end}`;
 }
 
-function MetricCard({ label, value, delta, deltaFormat }: {
+function PerformanceStatusBand({ report, scopeLabel }: { report: PerformanceReport; scopeLabel: string }) {
+  return (
+    <section
+      aria-label="Status laporan"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"
+    >
+      <div className="min-w-0">
+        <p className="font-medium">Ringkasan periode</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {rangeLabel({ startDate: report.startDate, endDate: report.endDate })}
+          {" · "}{scopeLabel}{" · Data sampai "}{dateLabel(report.effectiveEndDate)}
+        </p>
+      </div>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="rounded-full border border-border bg-muted/40 px-2 py-1 font-medium text-foreground">
+          {report.status === "running" ? "Berjalan" : "Selesai"}
+        </span>
+        <span>
+          Dibuat {new Intl.DateTimeFormat("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(report.generatedAt)}
+        </span>
+      </div>
+    </section>
+  );
+}
+
+function SummaryMetricCard({ label, value, delta, deltaFormat, density }: {
   label: string;
   value: React.ReactNode;
   delta?: number;
   deltaFormat?: (value: number) => string;
+  density: "primary" | "secondary";
 }) {
   return (
-    <div className="rounded-xl border border-border bg-card p-3.5 shadow-sm">
+    <div className={cn(
+      "rounded-xl border border-border bg-card shadow-sm",
+      density === "primary" ? "p-4" : "p-3.5",
+    )}>
       <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-1 flex items-center gap-2 text-xl font-semibold tabular-nums">
+      <div className={cn(
+        "mt-1 flex flex-wrap items-center gap-2 font-semibold tabular-nums",
+        density === "primary" ? "text-xl sm:text-2xl" : "text-lg",
+      )}>
         <span>{value}</span>
-        {delta !== undefined && <DeltaPill value={delta} format={deltaFormat} />}
+        {delta !== undefined ? <DeltaPill value={delta} format={deltaFormat} /> : null}
       </div>
     </div>
   );
 }
 
-export function PerformancePanel({ report }: { report: PerformanceReport }) {
+export function PerformanceBreakdownContent({
+  tab,
+  report,
+}: {
+  tab: PerformanceTab;
+  report: PerformanceReport;
+}) {
+  if (tab === "cs") {
+    return <CsPerformanceBreakdown rows={report.cs} responseNotice={report.responseNotice} />;
+  }
+  if (tab === "product") {
+    return <ProductPerformanceBreakdown rows={report.products} />;
+  }
+  return null;
+}
+
+function PerformancePanelContent({ report }: { report: PerformanceReport }) {
   const [tab, setTab] = useState<PerformanceTab>("summary");
-  const [productSort, setProductSort] = useState<"closing" | "cr">("closing");
-  const products = useMemo(() => [...report.products].sort((a, b) => productSort === "cr"
-    ? a.cr - b.cr || b.closings - a.closings
-    : b.closings - a.closings || a.product.localeCompare(b.product)), [productSort, report.products]);
   const s = report.summary;
   const activePanelId = `performance-panel-${tab}`;
 
@@ -72,15 +245,6 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3">
-        <div>
-          <p className="font-medium">Ringkasan periode</p>
-          <p className="text-xs text-muted-foreground">
-            {rangeLabel({ startDate: report.startDate, endDate: report.endDate })} · Data sampai {dateLabel(report.effectiveEndDate)} · dibuat {new Intl.DateTimeFormat("id-ID", { hour: "2-digit", minute: "2-digit" }).format(report.generatedAt)} · {report.status === "running" ? "Berjalan" : "Selesai"}
-          </p>
-        </div>
-      </div>
-
       <div role="tablist" aria-label="Tampilan laporan kinerja" className="flex w-fit gap-1 rounded-lg border border-border bg-muted/30 p-1">
         {tabs.map(([value, label]) => (
           <button
@@ -112,18 +276,21 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
       <div id={activePanelId} role="tabpanel" aria-labelledby={`performance-tab-${tab}`}>
       {tab === "summary" && (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            <MetricCard label="Leads" value={number.format(s.leads)} delta={s.deltaLeads} />
-            <MetricCard label="Closing" value={number.format(s.closings)} delta={s.deltaClosings} />
-            <MetricCard label="Conversion rate" value={pct(s.cr)} delta={s.deltaCr} deltaFormat={pct} />
-            <MetricCard label="Omzet" value={formatRupiah(s.revenue)} delta={s.deltaRevenue} deltaFormat={formatRupiah} />
-            <MetricCard label="Diskon" value={formatRupiah(s.discount)} />
-            <MetricCard label="COD" value={number.format(s.cod)} />
-            <MetricCard label="Transfer" value={number.format(s.transfer)} />
-            <MetricCard label="Rasio pembayaran" value={<span className="text-sm">COD {pct(s.codPct)} · Transfer {pct(s.transferPct)}</span>} />
-            <MetricCard label="Terkirim" value={number.format(s.delivered)} />
-            <MetricCard label="Dibatalkan" value={number.format(s.cancelled)} />
-          </div>
+          <section aria-label="Metrik utama" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <SummaryMetricCard density="primary" label="Leads" value={number.format(s.leads)} delta={s.deltaLeads} />
+            <SummaryMetricCard density="primary" label="Closing" value={number.format(s.closings)} delta={s.deltaClosings} />
+            <SummaryMetricCard density="primary" label="Conversion rate" value={pct(s.cr)} delta={s.deltaCr} deltaFormat={points} />
+            <SummaryMetricCard density="primary" label="Omzet" value={formatRupiah(s.revenue)} delta={s.deltaRevenue} deltaFormat={formatRupiah} />
+          </section>
+
+          <section aria-label="Metrik pendukung" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <SummaryMetricCard density="secondary" label="Diskon" value={formatRupiah(s.discount)} />
+            <SummaryMetricCard density="secondary" label="COD" value={number.format(s.cod)} />
+            <SummaryMetricCard density="secondary" label="Transfer" value={number.format(s.transfer)} />
+            <SummaryMetricCard density="secondary" label="Rasio pembayaran" value={<span className="text-sm">COD {pct(s.codPct)} · Transfer {pct(s.transferPct)}</span>} />
+            <SummaryMetricCard density="secondary" label="Terkirim" value={number.format(s.delivered)} />
+            <SummaryMetricCard density="secondary" label="Dibatalkan" value={number.format(s.cancelled)} />
+          </section>
 
           {report.period === "month" && (
             <Card>
@@ -166,86 +333,27 @@ export function PerformancePanel({ report }: { report: PerformanceReport }) {
         </>
       )}
 
-      {tab === "cs" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Performa per CS</CardTitle>
-            <CardDescription>Semua metrik mengikuti periode dan filter CS yang sama.</CardDescription>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-sm">
-              <caption className="sr-only">Perbandingan kinerja per CS</caption>
-              <thead className="text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="pb-2 font-medium">CS</th><th className="pb-2 text-right font-medium">Leads</th>
-                  <th className="pb-2 text-right font-medium">Closing</th><th className="pb-2 text-right font-medium">CR</th>
-                  <th className="pb-2 text-right font-medium">Omzet</th><th className="pb-2 text-right font-medium">COD / Transfer</th>
-                  <th className="pb-2 text-right font-medium">Balas pertama</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.cs.map((row) => (
-                  <tr key={row.csKey} className="border-t border-border">
-                    <td className="py-2.5 font-medium">{row.csName}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.leads)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.closings)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{pct(row.cr)} <DeltaPill value={row.deltaCr} suffix="%" /></td>
-                    <td className="py-2.5 text-right tabular-nums">{formatRupiah(row.revenue)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{pct(row.codPct)} / {pct(row.transferPct)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{report.responseNotice ? "Rentang terlalu panjang" : formatDuration(row.responseMedianMs)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-      )}
-
-      {tab === "product" && (
-        <Card>
-          <CardHeader className="sm:grid-cols-[1fr_auto]">
-            <div>
-              <CardTitle>Performa per produk</CardTitle>
-              <CardDescription>Ringkas, tanpa grafik; urutkan sesuai kebutuhan evaluasi.</CardDescription>
-            </div>
-            <label className="space-y-1 text-xs font-medium text-muted-foreground">
-              <span>Urutkan produk</span>
-              <select aria-label="Urutkan produk" value={productSort} onChange={(event) => setProductSort(event.target.value as "closing" | "cr")} className="block min-h-11 rounded-lg border border-input bg-background px-2 text-sm text-foreground sm:min-h-8">
-                <option value="closing">Closing terbanyak</option>
-                <option value="cr">CR terendah</option>
-              </select>
-            </label>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-sm">
-              <caption className="sr-only">Perbandingan kinerja per produk</caption>
-              <thead className="text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="pb-2 font-medium">Produk</th><th className="pb-2 text-right font-medium">Leads</th>
-                  <th className="pb-2 text-right font-medium">Closing</th><th className="pb-2 text-right font-medium">CR</th>
-                  <th className="pb-2 text-right font-medium">Omzet</th><th className="pb-2 text-right font-medium">COD</th>
-                  <th className="pb-2 text-right font-medium">Transfer</th><th className="pb-2 text-right font-medium">Rasio</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((row) => (
-                  <tr key={row.product} className="border-t border-border">
-                    <td className="py-2.5 font-medium">{row.product}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.leads)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.closings)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{pct(row.cr)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{formatRupiah(row.revenue)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.cod)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.transfer)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{pct(row.codPct)} / {pct(row.transferPct)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-      )}
+      <PerformanceBreakdownContent tab={tab} report={report} />
       </div>
+    </div>
+  );
+}
+
+export function PerformancePanel({
+  report,
+  scopeLabel,
+}: {
+  report: PerformanceReport;
+  scopeLabel: string;
+}) {
+  const empty = report.summary.leads === 0 && report.summary.closings === 0;
+
+  return (
+    <div className="space-y-4">
+      <PerformanceStatusBand report={report} scopeLabel={scopeLabel} />
+      {empty
+        ? <PanelState kind="empty" title={`Belum ada data untuk ${scopeLabel} pada periode ini`} />
+        : <PerformancePanelContent report={report} />}
     </div>
   );
 }

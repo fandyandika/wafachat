@@ -1,12 +1,18 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "convex/react";
-import { Crown, RefreshCw } from "lucide-react";
+import { Crown } from "lucide-react";
 import { api } from "@/convex/_generated/api";
-import { PerformancePanel } from "@/components/panel/performance-panel";
-import { PanelState } from "@/components/panel/panel-state";
+import {
+  associatePerformanceResult,
+  PerformanceRefreshAction,
+  PerformanceResultRegion,
+  submitPerformanceRequest,
+  type DisplayedPerformanceResult,
+  type SubmittedArgs,
+} from "@/components/panel/performance-panel";
 import { useConvexSnapshotQuery } from "@/components/panel/use-convex-snapshot-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,13 +24,6 @@ import {
   type PerformanceReport,
 } from "@/lib/performance-report";
 import { cn } from "@/lib/utils";
-
-type SubmittedArgs = {
-  period: PerformancePeriod;
-  startDate: string;
-  endDate: string;
-  csName?: string;
-};
 
 function jakartaDate(): string {
   const parts = new Intl.DateTimeFormat("en", {
@@ -51,19 +50,26 @@ export default function PerformancePage() {
     api.performanceReports.getPerformanceReport,
     submitted ?? "skip",
   );
+  const [displayed, setDisplayed] = useState<DisplayedPerformanceResult | null>(null);
+  useEffect(() => {
+    setDisplayed((previous) => associatePerformanceResult(previous, submitted, report.data));
+  }, [submitted, report.data]);
 
   const submit = () => {
     try {
       const range = resolvePerformanceRange(period, { anchorDate, month, startDate, endDate });
       if (inclusiveDateCount(range) > 35) throw new Error("Maksimal 35 hari");
       setValidationError(null);
-      setSubmitted({ period, ...range, csName: csName || undefined });
+      submitPerformanceRequest({
+        submitted,
+        next: { period, ...range, csName: csName || undefined },
+        replaceSubmitted: setSubmitted,
+        refresh: report.refresh,
+      });
     } catch (error) {
       setValidationError(error instanceof Error ? error.message : "Periode tidak valid");
     }
   };
-
-  const empty = report.data && report.data.summary.leads === 0 && report.data.summary.closings === 0;
 
   return (
     <div className="space-y-4">
@@ -145,29 +151,14 @@ export default function PerformancePage() {
               <Button size="lg" className="w-full md:w-auto" onClick={submit} disabled={report.loading}>
                 {report.loading ? "Menyiapkan..." : "Tampilkan laporan"}
               </Button>
-              {submitted && (
-                <Button size="icon-lg" variant="outline" onClick={() => report.refresh()} disabled={report.loading} aria-label="Refresh laporan">
-                  <RefreshCw className={cn("size-4", report.loading && "animate-spin")} />
-                </Button>
-              )}
+              <PerformanceRefreshAction displayed={displayed} report={report} />
             </div>
           </div>
           {validationError && <p role="alert" className="text-sm text-destructive">{validationError}</p>}
         </CardContent>
       </Card>
 
-      {!submitted ? (
-        <PanelState kind="empty" title="Pilih periode lalu tampilkan laporan" />
-      ) : report.error ? (
-        <PanelState
-          kind="error"
-          title="Laporan gagal dimuat"
-          description={report.error}
-          action={<Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>}
-        />
-      ) : empty ? (
-        <PanelState kind="empty" title="Belum ada data pada periode ini" />
-      ) : report.data ? <PerformancePanel report={report.data} /> : null}
+      <PerformanceResultRegion submitted={submitted} report={report} displayed={displayed} />
     </div>
   );
 }
