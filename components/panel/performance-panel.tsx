@@ -5,10 +5,12 @@ import {
   CsPerformanceBreakdown,
   ProductPerformanceBreakdown,
 } from "@/components/panel/performance-breakdowns";
+import { PanelState } from "@/components/panel/panel-state";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeltaPill } from "@/components/ui/metric-card";
 import { formatRupiah } from "@/lib/format";
-import type { DateRange, PerformanceReport } from "@/lib/performance-report";
+import type { DateRange, PerformancePeriod, PerformanceReport } from "@/lib/performance-report";
 import { cn } from "@/lib/utils";
 
 const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
@@ -16,6 +18,81 @@ const pct = (value: number) => `${number.format(value)}%`;
 const points = (value: number) => `${number.format(value)} poin`;
 const tabs = [['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per produk']] as const;
 type PerformanceTab = typeof tabs[number][0];
+
+export type SubmittedArgs = {
+  period: PerformancePeriod;
+  startDate: string;
+  endDate: string;
+  csName?: string;
+};
+
+export type PerformanceSnapshotState = {
+  data: PerformanceReport | undefined;
+  loading: boolean;
+  error: string | null;
+  refresh: () => void | Promise<void>;
+};
+
+export type DisplayedPerformanceResult = {
+  data: PerformanceReport;
+  submitted: SubmittedArgs;
+};
+
+export function associatePerformanceResult(
+  previous: DisplayedPerformanceResult | null,
+  submitted: SubmittedArgs | null,
+  data: PerformanceReport | undefined,
+): DisplayedPerformanceResult | null {
+  if (!data || !submitted || data === previous?.data) return previous;
+  return { data, submitted };
+}
+
+export function PerformanceResultRegion({
+  submitted,
+  report,
+  displayed,
+}: {
+  submitted: SubmittedArgs | null;
+  report: PerformanceSnapshotState;
+  displayed?: DisplayedPerformanceResult | null;
+}) {
+  const active = displayed === undefined
+    ? report.data && submitted ? { data: report.data, submitted } : null
+    : displayed;
+
+  if (!submitted && !active) {
+    return <PanelState kind="empty" title="Pilih periode lalu tampilkan laporan" />;
+  }
+
+  const errorState = report.error ? (
+    <PanelState
+      kind="error"
+      title="Laporan gagal dimuat"
+      description={report.error}
+      action={<Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>}
+    />
+  ) : null;
+
+  if (errorState && !active) return errorState;
+
+  if (report.loading && !active) {
+    return (
+      <div role="status" aria-live="polite" className="grid min-h-40 place-items-center rounded-xl border border-dashed px-6 py-10 text-center">
+        <p className="text-sm font-medium">Menyiapkan laporan…</p>
+      </div>
+    );
+  }
+
+  if (!active) return null;
+
+  const scopeLabel = active.submitted.csName?.replace(/^CS\s+/i, "") || "Semua CS";
+  const empty = active.data.summary.leads === 0 && active.data.summary.closings === 0;
+  const content = empty
+    ? <PanelState kind="empty" title={`Belum ada data untuk ${scopeLabel} pada periode ini`} />
+    : <PerformancePanel report={active.data} scopeLabel={scopeLabel} />;
+
+  return errorState ? <>{errorState}{content}</> : content;
+}
 
 export function nextPerformanceTab(current: PerformanceTab, key: string): PerformanceTab | null {
   const index = tabs.findIndex(([value]) => value === current);

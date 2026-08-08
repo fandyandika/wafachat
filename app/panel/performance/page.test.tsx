@@ -18,14 +18,12 @@ vi.mock("@/components/panel/use-panel-filters", () => ({
   usePanelFilters: () => ({ startAt: 1, endAt: 2, csName: undefined }),
 }));
 vi.mock("@/components/panel/use-response-times", () => ({ useResponseTimes: () => null }));
-vi.mock("@/components/panel/performance-panel", () => ({
-  PerformancePanel: ({ scopeLabel }: { scopeLabel: string }) => <div>Report loaded for {scopeLabel}</div>,
-}));
-
-import PerformancePage, {
+import PerformancePage from "./page";
+import {
   associatePerformanceResult,
   PerformanceResultRegion,
-} from "./page";
+} from "@/components/panel/performance-panel";
+import * as performancePageModule from "./page";
 import { api } from "@/convex/_generated/api";
 import type { PerformanceReport } from "@/lib/performance-report";
 
@@ -57,6 +55,10 @@ const reportFixture: PerformanceReport = {
   products: [],
   weeks: [],
 };
+
+test("exports only the default component from the Next.js page module", () => {
+  expect(Object.keys(performancePageModule)).toEqual(["default"]);
+});
 
 test("performance stays idle until the owner submits a period", () => {
   const html = renderToStaticMarkup(<PerformancePage />);
@@ -95,7 +97,7 @@ test("keeps the prior result visible while refreshing", () => {
       report={{ data: reportFixture, loading: true, error: null, refresh: vi.fn() }}
     />,
   );
-  expect(html).toContain("Report loaded for Aisyah");
+  expect(html).toContain("Aisyah");
   expect(html).not.toContain("Menyiapkan laporan</p>");
 });
 
@@ -112,8 +114,8 @@ test("keeps retained data associated with its submitted scope until replacement 
       displayed={retainedResult}
     />,
   );
-  expect(retainedHtml).toContain("Report loaded for Aisyah");
-  expect(retainedHtml).not.toContain("Report loaded for Bunga");
+  expect(retainedHtml).toContain("Aisyah");
+  expect(retainedHtml).not.toContain("Bunga");
 
   const bungaReport = {
     ...reportFixture,
@@ -129,8 +131,8 @@ test("keeps retained data associated with its submitted scope until replacement 
       displayed={bungaResult}
     />,
   );
-  expect(replacedHtml).toContain("Report loaded for Bunga");
-  expect(replacedHtml).not.toContain("Report loaded for Aisyah");
+  expect(replacedHtml).toContain("Bunga");
+  expect(replacedHtml).not.toContain("Aisyah");
 });
 
 test("shows a retryable error without hiding the retained result", () => {
@@ -146,8 +148,8 @@ test("shows a retryable error without hiding the retained result", () => {
 
   expect(html).toContain("Laporan gagal dimuat");
   expect(html).toContain("Coba lagi");
-  expect(html).toContain("Report loaded for Aisyah");
-  expect(html).not.toContain("Report loaded for Bunga");
+  expect(html).toContain("Aisyah");
+  expect(html).not.toContain("Bunga");
 });
 
 test("shows scoped empty and retryable error states", () => {
