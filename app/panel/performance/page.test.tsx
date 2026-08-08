@@ -89,8 +89,8 @@ test("keeps a stable loading region before the first result", () => {
     />,
   );
   expect(html).toContain('role="status"');
-  expect(html).toContain("Menyiapkan laporan");
-  expect(html).toContain("min-h-40");
+  expect(html).toContain("Menyiapkan ringkasan laporan");
+  expect(html.match(/data-summary-skeleton-cell/g)).toHaveLength(6);
 });
 
 test("keeps a stable loading region while the first submitted request is pending its loading update", () => {
@@ -102,8 +102,8 @@ test("keeps a stable loading region while the first submitted request is pending
   );
 
   expect(html).toContain('role="status"');
-  expect(html).toContain("Menyiapkan laporan");
-  expect(html).toContain("min-h-40");
+  expect(html).toContain("Menyiapkan ringkasan laporan");
+  expect(html.match(/data-summary-skeleton-cell/g)).toHaveLength(6);
 });
 
 test("keeps the prior result visible while refreshing", () => {

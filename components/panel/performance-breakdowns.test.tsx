@@ -58,13 +58,17 @@ test("renders Per CS as a desktop table and a no-scroll mobile ledger", () => {
 });
 
 test("wraps long product names and exposes the same metrics on mobile", () => {
-  const row = product("Al Qur'an Medis dengan Hadis Medis dan Jurnal Kesehatan", 120, 84, 70);
+  const row = { ...product("Al Qur'an Medis dengan Hadis Medis dan Jurnal Kesehatan", 120, 84, 70), cod: 9, transfer: 6, codPct: 60, transferPct: 40 };
   const html = renderToStaticMarkup(<ProductPerformanceBreakdown rows={[row]} />);
   expect(html).toContain('title="Al Qur&#x27;an Medis dengan Hadis Medis dan Jurnal Kesehatan"');
   expect(html).toContain("line-clamp-2");
   expect(html).toContain("84 closing");
   expect(html).toContain("Rp8.400.000");
-  expect(html).toContain("COD 100%");
+  expect(html.match(/COD(?:<\/th>|<\/dt>| )/g)).toHaveLength(2);
+  expect(html.match(/>9<\/td>|>9<\/dd>/g)).toHaveLength(2);
+  expect(html.match(/Transfer(?:<\/th>|<\/dt>)/g)).toHaveLength(2);
+  expect(html.match(/>6<\/td>|>6<\/dd>/g)).toHaveLength(2);
+  expect(html.match(/60% \/ 40%/g)).toHaveLength(2);
   expect(html.match(/Rp8\.400\.000/g)).toHaveLength(2);
   expect(html.match(/CR 70%|>70%</g)).toHaveLength(2);
 });

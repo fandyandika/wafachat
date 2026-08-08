@@ -1,3 +1,17 @@
+const reportNumber = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 });
+
+export function formatNumberId(value: number): string {
+  return reportNumber.format(value);
+}
+
+export function formatPercentId(value: number): string {
+  return `${formatNumberId(value)}%`;
+}
+
+export function formatPointsId(value: number): string {
+  return `${formatNumberId(value)} poin`;
+}
+
 export function formatRupiah(value?: number): string {
   if (value === undefined || Number.isNaN(value)) return '-';
   return 'Rp' + new Intl.NumberFormat('id-ID').format(value);

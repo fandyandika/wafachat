@@ -3,11 +3,9 @@
 import { useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeltaPill } from "@/components/ui/metric-card";
-import { formatDuration, formatRupiah } from "@/lib/format";
+import { formatDuration, formatNumberId, formatPercentId, formatRupiah } from "@/lib/format";
 import type { CsMetricRow, ProductMetricRow } from "@/lib/performance-report";
 
-const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
-const pct = (value: number) => `${number.format(value)}%`;
 export type ProductSort = "closing" | "cr";
 
 export function sortProductRows(rows: ProductMetricRow[], sort: ProductSort): ProductMetricRow[] {
@@ -17,7 +15,7 @@ export function sortProductRows(rows: ProductMetricRow[], sort: ProductSort): Pr
 }
 
 function PaymentSplit({ codPct, transferPct }: { codPct: number; transferPct: number }) {
-  return <span>COD {pct(codPct)} · Transfer {pct(transferPct)}</span>;
+  return <span>{formatPercentId(codPct)} / {formatPercentId(transferPct)}</span>;
 }
 
 export function CsPerformanceBreakdown({
@@ -39,7 +37,7 @@ export function CsPerformanceBreakdown({
       </CardHeader>
       <CardContent>
         <div data-layout="desktop-table" className="hidden md:block overflow-x-auto">
-          <table className="w-full min-w-[900px] text-sm">
+          <table className="w-full min-w-[1080px] text-sm">
             <caption className="sr-only">Perbandingan kinerja per CS</caption>
             <thead className="text-left text-xs text-muted-foreground">
               <tr>
@@ -49,17 +47,21 @@ export function CsPerformanceBreakdown({
                 <th className="pb-2 text-right font-medium">CR</th>
                 <th className="pb-2 text-right font-medium">Balas pertama</th>
                 <th className="pb-2 text-right font-medium">Omzet</th>
-                <th className="pb-2 text-right font-medium">Pembayaran</th>
+                <th className="pb-2 text-right font-medium">COD</th>
+                <th className="pb-2 text-right font-medium">Transfer</th>
+                <th className="pb-2 text-right font-medium">Rasio</th>
               </tr>
             </thead>
             <tbody>{rows.map((row) => (
               <tr key={row.csKey} className="border-t border-border">
                 <th scope="row" className="py-3 text-left font-medium">{row.csName}</th>
-                <td className="py-3 text-right tabular-nums">{number.format(row.leads)}</td>
-                <td className="py-3 text-right tabular-nums">{number.format(row.closings)}</td>
-                <td className="py-3 text-right tabular-nums">{pct(row.cr)} <DeltaPill value={row.deltaCr} suffix=" poin" /></td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.leads)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.closings)}</td>
+                <td className="py-3 text-right tabular-nums">{formatPercentId(row.cr)} <DeltaPill value={row.deltaCr} suffix=" poin" /></td>
                 <td className="py-3 text-right tabular-nums">{response(row)}</td>
                 <td className="py-3 text-right tabular-nums">{formatRupiah(row.revenue)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.cod)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.transfer)}</td>
                 <td className="py-3 text-right tabular-nums"><PaymentSplit codPct={row.codPct} transferPct={row.transferPct} /></td>
               </tr>
             ))}</tbody>
@@ -71,15 +73,17 @@ export function CsPerformanceBreakdown({
             <article key={row.csKey} className="space-y-3 py-4 first:pt-0 last:pb-0">
               <h3 className="font-semibold">{row.csName}</h3>
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <strong>{number.format(row.closings)} closing</strong>
-                <span className="tabular-nums">CR {pct(row.cr)}</span>
+                <strong>{formatNumberId(row.closings)} closing</strong>
+                <span className="tabular-nums">CR {formatPercentId(row.cr)}</span>
                 <DeltaPill value={row.deltaCr} suffix=" poin" />
               </div>
               <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                <div><dt className="text-xs text-muted-foreground">Leads</dt><dd>{number.format(row.leads)}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Leads</dt><dd>{formatNumberId(row.leads)}</dd></div>
                 <div><dt className="text-xs text-muted-foreground">Balas pertama</dt><dd>{response(row)}</dd></div>
                 <div><dt className="text-xs text-muted-foreground">Omzet</dt><dd>{formatRupiah(row.revenue)}</dd></div>
-                <div><dt className="text-xs text-muted-foreground">Pembayaran</dt><dd><PaymentSplit codPct={row.codPct} transferPct={row.transferPct} /></dd></div>
+                <div><dt className="text-xs text-muted-foreground">COD</dt><dd className="tabular-nums">{formatNumberId(row.cod)}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Transfer</dt><dd className="tabular-nums">{formatNumberId(row.transfer)}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Rasio pembayaran</dt><dd className="tabular-nums"><PaymentSplit codPct={row.codPct} transferPct={row.transferPct} /></dd></div>
               </dl>
             </article>
           ))}
@@ -115,7 +119,7 @@ export function ProductPerformanceBreakdown({ rows }: { rows: ProductMetricRow[]
       </CardHeader>
       <CardContent>
         <div data-layout="desktop-table" className="hidden md:block overflow-x-auto">
-          <table className="w-full min-w-[820px] text-sm">
+          <table className="w-full min-w-[980px] text-sm">
             <caption className="sr-only">Perbandingan kinerja per produk</caption>
             <thead className="text-left text-xs text-muted-foreground">
               <tr>
@@ -124,16 +128,20 @@ export function ProductPerformanceBreakdown({ rows }: { rows: ProductMetricRow[]
                 <th className="pb-2 text-right font-medium">CR</th>
                 <th className="pb-2 text-right font-medium">Omzet</th>
                 <th className="pb-2 text-right font-medium">Leads</th>
-                <th className="pb-2 text-right font-medium">Pembayaran</th>
+                <th className="pb-2 text-right font-medium">COD</th>
+                <th className="pb-2 text-right font-medium">Transfer</th>
+                <th className="pb-2 text-right font-medium">Rasio</th>
               </tr>
             </thead>
             <tbody>{products.map((row) => (
               <tr key={row.product} className="border-t border-border">
                 <th scope="row" className="max-w-72 py-3 text-left font-medium"><span title={row.product} className="line-clamp-2">{row.product}</span></th>
-                <td className="py-3 text-right tabular-nums">{number.format(row.closings)}</td>
-                <td className="py-3 text-right tabular-nums">{pct(row.cr)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.closings)}</td>
+                <td className="py-3 text-right tabular-nums">{formatPercentId(row.cr)}</td>
                 <td className="py-3 text-right tabular-nums">{formatRupiah(row.revenue)}</td>
-                <td className="py-3 text-right tabular-nums">{number.format(row.leads)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.leads)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.cod)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.transfer)}</td>
                 <td className="py-3 text-right tabular-nums"><PaymentSplit codPct={row.codPct} transferPct={row.transferPct} /></td>
               </tr>
             ))}</tbody>
@@ -145,13 +153,15 @@ export function ProductPerformanceBreakdown({ rows }: { rows: ProductMetricRow[]
             <article key={row.product} className="space-y-3 py-4 first:pt-0 last:pb-0">
               <h3 title={row.product} className="line-clamp-2 font-semibold">{row.product}</h3>
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <strong>{number.format(row.closings)} closing</strong>
-                <span className="tabular-nums">CR {pct(row.cr)}</span>
+                <strong>{formatNumberId(row.closings)} closing</strong>
+                <span className="tabular-nums">CR {formatPercentId(row.cr)}</span>
                 <span className="font-medium tabular-nums">{formatRupiah(row.revenue)}</span>
               </div>
               <dl className="grid grid-cols-2 gap-4 text-sm">
-                <div><dt className="text-xs text-muted-foreground">Leads</dt><dd>{number.format(row.leads)}</dd></div>
-                <div><dt className="text-xs text-muted-foreground">Pembayaran</dt><dd><PaymentSplit codPct={row.codPct} transferPct={row.transferPct} /></dd></div>
+                <div><dt className="text-xs text-muted-foreground">Leads</dt><dd>{formatNumberId(row.leads)}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">COD</dt><dd className="tabular-nums">{formatNumberId(row.cod)}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Transfer</dt><dd className="tabular-nums">{formatNumberId(row.transfer)}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Rasio pembayaran</dt><dd className="tabular-nums"><PaymentSplit codPct={row.codPct} transferPct={row.transferPct} /></dd></div>
               </dl>
             </article>
           ))}

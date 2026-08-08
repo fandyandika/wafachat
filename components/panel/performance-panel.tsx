@@ -6,18 +6,16 @@ import {
   CsPerformanceBreakdown,
   ProductPerformanceBreakdown,
 } from "@/components/panel/performance-breakdowns";
+import { StatusStamp } from "@/components/panel/dashboard/ledger";
+import { PerformanceSummary, PerformanceSummarySkeleton } from "@/components/panel/performance-summary";
 import { PanelState } from "@/components/panel/panel-state";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { DeltaPill } from "@/components/ui/metric-card";
-import { formatRupiah } from "@/lib/format";
+import { formatNumberId, formatPercentId, formatRupiah } from "@/lib/format";
 import type { DateRange, PerformancePeriod, PerformanceReport } from "@/lib/performance-report";
 import type { DayBasis } from "@/lib/history-period";
 import { cn } from "@/lib/utils";
 
-const number = new Intl.NumberFormat("id-ID", { maximumFractionDigits: 1 });
-const pct = (value: number) => `${number.format(value)}%`;
-const points = (value: number) => `${number.format(value)} poin`;
 const tabs = [['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per produk']] as const;
 type PerformanceTab = typeof tabs[number][0];
 
@@ -129,8 +127,8 @@ export function PerformanceResultRegion({
 
   if (!active) {
     return (
-      <div role="status" aria-live="polite" className="grid min-h-40 place-items-center rounded-xl border border-dashed px-6 py-10 text-center">
-        <p className="text-sm font-medium">Menyiapkan laporan…</p>
+      <div role="status" aria-live="polite">
+        <PerformanceSummarySkeleton />
       </div>
     );
   }
@@ -166,6 +164,11 @@ function rangeLabel(range: DateRange): string {
 }
 
 function PerformanceStatusBand({ report, scopeLabel }: { report: PerformanceReport; scopeLabel: string }) {
+  const dayContext = report.period === "day"
+    ? report.basis === "calendar"
+      ? "Hari kalender · 00.00–24.00 WIB"
+      : "Periode kerja CS · 16.00–16.00 WIB"
+    : null;
   return (
     <section
       aria-label="Status laporan"
@@ -175,13 +178,13 @@ function PerformanceStatusBand({ report, scopeLabel }: { report: PerformanceRepo
         <p className="font-medium">Ringkasan periode</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {rangeLabel({ startDate: report.startDate, endDate: report.endDate })}
-          {" · "}{scopeLabel}{" · Data sampai "}{dateLabel(report.effectiveEndDate)}
+          {" · "}{scopeLabel}{dayContext ? ` · ${dayContext}` : ""}{" · Data sampai "}{dateLabel(report.effectiveEndDate)}
         </p>
       </div>
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span className="rounded-full border border-border bg-muted/40 px-2 py-1 font-medium text-foreground">
+        <StatusStamp tone={report.status === "running" ? "positive" : "neutral"}>
           {report.status === "running" ? "Berjalan" : "Selesai"}
-        </span>
+        </StatusStamp>
         <span>
           Dibuat {new Intl.DateTimeFormat("id-ID", {
             hour: "2-digit",
@@ -190,30 +193,6 @@ function PerformanceStatusBand({ report, scopeLabel }: { report: PerformanceRepo
         </span>
       </div>
     </section>
-  );
-}
-
-function SummaryMetricCard({ label, value, delta, deltaFormat, density }: {
-  label: string;
-  value: React.ReactNode;
-  delta?: number;
-  deltaFormat?: (value: number) => string;
-  density: "primary" | "secondary";
-}) {
-  return (
-    <div className={cn(
-      "rounded-xl border border-border bg-card shadow-sm",
-      density === "primary" ? "p-4" : "p-3.5",
-    )}>
-      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className={cn(
-        "mt-1 flex flex-wrap items-center gap-2 font-semibold tabular-nums",
-        density === "primary" ? "text-xl sm:text-2xl" : "text-lg",
-      )}>
-        <span>{value}</span>
-        {delta !== undefined ? <DeltaPill value={delta} format={deltaFormat} /> : null}
-      </div>
-    </div>
   );
 }
 
@@ -279,21 +258,7 @@ function PerformancePanelContent({ report }: { report: PerformanceReport }) {
       <div id={activePanelId} role="tabpanel" aria-labelledby={`performance-tab-${tab}`}>
       {tab === "summary" && (
         <>
-          <section aria-label="Metrik utama" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <SummaryMetricCard density="primary" label="Leads" value={number.format(s.leads)} delta={s.deltaLeads} />
-            <SummaryMetricCard density="primary" label="Closing" value={number.format(s.closings)} delta={s.deltaClosings} />
-            <SummaryMetricCard density="primary" label="Conversion rate" value={pct(s.cr)} delta={s.deltaCr} deltaFormat={points} />
-            <SummaryMetricCard density="primary" label="Omzet" value={formatRupiah(s.revenue)} delta={s.deltaRevenue} deltaFormat={formatRupiah} />
-          </section>
-
-          <section aria-label="Metrik pendukung" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <SummaryMetricCard density="secondary" label="Diskon" value={formatRupiah(s.discount)} />
-            <SummaryMetricCard density="secondary" label="COD" value={number.format(s.cod)} />
-            <SummaryMetricCard density="secondary" label="Transfer" value={number.format(s.transfer)} />
-            <SummaryMetricCard density="secondary" label="Rasio pembayaran" value={<span className="text-sm">COD {pct(s.codPct)} · Transfer {pct(s.transferPct)}</span>} />
-            <SummaryMetricCard density="secondary" label="Terkirim" value={number.format(s.delivered)} />
-            <SummaryMetricCard density="secondary" label="Dibatalkan" value={number.format(s.cancelled)} />
-          </section>
+          <PerformanceSummary summary={s} />
 
           {report.period === "month" && (
             <Card>
@@ -320,12 +285,12 @@ function PerformancePanelContent({ report }: { report: PerformanceReport }) {
                           {week.partial && "Pekan parsial · "}
                           {week.status === "upcoming" ? "Belum berjalan" : week.status === "running" ? "Berjalan" : "Selesai"}
                         </td>
-                        <td className="py-2.5 text-right tabular-nums">{number.format(week.metrics.leads)}</td>
-                        <td className="py-2.5 text-right tabular-nums">{number.format(week.metrics.closings)}</td>
-                        <td className="py-2.5 text-right tabular-nums">{pct(week.metrics.cr)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{formatNumberId(week.metrics.leads)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{formatNumberId(week.metrics.closings)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{formatPercentId(week.metrics.cr)}</td>
                         <td className="py-2.5 text-right tabular-nums">{formatRupiah(week.metrics.revenue)}</td>
-                        <td className="py-2.5 text-right tabular-nums">{number.format(week.metrics.cod)}</td>
-                        <td className="py-2.5 text-right tabular-nums">{number.format(week.metrics.transfer)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{formatNumberId(week.metrics.cod)}</td>
+                        <td className="py-2.5 text-right tabular-nums">{formatNumberId(week.metrics.transfer)}</td>
                       </tr>
                     ))}
                   </tbody>

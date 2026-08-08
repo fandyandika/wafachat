@@ -37,7 +37,7 @@ const metricTone = {
 export function LedgerMetric({ label, value, detail, tone = 'default' }: {
   label: string;
   value: ReactNode;
-  detail: string;
+  detail: ReactNode;
   tone?: keyof typeof metricTone;
 }) {
   return (

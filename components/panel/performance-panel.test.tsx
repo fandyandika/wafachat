@@ -68,8 +68,8 @@ test("shows the running summary and clipped monthly weeks", () => {
   expect(html).toContain("min-h-11");
   expect(html).toContain("Ringkasan periode");
   expect(html).toContain("Rincian pekanan");
-  expect(html).toContain('aria-label="Metrik utama"');
-  expect(html).toContain('aria-label="Metrik pendukung"');
+  expect(html).toContain("Kinerja periode");
+  expect(html).toContain("Respons CS");
   expect(html).toContain("Berjalan");
   expect(html).toContain("67,2%");
   expect(html).toContain("↑ 3,1 poin");
@@ -95,6 +95,17 @@ test("formats large revenue deltas in Indonesian Rupiah", () => {
   );
 
   expect(html).toContain("↑ Rp33.703.258");
+});
+
+test.each([
+  ["calendar", "Hari kalender · 00.00–24.00 WIB"],
+  ["work", "Periode kerja CS · 16.00–16.00 WIB"],
+] as const)("shows explicit %s daily boundaries", (basis, label) => {
+  const html = renderToStaticMarkup(
+    <PerformancePanel report={{ ...report, period: "day", basis, startDate: "2026-08-05", endDate: "2026-08-05", weeks: [] }} scopeLabel="Semua CS" />,
+  );
+  expect(html).toContain(label);
+  expect(html).toContain("min-h-7");
 });
 
 test("treats a basis change as a new explicit report request", () => {

@@ -1,5 +1,11 @@
 import { expect, test } from "vitest";
-import { formatDuration } from "./format";
+import { formatDuration, formatNumberId, formatPercentId, formatPointsId } from "./format";
+
+test("formats Indonesian report numbers consistently", () => {
+  expect(formatNumberId(1733)).toBe("1.733");
+  expect(formatPercentId(67.2)).toBe("67,2%");
+  expect(formatPointsId(2.7)).toBe("2,7 poin");
+});
 
 test("formatDuration: seconds, minutes, hours, null", () => {
   expect(formatDuration(0)).toBe("0 dtk");
