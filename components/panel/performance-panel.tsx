@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { RefreshCw } from "lucide-react";
 import {
   CsPerformanceBreakdown,
   ProductPerformanceBreakdown,
@@ -38,6 +39,32 @@ export type DisplayedPerformanceResult = {
   submitted: SubmittedArgs;
 };
 
+export function submitPerformanceRequest({
+  submitted,
+  next,
+  replaceSubmitted,
+  refresh,
+}: {
+  submitted: SubmittedArgs | null;
+  next: SubmittedArgs;
+  replaceSubmitted: (next: SubmittedArgs) => void;
+  refresh: () => void | Promise<void>;
+}): "refresh" | "replace" {
+  const unchanged = submitted !== null
+    && submitted.period === next.period
+    && submitted.startDate === next.startDate
+    && submitted.endDate === next.endDate
+    && submitted.csName === next.csName;
+
+  if (unchanged) {
+    void refresh();
+    return "refresh";
+  }
+
+  replaceSubmitted(next);
+  return "replace";
+}
+
 export function associatePerformanceResult(
   previous: DisplayedPerformanceResult | null,
   submitted: SubmittedArgs | null,
@@ -45,6 +72,28 @@ export function associatePerformanceResult(
 ): DisplayedPerformanceResult | null {
   if (!data || !submitted || data === previous?.data) return previous;
   return { data, submitted };
+}
+
+export function PerformanceRefreshAction({
+  displayed,
+  report,
+}: {
+  displayed: DisplayedPerformanceResult | null;
+  report: PerformanceSnapshotState;
+}) {
+  if (!displayed || report.error) return null;
+
+  return (
+    <Button
+      size="icon-lg"
+      variant="outline"
+      onClick={() => report.refresh()}
+      disabled={report.loading}
+      aria-label="Refresh laporan"
+    >
+      <RefreshCw className={cn("size-4", report.loading && "animate-spin")} />
+    </Button>
+  );
 }
 
 export function PerformanceResultRegion({
@@ -75,7 +124,7 @@ export function PerformanceResultRegion({
 
   if (errorState && !active) return errorState;
 
-  if (report.loading && !active) {
+  if (!active) {
     return (
       <div role="status" aria-live="polite" className="grid min-h-40 place-items-center rounded-xl border border-dashed px-6 py-10 text-center">
         <p className="text-sm font-medium">Menyiapkan laporan…</p>
@@ -83,13 +132,8 @@ export function PerformanceResultRegion({
     );
   }
 
-  if (!active) return null;
-
   const scopeLabel = active.submitted.csName?.replace(/^CS\s+/i, "") || "Semua CS";
-  const empty = active.data.summary.leads === 0 && active.data.summary.closings === 0;
-  const content = empty
-    ? <PanelState kind="empty" title={`Belum ada data untuk ${scopeLabel} pada periode ini`} />
-    : <PerformancePanel report={active.data} scopeLabel={scopeLabel} />;
+  const content = <PerformancePanel report={active.data} scopeLabel={scopeLabel} />;
 
   return errorState ? <>{errorState}{content}</> : content;
 }
@@ -116,6 +160,34 @@ function rangeLabel(range: DateRange): string {
   const [, startMonth] = start.split(" ");
   const [endDay, endMonth] = end.split(" ");
   return startMonth === endMonth ? `${start.split(" ")[0]}–${endDay} ${endMonth}` : `${start}–${end}`;
+}
+
+function PerformanceStatusBand({ report, scopeLabel }: { report: PerformanceReport; scopeLabel: string }) {
+  return (
+    <section
+      aria-label="Status laporan"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"
+    >
+      <div className="min-w-0">
+        <p className="font-medium">Ringkasan periode</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {rangeLabel({ startDate: report.startDate, endDate: report.endDate })}
+          {" · "}{scopeLabel}{" · Data sampai "}{dateLabel(report.effectiveEndDate)}
+        </p>
+      </div>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="rounded-full border border-border bg-muted/40 px-2 py-1 font-medium text-foreground">
+          {report.status === "running" ? "Berjalan" : "Selesai"}
+        </span>
+        <span>
+          Dibuat {new Intl.DateTimeFormat("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }).format(report.generatedAt)}
+        </span>
+      </div>
+    </section>
+  );
 }
 
 function SummaryMetricCard({ label, value, delta, deltaFormat, density }: {
@@ -158,13 +230,7 @@ export function PerformanceBreakdownContent({
   return null;
 }
 
-export function PerformancePanel({
-  report,
-  scopeLabel,
-}: {
-  report: PerformanceReport;
-  scopeLabel: string;
-}) {
+function PerformancePanelContent({ report }: { report: PerformanceReport }) {
   const [tab, setTab] = useState<PerformanceTab>("summary");
   const s = report.summary;
   const activePanelId = `performance-panel-${tab}`;
@@ -179,30 +245,6 @@ export function PerformancePanel({
 
   return (
     <div className="space-y-4">
-      <section
-        aria-label="Status laporan"
-        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card px-4 py-3"
-      >
-        <div className="min-w-0">
-          <p className="font-medium">Ringkasan periode</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {rangeLabel({ startDate: report.startDate, endDate: report.endDate })}
-            {" · "}{scopeLabel}{" · Data sampai "}{dateLabel(report.effectiveEndDate)}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="rounded-full border border-border bg-muted/40 px-2 py-1 font-medium text-foreground">
-            {report.status === "running" ? "Berjalan" : "Selesai"}
-          </span>
-          <span>
-            Dibuat {new Intl.DateTimeFormat("id-ID", {
-              hour: "2-digit",
-              minute: "2-digit",
-            }).format(report.generatedAt)}
-          </span>
-        </div>
-      </section>
-
       <div role="tablist" aria-label="Tampilan laporan kinerja" className="flex w-fit gap-1 rounded-lg border border-border bg-muted/30 p-1">
         {tabs.map(([value, label]) => (
           <button
@@ -293,6 +335,25 @@ export function PerformancePanel({
 
       <PerformanceBreakdownContent tab={tab} report={report} />
       </div>
+    </div>
+  );
+}
+
+export function PerformancePanel({
+  report,
+  scopeLabel,
+}: {
+  report: PerformanceReport;
+  scopeLabel: string;
+}) {
+  const empty = report.summary.leads === 0 && report.summary.closings === 0;
+
+  return (
+    <div className="space-y-4">
+      <PerformanceStatusBand report={report} scopeLabel={scopeLabel} />
+      {empty
+        ? <PanelState kind="empty" title={`Belum ada data untuk ${scopeLabel} pada periode ini`} />
+        : <PerformancePanelContent report={report} />}
     </div>
   );
 }

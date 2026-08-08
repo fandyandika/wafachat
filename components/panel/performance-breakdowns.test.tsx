@@ -26,9 +26,9 @@ const product = (name: string, leads: number, closings: number, cr: number): Pro
 });
 
 test("sorts product rows locally without mutating report data", () => {
-  const rows = [product("B", 20, 10, 50), product("A", 10, 8, 80)];
+  const rows = [product("B", 10, 9, 90), product("A", 20, 8, 40)];
   expect(sortProductRows(rows, "closing").map((row) => row.product)).toEqual(["B", "A"]);
-  expect(sortProductRows(rows, "cr").map((row) => row.product)).toEqual(["B", "A"]);
+  expect(sortProductRows(rows, "cr").map((row) => row.product)).toEqual(["A", "B"]);
   expect(rows.map((row) => row.product)).toEqual(["B", "A"]);
 });
 
