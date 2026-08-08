@@ -26,6 +26,13 @@ type SubmittedArgs = {
   csName?: string;
 };
 
+type SnapshotState = {
+  data: PerformanceReport | undefined;
+  loading: boolean;
+  error: string | null;
+  refresh: () => void | Promise<void>;
+};
+
 function jakartaDate(): string {
   const parts = new Intl.DateTimeFormat("en", {
     timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit",
@@ -35,6 +42,47 @@ function jakartaDate(): string {
 }
 
 const inputClass = "min-h-11 w-full rounded-lg border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 sm:min-h-9";
+
+export function PerformanceResultRegion({
+  submitted,
+  report,
+}: {
+  submitted: SubmittedArgs | null;
+  report: SnapshotState;
+}) {
+  if (!submitted) {
+    return <PanelState kind="empty" title="Pilih periode lalu tampilkan laporan" />;
+  }
+
+  if (report.error && !report.data) {
+    return (
+      <PanelState
+        kind="error"
+        title="Laporan gagal dimuat"
+        description={report.error}
+        action={<Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>}
+      />
+    );
+  }
+
+  if (report.loading && !report.data) {
+    return (
+      <div role="status" aria-live="polite" className="grid min-h-40 place-items-center rounded-xl border border-dashed px-6 py-10 text-center">
+        <p className="text-sm font-medium">Menyiapkan laporan…</p>
+      </div>
+    );
+  }
+
+  if (!report.data) return null;
+
+  const scopeLabel = submitted.csName?.replace(/^CS\s+/i, "") || "Semua CS";
+  const empty = report.data.summary.leads === 0 && report.data.summary.closings === 0;
+  if (empty) {
+    return <PanelState kind="empty" title={`Belum ada data untuk ${scopeLabel} pada periode ini`} />;
+  }
+
+  return <PerformancePanel report={report.data} scopeLabel={scopeLabel} />;
+}
 
 export default function PerformancePage() {
   const today = useMemo(jakartaDate, []);
@@ -62,8 +110,6 @@ export default function PerformancePage() {
       setValidationError(error instanceof Error ? error.message : "Periode tidak valid");
     }
   };
-
-  const empty = report.data && report.data.summary.leads === 0 && report.data.summary.closings === 0;
 
   return (
     <div className="space-y-4">
@@ -156,23 +202,7 @@ export default function PerformancePage() {
         </CardContent>
       </Card>
 
-      {!submitted ? (
-        <PanelState kind="empty" title="Pilih periode lalu tampilkan laporan" />
-      ) : report.error ? (
-        <PanelState
-          kind="error"
-          title="Laporan gagal dimuat"
-          description={report.error}
-          action={<Button size="sm" variant="outline" onClick={() => report.refresh()}>Coba lagi</Button>}
-        />
-      ) : empty ? (
-        <PanelState kind="empty" title="Belum ada data pada periode ini" />
-      ) : report.data ? (
-        <PerformancePanel
-          report={report.data}
-          scopeLabel={submitted.csName?.replace(/^CS\s+/i, "") || "Semua CS"}
-        />
-      ) : null}
+      <PerformanceResultRegion submitted={submitted} report={report} />
     </div>
   );
 }
