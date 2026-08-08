@@ -8,6 +8,22 @@ import {
 } from "./performance-report";
 
 describe("performance report periods", () => {
+  it("resolves a one-day report and compares it with the preceding day", () => {
+    const selected = resolvePerformanceRange("day", { startDate: "2026-08-07", endDate: "2026-08-07" });
+    expect(selected).toEqual({ startDate: "2026-08-07", endDate: "2026-08-07" });
+    expect(previousPerformanceRange("day", selected, selected)).toEqual({
+      startDate: "2026-08-06",
+      endDate: "2026-08-06",
+    });
+  });
+
+  it("rejects a multi-date daily report", () => {
+    expect(() => resolvePerformanceRange("day", {
+      startDate: "2026-08-07",
+      endDate: "2026-08-08",
+    })).toThrow("Laporan harian hanya untuk satu tanggal");
+  });
+
   it("resolves a week across a year boundary", () => {
     expect(resolvePerformanceRange("week", { anchorDate: "2027-01-01" })).toEqual({
       startDate: "2026-12-28",

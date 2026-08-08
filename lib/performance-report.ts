@@ -1,4 +1,6 @@
-export type PerformancePeriod = "week" | "month" | "custom";
+import type { DayBasis } from "./history-period";
+
+export type PerformancePeriod = "day" | "week" | "month" | "custom";
 export type DateRange = { startDate: string; endDate: string };
 export type PerformanceRangeInput = {
   anchorDate?: string;
@@ -32,6 +34,7 @@ export type ProductMetricRow = MetricRow & { product: string };
 
 export type PerformanceReport = {
   period: PerformancePeriod;
+  basis: DayBasis;
   startDate: string;
   endDate: string;
   effectiveEndDate: string;
@@ -39,6 +42,7 @@ export type PerformanceReport = {
   generatedAt: number;
   responseNotice?: string;
   summary: MetricRow & {
+    responseMedianMs: number | null;
     deltaLeads: number;
     deltaClosings: number;
     deltaCr: number;
@@ -83,6 +87,13 @@ export function resolvePerformanceRange(
   period: PerformancePeriod,
   input: PerformanceRangeInput,
 ): DateRange {
+  if (period === "day") {
+    if (!input.startDate || !input.endDate) throw new Error("Pilih tanggal");
+    dateMs(input.startDate);
+    dateMs(input.endDate);
+    if (input.startDate !== input.endDate) throw new Error("Laporan harian hanya untuk satu tanggal");
+    return { startDate: input.startDate, endDate: input.endDate };
+  }
   if (period === "custom") {
     if (!input.startDate || !input.endDate) throw new Error("Lengkapi rentang tanggal");
     const range = { startDate: input.startDate, endDate: input.endDate };
