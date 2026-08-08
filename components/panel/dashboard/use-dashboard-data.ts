@@ -5,17 +5,9 @@ import { useMemo, useState } from 'react';
 import { api } from '@/convex/_generated/api';
 import { formatDuration } from '@/lib/format';
 import { useConvexSnapshotQuery } from '@/components/panel/use-convex-snapshot-query';
-import { resolveRange, usePanelFilters } from '@/components/panel/use-panel-filters';
 import { useResponseTimesState } from '@/components/panel/use-response-times';
 import type { PerformanceData, Stats } from '@/components/panel/types';
-import type { WindowMode } from '@/components/panel/window-mode-toggle';
-
-const DAY = 86_400_000;
-const WIB_OFFSET = 7 * 60 * 60 * 1000;
-
-function wibMidnight(now: number) {
-  return Math.floor((now + WIB_OFFSET) / DAY) * DAY - WIB_OFFSET;
-}
+import type { DashboardDayRange } from './dashboard-history-filter';
 
 export type DuplicateOrder = {
   phone: string;
@@ -31,23 +23,17 @@ export function formatDashboardUpdatedAt(ms: number | null) {
   return new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(ms));
 }
 
-export function useDashboardData({ mode, csName, includeDuplicates, includePerformance = true }: {
-  mode: WindowMode;
+export function useDashboardData({ range, csName, includeDuplicates, includePerformance = true }: {
+  range: DashboardDayRange;
   csName?: string;
   includeDuplicates: boolean;
   includePerformance?: boolean;
 }) {
-  const { startAt: workStart, endAt: workEnd, jakartaDate, range } = usePanelFilters();
   const [refreshKey, setRefreshKey] = useState(0);
-  const now = useMemo(() => Date.now(), [refreshKey]);
-  const currentWorkRange = useMemo(() => resolveRange('today'), [refreshKey]);
-  const startAt = mode === 'live' ? wibMidnight(now) : csName ? currentWorkRange.startAt : workStart;
-  const endAt = mode === 'live' ? now : csName ? currentWorkRange.endAt : workEnd;
-  const periodLabel = mode === 'live'
-    ? 'Hari kalender'
-    : ({ today: 'Hari ini', yesterday: 'Kemarin', '7d': '7 hari', '30d': '30 hari', month: 'Bulan ini', custom: 'Tanggal dipilih' } as const)[range];
+  const { startAt, endAt } = range;
+  const periodLabel = range.basis === 'calendar' ? 'Hari kalender' : 'Periode kerja 16:00';
   const rangeArgs = useMemo(() => ({ startAt, endAt, csName }), [csName, endAt, startAt]);
-  const summaryArgs = useMemo(() => ({ ...rangeArgs, raw: mode === 'live' }), [mode, rangeArgs]);
+  const summaryArgs = useMemo(() => ({ ...rangeArgs, raw: range.basis === 'calendar' }), [range.basis, rangeArgs]);
   const performanceArgs = useMemo(() => ({ ...rangeArgs, includeInferredDiscount: false }), [rangeArgs]);
 
   const summary = useConvexSnapshotQuery<{
@@ -58,7 +44,7 @@ export function useDashboardData({ mode, csName, includeDuplicates, includePerfo
     includeDuplicates ? rangeArgs : 'skip',
   );
   const performance = useConvexSnapshotQuery<PerformanceData>(api.shippingRecaps.getPerformance, includePerformance ? performanceArgs : 'skip');
-  const responseTimes = useResponseTimesState({ startAt: endAt - DAY, endAt, csName, refreshKey });
+  const responseTimes = useResponseTimesState({ startAt, endAt, csName, refreshKey });
   const summaryValue = summary.data;
   const performanceValue = performance.data;
   const stats: Stats = {
@@ -69,7 +55,7 @@ export function useDashboardData({ mode, csName, includeDuplicates, includePerfo
     cancelled: summaryValue?.cancelled ?? 0,
     handovers: summaryValue?.handovers ?? 0,
     closed_today: 0,
-    date: jakartaDate,
+    date: range.date,
   };
 
   return {

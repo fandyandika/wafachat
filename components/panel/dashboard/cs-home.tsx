@@ -10,11 +10,18 @@ import type { Me } from '@/components/panel/use-me';
 import { cn } from '@/lib/utils';
 import { DashboardContextBar, LedgerMetric, LedgerMetricGrid, LedgerSection } from './ledger';
 import { formatDashboardUpdatedAt, useDashboardData } from './use-dashboard-data';
+import { windowKeyToday, windowRangeForKey } from '@/lib/report-window-core';
 
 type QueueCounts = { h1: number; h2: number; h3: number };
 
 export function CsHome({ me }: { me: Me }) {
-  const data = useDashboardData({ mode: 'work', csName: me.csName, includeDuplicates: false, includePerformance: false });
+  const workDate = windowKeyToday();
+  const data = useDashboardData({
+    range: { date: workDate, basis: 'work', ...windowRangeForKey(workDate), running: true },
+    csName: me.csName,
+    includeDuplicates: false,
+    includePerformance: false,
+  });
   const [counts, setCounts] = useState<QueueCounts>();
   const [countsError, setCountsError] = useState<string | null>(null);
 

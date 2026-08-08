@@ -1,9 +1,18 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, test, vi } from "vitest";
-import { DuplicateSheet } from "./owner-home";
+import { beforeEach, expect, test, vi } from "vitest";
+import { DuplicateSheet, OwnerHome } from "./owner-home";
 
 (globalThis as any).React = React;
+const { snapshots } = vi.hoisted(() => ({ snapshots: vi.fn() }));
+
+vi.mock("convex/react", () => ({ useQuery: () => [] }));
+vi.mock("@/components/panel/use-convex-snapshot-query", () => ({
+  useConvexSnapshotQuery: (...args: unknown[]) => snapshots(...args),
+}));
+vi.mock("@/components/panel/use-response-times", () => ({
+  useResponseTimesState: () => ({ data: undefined, loading: false, error: null }),
+}));
 
 vi.mock("@/components/ui/sheet", () => ({
   Sheet: ({ children }: any) => <>{children}</>,
@@ -12,6 +21,29 @@ vi.mock("@/components/ui/sheet", () => ({
   SheetTitle: ({ children }: any) => <h2>{children}</h2>,
   SheetDescription: ({ children }: any) => <p>{children}</p>,
 }));
+
+beforeEach(() => {
+  snapshots.mockReset();
+  snapshots
+    .mockReturnValueOnce({ data: { leads: 12, closings: 8, manualClosings: 8, cancelled: 0, handovers: 0, revenue: 1_500_000 }, loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() })
+    .mockReturnValueOnce({ data: undefined, loading: false, error: null, lastUpdatedAt: null, refresh: vi.fn() })
+    .mockReturnValueOnce({ data: { totalClosing: 8, overallCr: 66.7, cancelled: 0, cs: [], products: [] }, loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() });
+});
+
+test("renders a past date as read-only history without current operational alerts", () => {
+  const html = renderToStaticMarkup(
+    <OwnerHome
+      now={Date.parse("2026-08-08T11:00:00+07:00")}
+      initialSelection={{ date: "2026-08-06", basis: "work" }}
+    />,
+  );
+
+  expect(html).toContain("Mode histori");
+  expect(html).toContain("6 Agu 16.00–7 Agu 16.00 WIB");
+  expect(html).not.toContain("Perlu perhatian");
+  expect(html).not.toContain("Order ganda");
+  expect(html).toContain("/panel/performance?period=day&amp;date=2026-08-06&amp;basis=work");
+});
 
 test("presents duplicate orders as a readable structured list", () => {
   const html = renderToStaticMarkup(

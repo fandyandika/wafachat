@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useQuery } from 'convex/react';
-import { CircleAlert, RefreshCw } from 'lucide-react';
+import { ArrowRight, CircleAlert, RefreshCw } from 'lucide-react';
 
 import { api } from '@/convex/_generated/api';
 import { AnimatedNumber } from '@/components/ui/animated-number';
@@ -11,7 +12,6 @@ import { Button } from '@/components/ui/button';
 import { CsAvatar } from '@/components/ui/cs-avatar';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Skeleton } from '@/components/ui/skeleton';
-import { WindowModeToggle, type WindowMode } from '@/components/panel/window-mode-toggle';
 import { cn } from '@/lib/utils';
 import { crBarClass } from '@/lib/cr';
 import { csKey } from '@/lib/cs-key';
@@ -19,11 +19,42 @@ import { fmtTime, formatRupiah } from '@/lib/format';
 import type { PerformanceData } from '@/components/panel/types';
 import { DashboardContextBar, LedgerMetric, LedgerMetricGrid, LedgerSection, StatusStamp } from './ledger';
 import { formatDashboardUpdatedAt, useDashboardData, type DuplicateOrder } from './use-dashboard-data';
+import {
+  dashboardPerformanceHref,
+  DashboardHistoryFilter,
+  formatDashboardBoundary,
+  isHistoricalDashboardRange,
+  type DashboardDayDraft,
+} from './dashboard-history-filter';
+import { resolveDashboardDay } from '@/lib/history-period';
+import { windowKeyToday } from '@/lib/report-window-core';
 
-export function OwnerHome() {
-  const [mode, setMode] = useState<WindowMode>('live');
+function jakartaDate(now: number): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(now));
+}
+
+export function OwnerHome({
+  now,
+  initialSelection,
+}: {
+  now?: number;
+  initialSelection?: DashboardDayDraft;
+} = {}) {
+  const [openedAt] = useState(() => now ?? Date.now());
+  const today = useMemo(() => jakartaDate(openedAt), [openedAt]);
+  const currentWorkDate = useMemo(() => windowKeyToday(openedAt), [openedAt]);
+  const [selection, setSelection] = useState<DashboardDayDraft>(
+    initialSelection ?? { date: today, basis: 'calendar' },
+  );
+  const range = useMemo(
+    () => resolveDashboardDay(selection.date, selection.basis, openedAt),
+    [openedAt, selection],
+  );
+  const historical = isHistoricalDashboardRange(range);
   const [duplicatesOpen, setDuplicatesOpen] = useState(false);
-  const data = useDashboardData({ mode, includeDuplicates: true });
+  const data = useDashboardData({ range, includeDuplicates: !historical });
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const avatarByKey = useMemo(() => new Map(csList.map((cs) => [cs.key, cs.avatarUrl])), [csList]);
   const errors = Object.entries(data.errors).filter(([, message]) => message);
@@ -32,11 +63,10 @@ export function OwnerHome() {
     <div className="space-y-4">
       <DashboardContextBar
         title="Kendali operasional"
-        period={data.periodLabel}
+        period={historical ? `Mode histori · ${formatDashboardBoundary(range)}` : `${data.periodLabel} · ${formatDashboardBoundary(range)}`}
         updatedAt={formatDashboardUpdatedAt(data.lastUpdatedAt)}
         actions={(
           <>
-            <WindowModeToggle mode={mode} onChange={setMode} />
             <Button variant="outline" size="sm" onClick={data.refreshAll} disabled={data.loading}>
               <RefreshCw className={cn('size-4', data.loading && 'animate-spin')} />
               Refresh
@@ -45,6 +75,21 @@ export function OwnerHome() {
         )}
       />
 
+      <div className="flex flex-col gap-3 border-b border-ledger-rule bg-card px-4 py-4 lg:flex-row lg:items-end lg:justify-between">
+        <DashboardHistoryFilter
+          today={today}
+          currentWorkDate={currentWorkDate}
+          applied={selection}
+          onApply={setSelection}
+        />
+        <Link
+          href={dashboardPerformanceHref(selection)}
+          className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-semibold text-ledger-ink transition-colors hover:bg-muted"
+        >
+          Lihat analisis lengkap <ArrowRight className="size-4" />
+        </Link>
+      </div>
+
       {errors.length ? (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 border border-negative bg-negative-soft px-4 py-3 text-sm text-negative">
           <span>Sebagian data gagal dimuat: {errors.map(([source]) => source).join(', ')}.</span>
@@ -52,8 +97,8 @@ export function OwnerHome() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <LedgerSection title="Perlu perhatian" className="xl:col-start-2">
+      <div className={cn('grid gap-4', !historical && 'xl:grid-cols-[minmax(0,1fr)_20rem]')}>
+        {!historical ? <LedgerSection title="Perlu perhatian" className="xl:col-start-2">
           <div className="p-4">
             {!data.ready.duplicates ? (
               <div className="space-y-2 py-2">
@@ -75,9 +120,9 @@ export function OwnerHome() {
               </div>
             )}
           </div>
-        </LedgerSection>
+        </LedgerSection> : null}
 
-        <LedgerSection title="Kinerja bisnis" description="Snapshot periode aktif" className="xl:col-start-1 xl:row-start-1">
+        <LedgerSection title="Kinerja bisnis" description="Snapshot periode aktif" className={cn(!historical && 'xl:col-start-1 xl:row-start-1')}>
           {data.ready.summary && data.ready.performance ? (
             <LedgerMetricGrid>
               <LedgerMetric label="Leads" value={<AnimatedNumber value={data.stats.orders} />} detail={data.periodLabel} />
@@ -100,7 +145,7 @@ export function OwnerHome() {
         <ProductRanking rows={data.topProducts} periodLabel={data.periodLabel} />
       </div>
 
-      <DuplicateSheet open={duplicatesOpen} onOpenChange={setDuplicatesOpen} rows={data.duplicateOrders} />
+      {!historical ? <DuplicateSheet open={duplicatesOpen} onOpenChange={setDuplicatesOpen} rows={data.duplicateOrders} /> : null}
     </div>
   );
 }

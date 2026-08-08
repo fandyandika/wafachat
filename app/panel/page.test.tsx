@@ -34,6 +34,8 @@ test("dashboard renders the operational snapshot without a disabled trend", () =
 
   const html = renderToStaticMarkup(<DashboardPage />);
   expect(html).toContain("Perlu perhatian");
+  expect(html).toContain("Pilih tanggal Dashboard");
+  expect(html).toContain("Lihat analisis lengkap");
   expect(html).toContain("Tidak ada perhatian mendesak");
   expect(html).toContain("Kinerja bisnis");
   expect(html).toContain("Leads");
