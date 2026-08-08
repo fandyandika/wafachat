@@ -1,9 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import {
+  CsPerformanceBreakdown,
+  ProductPerformanceBreakdown,
+} from "@/components/panel/performance-breakdowns";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeltaPill } from "@/components/ui/metric-card";
-import { formatDuration, formatRupiah } from "@/lib/format";
+import { formatRupiah } from "@/lib/format";
 import type { DateRange, PerformanceReport } from "@/lib/performance-report";
 import { cn } from "@/lib/utils";
 
@@ -69,10 +73,6 @@ export function PerformancePanel({
   scopeLabel: string;
 }) {
   const [tab, setTab] = useState<PerformanceTab>("summary");
-  const [productSort, setProductSort] = useState<"closing" | "cr">("closing");
-  const products = useMemo(() => [...report.products].sort((a, b) => productSort === "cr"
-    ? a.cr - b.cr || b.closings - a.closings
-    : b.closings - a.closings || a.product.localeCompare(b.product)), [productSort, report.products]);
   const s = report.summary;
   const activePanelId = `performance-panel-${tab}`;
 
@@ -198,85 +198,13 @@ export function PerformancePanel({
         </>
       )}
 
-      {tab === "cs" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Performa per CS</CardTitle>
-            <CardDescription>Semua metrik mengikuti periode dan filter CS yang sama.</CardDescription>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-sm">
-              <caption className="sr-only">Perbandingan kinerja per CS</caption>
-              <thead className="text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="pb-2 font-medium">CS</th><th className="pb-2 text-right font-medium">Leads</th>
-                  <th className="pb-2 text-right font-medium">Closing</th><th className="pb-2 text-right font-medium">CR</th>
-                  <th className="pb-2 text-right font-medium">Omzet</th><th className="pb-2 text-right font-medium">COD / Transfer</th>
-                  <th className="pb-2 text-right font-medium">Balas pertama</th>
-                </tr>
-              </thead>
-              <tbody>
-                {report.cs.map((row) => (
-                  <tr key={row.csKey} className="border-t border-border">
-                    <td className="py-2.5 font-medium">{row.csName}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.leads)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.closings)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{pct(row.cr)} <DeltaPill value={row.deltaCr} suffix="%" /></td>
-                    <td className="py-2.5 text-right tabular-nums">{formatRupiah(row.revenue)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{pct(row.codPct)} / {pct(row.transferPct)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{report.responseNotice ? "Rentang terlalu panjang" : formatDuration(row.responseMedianMs)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-      )}
+      {tab === "cs" ? (
+        <CsPerformanceBreakdown rows={report.cs} responseNotice={report.responseNotice} />
+      ) : null}
 
-      {tab === "product" && (
-        <Card>
-          <CardHeader className="sm:grid-cols-[1fr_auto]">
-            <div>
-              <CardTitle>Performa per produk</CardTitle>
-              <CardDescription>Ringkas, tanpa grafik; urutkan sesuai kebutuhan evaluasi.</CardDescription>
-            </div>
-            <label className="space-y-1 text-xs font-medium text-muted-foreground">
-              <span>Urutkan produk</span>
-              <select aria-label="Urutkan produk" value={productSort} onChange={(event) => setProductSort(event.target.value as "closing" | "cr")} className="block min-h-11 rounded-lg border border-input bg-background px-2 text-sm text-foreground sm:min-h-8">
-                <option value="closing">Closing terbanyak</option>
-                <option value="cr">CR terendah</option>
-              </select>
-            </label>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <table className="w-full min-w-[820px] text-sm">
-              <caption className="sr-only">Perbandingan kinerja per produk</caption>
-              <thead className="text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="pb-2 font-medium">Produk</th><th className="pb-2 text-right font-medium">Leads</th>
-                  <th className="pb-2 text-right font-medium">Closing</th><th className="pb-2 text-right font-medium">CR</th>
-                  <th className="pb-2 text-right font-medium">Omzet</th><th className="pb-2 text-right font-medium">COD</th>
-                  <th className="pb-2 text-right font-medium">Transfer</th><th className="pb-2 text-right font-medium">Rasio</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((row) => (
-                  <tr key={row.product} className="border-t border-border">
-                    <td className="py-2.5 font-medium">{row.product}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.leads)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.closings)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{pct(row.cr)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{formatRupiah(row.revenue)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.cod)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{number.format(row.transfer)}</td>
-                    <td className="py-2.5 text-right tabular-nums">{pct(row.codPct)} / {pct(row.transferPct)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-      )}
+      {tab === "product" ? (
+        <ProductPerformanceBreakdown rows={report.products} />
+      ) : null}
       </div>
     </div>
   );
