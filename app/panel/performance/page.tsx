@@ -50,6 +50,10 @@ const presetLabels: Record<PerformancePreset, string> = {
   month: "Pilih bulan",
   custom: "Rentang khusus",
 };
+const basisLabels: Record<DayBasis, string> = {
+  calendar: "Hari kalender (00.00–24.00)",
+  work: "Cutoff kerja (16.00–16.00)",
+};
 
 export default function PerformancePage() {
   const today = useMemo(jakartaDate, []);
@@ -145,7 +149,7 @@ export default function PerformancePage() {
                   <label className="grid gap-1.5 text-sm font-medium">
                     Basis hari
                     <Select value={basis} onValueChange={(value) => setBasis(value as DayBasis)}>
-                      <SelectTrigger className="min-h-11 w-full sm:min-h-9"><SelectValue /></SelectTrigger>
+                      <SelectTrigger className="min-h-11 w-full sm:min-h-9"><SelectValue>{basisLabels[basis]}</SelectValue></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="calendar">Hari kalender (00.00–24.00)</SelectItem>
                         <SelectItem value="work">Cutoff kerja (16.00–16.00)</SelectItem>
