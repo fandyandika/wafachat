@@ -213,6 +213,9 @@ test("enforces range and owner authorization boundaries", async () => {
   await expect(cs.query((api as any).performanceReports.getPerformanceReport, {
     period: "custom", startDate: "2026-07-01", endDate: "2026-07-02",
   })).rejects.toThrow(/admin/i);
+  await expect(admin.query((api as any).performanceReports.getPerformanceReport, {
+    period: "week", basis: "calendar", startDate: "2026-07-06", endDate: "2026-07-12",
+  })).rejects.toThrow("Basis kalender hanya tersedia untuk laporan harian");
 });
 
 test("response sample overflow degrades only the performance response metric", async () => {
