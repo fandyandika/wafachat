@@ -61,6 +61,19 @@ describe("resolvePerformanceSelection", () => {
     )).toEqual({ period: "day", basis: "calendar", startDate: "2026-08-07", endDate: "2026-08-07" });
   });
 
+  test("resolves the last seven calendar dates as a bounded custom report", () => {
+    expect(resolvePerformanceSelection(
+      { preset: "last_7", basis: "work" },
+      "2026-08-09",
+      Date.parse("2026-08-09T12:00:00+07:00"),
+    )).toEqual({
+      period: "custom",
+      basis: "work",
+      startDate: "2026-08-03",
+      endDate: "2026-08-09",
+    });
+  });
+
   test("resolves work today to the currently open work-window date", () => {
     expect(resolvePerformanceSelection(
       { preset: "today", basis: "work" },

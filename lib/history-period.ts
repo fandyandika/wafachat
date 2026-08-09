@@ -9,6 +9,7 @@ export type DayBasis = "calendar" | "work";
 export type PerformancePreset =
   | "today"
   | "yesterday"
+  | "last_7"
   | "date"
   | "this_week"
   | "last_week"
@@ -85,6 +86,15 @@ export function resolvePerformanceSelection(
         : addDays(today, selection.preset === "yesterday" ? -1 : 0);
     resolveDashboardDay(date, selection.basis, now);
     return { period: "day", basis: selection.basis, startDate: date, endDate: date };
+  }
+
+  if (selection.preset === "last_7") {
+    return {
+      period: "custom",
+      basis: "work",
+      startDate: addDays(today, -6),
+      endDate: today,
+    };
   }
 
   if (selection.preset === "this_week" || selection.preset === "last_week" || selection.preset === "week") {

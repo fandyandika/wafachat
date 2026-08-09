@@ -26,8 +26,8 @@ describe("DashboardHistoryFilter", () => {
     expect(html).toContain('type="date"');
     expect(html).toContain('max="2026-08-08"');
     expect(html).toContain("Hari kalender");
-    expect(html).toContain("Periode kerja CS 16:00");
-    expect(html).toContain("Terapkan");
+    expect(html).toContain("Cutoff CS · 16.00");
+    expect(html).toContain("Sudah diterapkan");
     expect(html).toContain("min-h-11");
     expect(html).not.toContain("Pekanan");
     expect(html).not.toContain("Bulanan");

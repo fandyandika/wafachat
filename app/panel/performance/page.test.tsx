@@ -74,11 +74,15 @@ test("performance stays idle until the owner submits a period", () => {
   expect(html).toContain('data-testid="performance-filter-grid"');
   expect(html).toContain("Pekan ini");
   expect(html).toContain("Periode laporan");
+  expect(html).toContain('aria-label="Pilih periode laporan"');
+  expect(html).toContain("Buka kalender");
+  expect(html).toContain("3–9 Agu 2026");
   expect(html).toContain("min-h-11");
   expect(html).not.toContain("<h1");
   expect(html).toContain("Pilih periode lalu tampilkan laporan");
   expect(html).toContain("Semua CS");
   expect(html).not.toContain(">all<");
+  expect(html).not.toContain('data-slot="select-trigger"><span data-slot="select-value">Pekan ini');
 });
 
 test("keeps a stable loading region before the first result", () => {

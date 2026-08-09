@@ -93,7 +93,7 @@ export function DashboardHistoryFilter({
       <fieldset className="min-w-0">
         <legend className="mb-1.5 text-sm font-medium text-ledger-ink">Basis hari</legend>
         <div className="inline-flex w-full rounded-lg border border-ledger-rule bg-card p-0.5 text-sm sm:w-auto">
-          {([['calendar', 'Hari kalender'], ['work', 'Periode kerja CS 16:00']] as const).map(([basis, label]) => (
+          {([['calendar', 'Hari kalender'], ['work', 'Cutoff CS · 16.00']] as const).map(([basis, label]) => (
             <button
               key={basis}
               type="button"
@@ -112,7 +112,7 @@ export function DashboardHistoryFilter({
         </div>
       </fieldset>
       <Button type="submit" size="sm" className="min-h-11 sm:min-h-9" disabled={!dirty || !draftDate}>
-        Terapkan
+        {dirty ? 'Terapkan' : 'Sudah diterapkan'}
       </Button>
     </form>
   );
