@@ -1,9 +1,18 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { expect, test, vi } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
 
 (globalThis as any).React = React;
 const { snapshotMock } = vi.hoisted(() => ({ snapshotMock: vi.fn() }));
+
+beforeAll(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-09T05:00:00.000Z"));
+});
+
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 vi.mock("convex/react", () => ({
   useQuery: () => [{ key: "aisyah", csName: "Aisyah", avatarUrl: null }],
