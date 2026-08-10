@@ -17,6 +17,8 @@ export const normalizeProductName = normalizeProductNameLib;
 type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
 
+type AdminCancellationActor = { userId: string; name: string };
+
 const statusValidator = v.union(
   v.literal("ready"),
   v.literal("needs_review"),
@@ -27,6 +29,85 @@ const statusValidator = v.union(
 );
 
 const paymentMethodValidator = v.union(v.literal("cod"), v.literal("transfer"), v.literal("unknown"));
+
+export async function cancelRecapByExactOrderCore(ctx: any, args: {
+  orgId: Id<"organizations">;
+  orderIdBerdu: string;
+  reason: string;
+  actor: AdminCancellationActor;
+}) {
+  const orderIdBerdu = normalizeOrderId(args.orderIdBerdu);
+  const reason = args.reason.trim();
+  if (!orderIdBerdu) throw new Error("ID order wajib tersedia.");
+  if (!reason) throw new Error("Alasan pembatalan wajib diisi.");
+  const rows = await ctx.db
+    .query("shippingRecaps")
+    .withIndex("by_org_orderIdBerdu", (q: any) => q.eq("orgId", args.orgId).eq("orderIdBerdu", orderIdBerdu))
+    .take(2);
+  if (rows.length !== 1) throw new Error(rows.length === 0 ? "Rekap order tidak ditemukan." : "ID order tidak unik; pembatalan dihentikan.");
+  const row = rows[0];
+  if (row.status === "cancelled" || row.status === "cancelled_after_export") throw new Error("Order sudah dibatalkan.");
+  const status: RecapStatus = row.status === "exported" || row.status === "delivered" ? "cancelled_after_export" : "cancelled";
+  const now = Date.now();
+  await ctx.db.patch(row._id, {
+    status,
+    cancelPreviousStatus: row.status,
+    cancelReason: reason,
+    cancelledAt: now,
+    updatedAt: now,
+  });
+  const after = await ctx.db.get(row._id);
+  await bumpForRecapDoc(ctx, row, after);
+  await ctx.db.insert("events", {
+    conversationId: row.conversationId,
+    orderId: row.orderIdBerdu,
+    customerPhone: row.customerPhone,
+    type: "shipping_recap_cancelled",
+    actor: "cs",
+    metadata: { recapId: row._id, reason, status, source: "admin_expedition_inbox", actorUserId: args.actor.userId, actorName: args.actor.name },
+    createdAt: now,
+    orgId: args.orgId,
+  });
+  return { recapId: row._id, orderIdBerdu, status };
+}
+
+export async function undoExactOrderCancellationCore(ctx: any, args: {
+  orgId: Id<"organizations">;
+  orderIdBerdu: string;
+  actor: AdminCancellationActor;
+}) {
+  const orderIdBerdu = normalizeOrderId(args.orderIdBerdu);
+  const rows = await ctx.db
+    .query("shippingRecaps")
+    .withIndex("by_org_orderIdBerdu", (q: any) => q.eq("orgId", args.orgId).eq("orderIdBerdu", orderIdBerdu))
+    .take(2);
+  if (rows.length !== 1) throw new Error("Rekap order tidak ditemukan atau tidak unik.");
+  const row = rows[0];
+  if (row.status !== "cancelled" && row.status !== "cancelled_after_export") throw new Error("Order tidak sedang dibatalkan.");
+  if (!row.cancelPreviousStatus) throw new Error("Pembatalan ini tidak dibuat dari Inbox Ekspedisi dan tidak dapat di-undo di sini.");
+  const status: RecapStatus = row.cancelPreviousStatus;
+  const now = Date.now();
+  await ctx.db.patch(row._id, {
+    status,
+    cancelPreviousStatus: undefined,
+    cancelReason: undefined,
+    cancelledAt: undefined,
+    updatedAt: now,
+  });
+  const after = await ctx.db.get(row._id);
+  await bumpForRecapDoc(ctx, row, after);
+  await ctx.db.insert("events", {
+    conversationId: row.conversationId,
+    orderId: row.orderIdBerdu,
+    customerPhone: row.customerPhone,
+    type: "shipping_recap_cancel_undone",
+    actor: "cs",
+    metadata: { recapId: row._id, status, source: "admin_expedition_inbox", actorUserId: args.actor.userId, actorName: args.actor.name },
+    createdAt: now,
+    orgId: args.orgId,
+  });
+  return { recapId: row._id, orderIdBerdu, status };
+}
 
 const berduVerifiedRowValidator = v.object({
   orderIdBerdu: v.string(),

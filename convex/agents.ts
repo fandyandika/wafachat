@@ -56,6 +56,10 @@ export async function getBoundedActiveAgentRegistry(
 export async function canAssignProviderNumberId(
   ctx: { db: any }, orgId: Id<"organizations">, providerNumberId: string, exceptId?: Id<"csConfigs">,
 ): Promise<boolean> {
+  const adminClaim = await ctx.db.query("adminChannels")
+    .withIndex("by_org_providerNumberId", (q: any) => q.eq("orgId", orgId).eq("providerNumberId", providerNumberId))
+    .first();
+  if (adminClaim) return false;
   const run = await getClaimRun(ctx, orgId);
   if (claimRunIsComplete(run)) {
     const claims = await getIndexedClaims(ctx, orgId, run._id, providerNumberId);

@@ -499,6 +499,12 @@ export default defineSchema({
     deliveredAt: v.optional(v.number()),
     cancelledAt: v.optional(v.number()),
     cancelReason: v.optional(v.string()),
+    cancelPreviousStatus: v.optional(v.union(
+      v.literal("ready"),
+      v.literal("needs_review"),
+      v.literal("exported"),
+      v.literal("delivered"),
+    )),
     followUpTouchesAtClose: v.optional(v.number()), // count of follow-up touches that preceded this closing
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -575,6 +581,7 @@ export default defineSchema({
       v.literal("accepted"),
       v.literal("delivered"),
       v.literal("read"),
+      v.literal("unknown"),
       v.literal("failed"),
     ),
     failureReason: v.optional(v.string()),

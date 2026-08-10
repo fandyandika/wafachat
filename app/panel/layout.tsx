@@ -3,7 +3,7 @@
 import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings, LogOut } from 'lucide-react';
+import { LayoutDashboard, BarChart3, ClipboardList, Send, PanelLeft, PanelLeftClose, Settings, LogOut, MessagesSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useMe } from '@/components/panel/use-me';
 import { PwaInstallButton } from '@/components/panel/pwa-install';
@@ -13,6 +13,7 @@ const NAV = [
   { href: '/panel/performance', label: 'Performance', icon: BarChart3 },
   { href: '/panel/laporan', label: 'Laporan', icon: ClipboardList },
   { href: '/panel/follow-up', label: 'Follow-up', icon: Send },
+  { href: '/panel/admin-inbox', label: 'Inbox', icon: MessagesSquare },
   { href: '/panel/settings', label: 'Settings', icon: Settings },
 ] as const;
 
@@ -34,7 +35,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
   const navItems = navItemsForRole(me?.role);
   const organizationName = me?.orgName || 'Organisasi aktif';
   const roleLabel = isCs ? 'CS' : 'Owner';
-  const isFollowUp = pathname === '/panel/follow-up'; // CRM page: hide header filters + tighten padding for more room.
+  const isWorkspace = pathname === '/panel/follow-up' || pathname === '/panel/admin-inbox';
 
   // CS have no Settings access (where the admin logout lives) — give them one here.
   const logout = async () => {
@@ -115,7 +116,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
               </div>
             </div>
           </header>
-          <div className={cn('mx-auto w-full max-w-[1440px] space-y-6', isFollowUp ? 'p-2 pb-20 md:p-4 md:pb-4' : 'p-4 pb-24 md:p-6 md:pb-8')}>{children}</div>
+          <div className={cn('mx-auto w-full max-w-[1440px] space-y-6', isWorkspace ? 'p-2 pb-20 md:p-4 md:pb-4' : 'p-4 pb-24 md:p-6 md:pb-8')}>{children}</div>
         </main>
       </div>
 

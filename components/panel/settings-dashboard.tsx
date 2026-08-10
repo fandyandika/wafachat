@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import {
   LogOut,
@@ -707,6 +707,7 @@ function TeamSection() {
 
 export function SettingsDashboard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const csList = useQuery(api.cs.listCs, {}) ?? [];
   const genUrl = useMutation(api.cs.generateUploadUrl);
   const setAvatar = useMutation(api.cs.setCsAvatar);
@@ -716,7 +717,10 @@ export function SettingsDashboard() {
   const deleteCsConfig = useMutation(api.csConfigs.deleteCsConfig);
   const setBerduStaffIds = useMutation(api.csConfigs.setBerduStaffIds);
   const setNameAliases = useMutation(api.agents.setNameAliases);
-  const [section, setSection] = useState<SettingsSection>("account");
+  const requestedSection = searchParams.get("section");
+  const [section, setSection] = useState<SettingsSection>(
+    SETTINGS_SECTIONS.some((item) => item.value === requestedSection) ? requestedSection as SettingsSection : "account",
+  );
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<{

@@ -26,6 +26,7 @@ test("panel navigation exposes only routes allowed for each role", () => {
     "/panel/performance",
     "/panel/laporan",
     "/panel/follow-up",
+    "/panel/admin-inbox",
     "/panel/settings",
   ]);
   expect(navItemsForRole("cs").map((item) => item.href)).toEqual([

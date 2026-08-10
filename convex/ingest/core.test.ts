@@ -74,6 +74,39 @@ test("processEvent ingests message with original timestamp + CS from providerNum
   });
 });
 
+test("admin provider number routes inbound only to the isolated expedition inbox", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("adminChannels", {
+      orgId, name: "Admin Ekspedisi", provider: "kirimdev", providerNumberId: "485071188032281",
+      isActive: true, createdAt: 1, updatedAt: 1,
+    });
+  });
+  const eventId = await captureKirimdev(t, orgId, RECEIVED_RAW);
+  await t.mutation(internal.ingest.core.processEvent, { eventId });
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("adminThreads").collect()).toHaveLength(1);
+    expect(await ctx.db.query("adminThreadMessages").collect()).toHaveLength(1);
+    expect(await ctx.db.query("adminProviderEvents").collect()).toHaveLength(1);
+    expect(await ctx.db.query("messages").collect()).toHaveLength(0);
+    expect(await ctx.db.query("conversations").collect()).toHaveLength(0);
+    expect(await ctx.db.query("dailyRollups").collect()).toHaveLength(0);
+  });
+
+  await t.run(async (ctx) => {
+    const channel = await ctx.db.query("adminChannels").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+    await ctx.db.patch(channel!._id, { isActive: false });
+  });
+  const inactiveEvent = await captureKirimdev(t, orgId, RECEIVED_RAW.replace("wamid.X1", "wamid.X2"));
+  await t.mutation(internal.ingest.core.processEvent, { eventId: inactiveEvent });
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("adminThreadMessages").collect()).toHaveLength(1);
+    expect(await ctx.db.query("messages").collect()).toHaveLength(0);
+    expect(await ctx.db.query("conversations").collect()).toHaveLength(0);
+  });
+});
+
 test("legacy single providerNumberId still matches", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);

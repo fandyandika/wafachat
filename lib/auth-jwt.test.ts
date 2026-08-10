@@ -19,6 +19,7 @@ test("routeGuard: unauth -> /login; cs scoped to Laporan+Follow-up; admin full",
   // CS: only Laporan + Follow-up are allowed; everything else redirects to Laporan.
   expect(routeGuard("/panel/laporan", cs).redirect).toBeNull();
   expect(routeGuard("/panel/follow-up", cs).redirect).toBeNull();
+  expect(routeGuard("/panel/admin-inbox", cs).redirect).toBe("/panel/follow-up");
   expect(routeGuard("/panel", cs).redirect).toBeNull();
   expect(routeGuard("/panel/performance", cs).redirect).toBe("/panel/laporan");
   expect(routeGuard("/panel/queen", cs).redirect).toBe("/panel/laporan");
@@ -26,6 +27,7 @@ test("routeGuard: unauth -> /login; cs scoped to Laporan+Follow-up; admin full",
   // Admin: full access.
   expect(routeGuard("/panel", admin).redirect).toBeNull();
   expect(routeGuard("/panel/settings", admin).redirect).toBeNull();
+  expect(routeGuard("/panel/admin-inbox", admin).redirect).toBeNull();
   expect(routeGuard("/", admin).redirect).toBe("/panel");
   expect(routeGuard("/", null).redirect).toBe("/login");
 });

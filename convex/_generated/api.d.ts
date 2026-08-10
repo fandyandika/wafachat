@@ -10,6 +10,7 @@
 
 import type * as adminInbox from "../adminInbox.js";
 import type * as adminInboxModel from "../adminInboxModel.js";
+import type * as adminInboxProvider from "../adminInboxProvider.js";
 import type * as agents from "../agents.js";
 import type * as analytics from "../analytics.js";
 import type * as analyticsBounds from "../analyticsBounds.js";
@@ -61,6 +62,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   adminInbox: typeof adminInbox;
   adminInboxModel: typeof adminInboxModel;
+  adminInboxProvider: typeof adminInboxProvider;
   agents: typeof agents;
   analytics: typeof analytics;
   analyticsBounds: typeof analyticsBounds;

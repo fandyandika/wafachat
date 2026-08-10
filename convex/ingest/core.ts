@@ -8,6 +8,8 @@ import { parseBerduOrderDetail, DEFAULT_BERDU_STAFF_MAP } from "./berduAdapter";
 import { upsertOrderCore } from "../state";
 import { getBoundedActiveAgentRegistry, resolveAgent } from "../agents";
 import { getDefaultOrgId } from "../orgs";
+import { extractAdminProviderNumberId, parseAdminKirimdevEvent } from "../adminInboxProvider";
+import { applyAdminStatusCore, upsertAdminInboundCore } from "../adminInbox";
 
 /** @deprecated B2a — use resolveAgent({ phoneNumberId }) from ../agents. */
 export async function resolveCsByPhoneNumberId(ctx: any, orgId: Id<"organizations">, phoneNumberId: string | undefined) {
@@ -42,6 +44,68 @@ export async function processCapturedEvent(
   const body = JSON.parse(event.rawBody);
 
   if (event.kind === "message.event") {
+    const adminProviderNumberId = extractAdminProviderNumberId(body);
+    const adminChannel = adminProviderNumberId
+      ? await ctx.db
+          .query("adminChannels")
+          .withIndex("by_org_providerNumberId", (q: any) => q.eq("orgId", event.orgId).eq("providerNumberId", adminProviderNumberId))
+          .first()
+      : null;
+    if (adminChannel) {
+      const parsedAdmin = parseAdminKirimdevEvent(headers, body, event.receivedAt);
+      const providerEventId = parsedAdmin.kind === "skip"
+        ? String(headers["x-kirim-event-id"] || `skip:${adminProviderNumberId}:${event.receivedAt}`)
+        : parsedAdmin.providerEventId;
+      const duplicate = await ctx.db
+        .query("adminProviderEvents")
+        .withIndex("by_org_providerEventId", (q: any) => q.eq("orgId", event.orgId).eq("providerEventId", providerEventId))
+        .first();
+      if (duplicate) return { status: "processed", resultRef: String(duplicate._id) };
+      const auditId = await ctx.db.insert("adminProviderEvents", {
+        orgId: event.orgId,
+        providerEventId,
+        kind: parsedAdmin.kind,
+        rawBody: event.rawBody,
+        status: "received",
+        receivedAt: event.receivedAt,
+      });
+      if (!adminChannel.isActive) {
+        await ctx.db.patch(auditId, { status: "skipped", error: "admin channel inactive", processedAt: Date.now() });
+        return { status: "skipped", skipReason: "admin inbox: channel inactive" };
+      }
+      if (parsedAdmin.kind === "skip") {
+        await ctx.db.patch(auditId, { status: "skipped", error: parsedAdmin.reason, processedAt: Date.now() });
+        return { status: "skipped", skipReason: `admin inbox: ${parsedAdmin.reason}` };
+      }
+      if (parsedAdmin.kind === "inbound") {
+        const result = await upsertAdminInboundCore(ctx, {
+          orgId: event.orgId,
+          channelId: adminChannel._id,
+          customerPhone: parsedAdmin.customerPhone,
+          customerName: parsedAdmin.customerName,
+          content: parsedAdmin.content,
+          providerMessageId: parsedAdmin.providerMessageId,
+          providerEventId: parsedAdmin.providerEventId,
+          createdAt: parsedAdmin.createdAt,
+        });
+        await ctx.db.patch(auditId, { status: "processed", processedAt: Date.now() });
+        return { status: "processed", resultRef: String(result.messageId) };
+      }
+      const result = await applyAdminStatusCore(ctx, {
+        orgId: event.orgId,
+        providerMessageId: parsedAdmin.providerMessageId,
+        status: parsedAdmin.status,
+        updatedAt: parsedAdmin.createdAt,
+      });
+      await ctx.db.patch(auditId, {
+        status: result.updated ? "processed" : "skipped",
+        error: result.updated ? undefined : "outbound message not found",
+        processedAt: Date.now(),
+      });
+      return result.updated
+        ? { status: "processed", resultRef: String(auditId) }
+        : { status: "skipped", skipReason: "admin inbox: outbound message not found" };
+    }
     const parsed = parseKirimdevWebhook(headers, body, event.receivedAt);
     if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
     const agent = await resolveAgent(ctx, event.orgId, { phoneNumberId: parsed.event.phoneNumberId });
