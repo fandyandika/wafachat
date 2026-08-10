@@ -60,6 +60,7 @@ test("puts business metrics before operational attention on the mobile reading p
   expect(metricsIndex).toBeLessThan(attentionIndex);
   expect(html).toContain("md:hidden");
   expect(html).toContain("md:block");
+  expect(html).toContain("xl:grid-cols-3 grid-cols-2");
 });
 
 test("presents duplicate orders as a readable structured list", () => {

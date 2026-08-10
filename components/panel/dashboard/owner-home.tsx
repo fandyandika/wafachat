@@ -116,7 +116,7 @@ export function OwnerHome({
         <div data-dashboard-section="metrics" className={cn(!historical && 'xl:col-start-1 xl:row-start-1')}>
           <LedgerSection title="Kinerja bisnis" description="Snapshot periode aktif">
           {data.ready.summary && data.ready.performance ? (
-            <LedgerMetricGrid>
+            <LedgerMetricGrid className="grid-cols-2">
               <LedgerMetric label="Leads" value={<AnimatedNumber value={data.stats.orders} />} detail={data.periodLabel} />
               <LedgerMetric label="Closing" value={<AnimatedNumber value={data.totalClosing} />} detail={data.periodLabel} tone="positive" />
               <LedgerMetric label="Closing Rate" value={`${data.closingRate.toFixed(1)}%`} detail={data.periodLabel} tone="positive" />
