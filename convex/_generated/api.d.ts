@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as adminInbox from "../adminInbox.js";
 import type * as adminInboxModel from "../adminInboxModel.js";
 import type * as agents from "../agents.js";
 import type * as analytics from "../analytics.js";
@@ -58,6 +59,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  adminInbox: typeof adminInbox;
   adminInboxModel: typeof adminInboxModel;
   agents: typeof agents;
   analytics: typeof analytics;

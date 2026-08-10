@@ -31,13 +31,15 @@ import { CsAvatar } from "@/components/ui/cs-avatar";
 import { Switch } from "@/components/ui/switch";
 import { resizeImage } from "@/lib/resize-image";
 import { cn } from "@/lib/utils";
+import { AdminExpeditionSettings } from "@/components/panel/admin-expedition-settings";
 
-export type SettingsSection = "account" | "organization" | "team" | "cs";
+export type SettingsSection = "account" | "organization" | "team" | "cs" | "expedition";
 const SETTINGS_SECTIONS: Array<{ value: SettingsSection; label: string }> = [
   { value: "account", label: "Akun" },
   { value: "organization", label: "Organisasi" },
   { value: "team", label: "Tim" },
   { value: "cs", label: "Konfigurasi CS" },
+  { value: "expedition", label: "Admin Ekspedisi" },
 ];
 
 export function settingsSectionsForRole(role: "admin" | "cs" | null) {
@@ -1068,6 +1070,14 @@ export function SettingsDashboard() {
               Belum ada CS terdaftar.
             </div>
           )}
+        </section>
+      )}
+      {isAdmin && section === "expedition" && (
+        <section aria-labelledby="settings-expedition">
+          <h2 id="settings-expedition" className="sr-only">
+            Admin Ekspedisi
+          </h2>
+          <AdminExpeditionSettings />
         </section>
       )}
       <AlertDialog
