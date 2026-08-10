@@ -66,7 +66,10 @@ test("exports only the default component from the Next.js page module", () => {
 });
 
 test("performance stays idle until the owner submits a period", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-08T12:00:00+07:00"));
   const html = renderToStaticMarkup(<PerformancePage />);
+  vi.useRealTimers();
 
   expect(snapshotMock).toHaveBeenCalledTimes(1);
   expect(snapshotMock).toHaveBeenLastCalledWith(api.performanceReports.getPerformanceReport, "skip");
