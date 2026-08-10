@@ -550,12 +550,14 @@ export default defineSchema({
     orderId: v.optional(v.string()),
     lastInboundAt: v.optional(v.number()),
     lastOutboundAt: v.optional(v.number()),
+    archived: v.boolean(),
     archivedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_org_channel_customerPhone", ["orgId", "channelId", "customerPhone"])
     .index("by_org_channel_updatedAt", ["orgId", "channelId", "updatedAt"])
+    .index("by_org_channel_archived_updatedAt", ["orgId", "channelId", "archived", "updatedAt"])
     .index("by_org_orderId", ["orgId", "orderId"]),
 
   adminThreadMessages: defineTable({

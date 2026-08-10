@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { afterEach, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const ADMIN = { subject: "admin-1", role: "admin", name: "Owner", email: "owner@wafachat.test" };
 const CS = { subject: "cs-1", role: "cs", name: "Aisyah", email: "aisyah@wafachat.test", csName: "Aisyah" };
@@ -165,4 +165,127 @@ test("phase one refuses an organization with multiple channel rows", async () =>
     name: "Admin Ekspedisi",
     isActive: true,
   })).rejects.toThrow(/one admin channel/i);
+});
+
+test("thread list is paginated, newest first, and archive-aware", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const asAdmin = t.withIdentity(ADMIN);
+  const { channelId } = await asAdmin.mutation(api.adminInbox.upsertChannel, {
+    name: "Admin Ekspedisi",
+    isActive: false,
+  });
+  await t.run(async (ctx) => {
+    for (let index = 1; index <= 3; index += 1) {
+      await ctx.db.insert("adminThreads", {
+        orgId,
+        channelId,
+        customerPhone: `62811111111${index}`,
+        customerName: `Customer ${index}`,
+        archived: false,
+        createdAt: index,
+        updatedAt: index,
+      });
+    }
+  });
+
+  const first = await asAdmin.query(api.adminInbox.listThreads, {
+    channelId,
+    paginationOpts: { numItems: 2, cursor: null },
+  });
+  expect(first.page.map((row) => row.customerName)).toEqual(["Customer 3", "Customer 2"]);
+  expect(first.isDone).toBe(false);
+  const second = await asAdmin.query(api.adminInbox.listThreads, {
+    channelId,
+    paginationOpts: { numItems: 2, cursor: first.continueCursor },
+  });
+  expect(second.page.map((row) => row.customerName)).toEqual(["Customer 1"]);
+
+  await asAdmin.mutation(api.adminInbox.archiveThread, { threadId: first.page[0].id, archived: true });
+  const active = await asAdmin.query(api.adminInbox.listThreads, {
+    channelId,
+    paginationOpts: { numItems: 10, cursor: null },
+  });
+  expect(active.page.map((row) => row.customerName)).not.toContain("Customer 3");
+  const includingArchived = await asAdmin.query(api.adminInbox.listThreads, {
+    channelId,
+    includeArchived: true,
+    paginationOpts: { numItems: 10, cursor: null },
+  });
+  expect(includingArchived.page.map((row) => row.customerName)).toContain("Customer 3");
+});
+
+test("inbound admin message is idempotent and never writes sales tables", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const asAdmin = t.withIdentity(ADMIN);
+  const { channelId } = await asAdmin.mutation(api.adminInbox.upsertChannel, {
+    name: "Admin Ekspedisi",
+    isActive: false,
+  });
+
+  const before = await t.run(async (ctx) => ({
+    conversations: (await ctx.db.query("conversations").collect()).length,
+    messages: (await ctx.db.query("messages").collect()).length,
+    dailyRollups: (await ctx.db.query("dailyRollups").collect()).length,
+    shippingRecaps: (await ctx.db.query("shippingRecaps").collect()).length,
+  }));
+  const args = {
+    orgId,
+    channelId,
+    customerPhone: "0857-1568-2110",
+    customerName: "Fandi",
+    content: "Paket saya di mana?",
+    providerMessageId: "wamid.inbound.1",
+    providerEventId: "evt-1",
+    createdAt: 1_000,
+  };
+  const first = await t.mutation(internal.adminInbox.upsertInboundMessage, args);
+  const duplicate = await t.mutation(internal.adminInbox.upsertInboundMessage, args);
+  expect(duplicate).toEqual({ ...first, deduped: true });
+
+  const after = await t.run(async (ctx) => ({
+    conversations: (await ctx.db.query("conversations").collect()).length,
+    messages: (await ctx.db.query("messages").collect()).length,
+    dailyRollups: (await ctx.db.query("dailyRollups").collect()).length,
+    shippingRecaps: (await ctx.db.query("shippingRecaps").collect()).length,
+  }));
+  expect(after).toEqual(before);
+
+  const thread = (await asAdmin.query(api.adminInbox.listThreads, {
+    channelId,
+    paginationOpts: { numItems: 10, cursor: null },
+  })).page[0];
+  expect(thread.customerPhone).toBe("6285715682110");
+  expect(thread.windowOpen).toBe(false);
+  const messages = await asAdmin.query(api.adminInbox.listMessages, { threadId: thread.id, limit: 500 });
+  expect(messages).toHaveLength(1);
+  expect(messages[0]).toMatchObject({ direction: "inbound", content: "Paket saya di mana?", status: "delivered" });
+});
+
+test("thread and message reads enforce tenant ownership", async () => {
+  const t = convexTest(schema);
+  const orgA = await seedOrg(t);
+  const orgB = await t.run((ctx) => ctx.db.insert("organizations", {
+    slug: "org-b", name: "Org B", createdAt: 1, updatedAt: 1,
+  }));
+  const adminA = { ...ADMIN, subject: "admin-a", email: "a@wafachat.test" };
+  const adminB = { ...ADMIN, subject: "admin-b", email: "b@wafachat.test" };
+  await t.run(async (ctx) => {
+    await ctx.db.insert("users", { orgId: orgA, email: adminA.email, name: "A", passwordHash: "x", role: "admin", isActive: true, createdAt: 1, updatedAt: 1 });
+    await ctx.db.insert("users", { orgId: orgB, email: adminB.email, name: "B", passwordHash: "x", role: "admin", isActive: true, createdAt: 1, updatedAt: 1 });
+  });
+  const asA = t.withIdentity(adminA);
+  const asB = t.withIdentity(adminB);
+  const { channelId } = await asA.mutation(api.adminInbox.upsertChannel, { name: "A", isActive: false });
+  const inbound = await t.mutation(internal.adminInbox.upsertInboundMessage, {
+    orgId: orgA, channelId, customerPhone: "628111111111", content: "Halo",
+    providerMessageId: "wamid-a", createdAt: 10,
+  });
+
+  await expect(asB.query(api.adminInbox.listThreads, {
+    channelId,
+    paginationOpts: { numItems: 10, cursor: null },
+  })).rejects.toThrow(/channel not found/i);
+  await expect(asB.query(api.adminInbox.listMessages, { threadId: inbound.threadId })).rejects.toThrow(/thread not found/i);
 });

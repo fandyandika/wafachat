@@ -1,6 +1,8 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { requireAdminOrg } from "./authz";
+import { adminWindowExpiresAt, isAdminWindowOpen, normalizeAdminRecipient } from "./adminInboxModel";
 
 const variableValidator = v.object({
   key: v.string(),
@@ -33,6 +35,40 @@ const setupResultValidator = v.object({
   templates: v.array(templateResultValidator),
   ready: v.boolean(),
   missing: v.array(v.string()),
+});
+
+const threadResultValidator = v.object({
+  id: v.id("adminThreads"),
+  channelId: v.id("adminChannels"),
+  customerPhone: v.string(),
+  customerName: v.optional(v.string()),
+  orderId: v.optional(v.string()),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundAt: v.optional(v.number()),
+  archived: v.boolean(),
+  archivedAt: v.optional(v.number()),
+  windowExpiresAt: v.optional(v.number()),
+  windowOpen: v.boolean(),
+  updatedAt: v.number(),
+});
+
+const messageResultValidator = v.object({
+  id: v.id("adminThreadMessages"),
+  direction: v.union(v.literal("inbound"), v.literal("outbound")),
+  messageType: v.union(v.literal("template"), v.literal("text")),
+  content: v.string(),
+  templateName: v.optional(v.string()),
+  providerMessageId: v.optional(v.string()),
+  status: v.union(
+    v.literal("queued"),
+    v.literal("accepted"),
+    v.literal("delivered"),
+    v.literal("read"),
+    v.literal("failed"),
+  ),
+  failureReason: v.optional(v.string()),
+  actorName: v.optional(v.string()),
+  createdAt: v.number(),
 });
 
 function cleanRequired(value: string, label: string): string {
@@ -219,5 +255,173 @@ export const removeTemplate = mutation({
     if (!template || String(template.orgId) !== String(orgId)) throw new Error("Admin template not found.");
     await ctx.db.delete(template._id);
     return null;
+  },
+});
+
+export const listThreads = query({
+  args: {
+    channelId: v.id("adminChannels"),
+    paginationOpts: paginationOptsValidator,
+    includeArchived: v.optional(v.boolean()),
+  },
+  returns: v.object({
+    page: v.array(threadResultValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "adminInbox.listThreads");
+    const channel = await ctx.db.get(args.channelId);
+    if (!channel || String(channel.orgId) !== String(orgId)) throw new Error("Admin channel not found.");
+    const numItems = Math.max(1, Math.min(args.paginationOpts.numItems, 50));
+    const paginationOpts = { cursor: args.paginationOpts.cursor, numItems };
+    const result = args.includeArchived
+      ? await ctx.db
+          .query("adminThreads")
+          .withIndex("by_org_channel_updatedAt", (q) => q.eq("orgId", orgId).eq("channelId", channel._id))
+          .order("desc")
+          .paginate(paginationOpts)
+      : await ctx.db
+          .query("adminThreads")
+          .withIndex("by_org_channel_archived_updatedAt", (q) => q.eq("orgId", orgId).eq("channelId", channel._id).eq("archived", false))
+          .order("desc")
+          .paginate(paginationOpts);
+    const now = Date.now();
+    return {
+      page: result.page.map((row) => ({
+        id: row._id,
+        channelId: row.channelId,
+        customerPhone: row.customerPhone,
+        customerName: row.customerName,
+        orderId: row.orderId,
+        lastInboundAt: row.lastInboundAt,
+        lastOutboundAt: row.lastOutboundAt,
+        archived: row.archived,
+        archivedAt: row.archivedAt,
+        windowExpiresAt: adminWindowExpiresAt(row.lastInboundAt),
+        windowOpen: isAdminWindowOpen(row.lastInboundAt, now),
+        updatedAt: row.updatedAt,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+export const listMessages = query({
+  args: { threadId: v.id("adminThreads"), limit: v.optional(v.number()) },
+  returns: v.array(messageResultValidator),
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "adminInbox.listMessages");
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || String(thread.orgId) !== String(orgId)) throw new Error("Admin thread not found.");
+    const requested = args.limit ?? 50;
+    const limit = Number.isFinite(requested) ? Math.max(1, Math.min(Math.floor(requested), 100)) : 50;
+    const rows = await ctx.db
+      .query("adminThreadMessages")
+      .withIndex("by_org_thread_createdAt", (q) => q.eq("orgId", orgId).eq("threadId", thread._id))
+      .order("desc")
+      .take(limit);
+    return rows.reverse().map((row) => ({
+      id: row._id,
+      direction: row.direction,
+      messageType: row.messageType,
+      content: row.content,
+      templateName: row.templateName,
+      providerMessageId: row.providerMessageId,
+      status: row.status,
+      failureReason: row.failureReason,
+      actorName: row.actorName,
+      createdAt: row.createdAt,
+    }));
+  },
+});
+
+export const archiveThread = mutation({
+  args: { threadId: v.id("adminThreads"), archived: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "adminInbox.archiveThread");
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || String(thread.orgId) !== String(orgId)) throw new Error("Admin thread not found.");
+    const now = Date.now();
+    await ctx.db.patch(thread._id, {
+      archived: args.archived,
+      archivedAt: args.archived ? now : undefined,
+      updatedAt: now,
+    });
+    return null;
+  },
+});
+
+export const upsertInboundMessage = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    channelId: v.id("adminChannels"),
+    customerPhone: v.string(),
+    customerName: v.optional(v.string()),
+    orderId: v.optional(v.string()),
+    content: v.string(),
+    providerMessageId: v.string(),
+    providerEventId: v.optional(v.string()),
+    createdAt: v.number(),
+  },
+  returns: v.object({
+    threadId: v.id("adminThreads"),
+    messageId: v.id("adminThreadMessages"),
+    deduped: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    const channel = await ctx.db.get(args.channelId);
+    if (!channel || String(channel.orgId) !== String(args.orgId)) throw new Error("Admin channel not found.");
+    if (!Number.isFinite(args.createdAt) || args.createdAt < 0) throw new Error("Invalid message timestamp.");
+    const phone = normalizeAdminRecipient(args.customerPhone);
+    const duplicate = await ctx.db
+      .query("adminThreadMessages")
+      .withIndex("by_org_providerMessageId", (q) => q.eq("orgId", args.orgId).eq("providerMessageId", args.providerMessageId))
+      .first();
+    if (duplicate) return { threadId: duplicate.threadId, messageId: duplicate._id, deduped: true };
+
+    let thread = await ctx.db
+      .query("adminThreads")
+      .withIndex("by_org_channel_customerPhone", (q) => q.eq("orgId", args.orgId).eq("channelId", channel._id).eq("customerPhone", phone))
+      .unique();
+    if (!thread) {
+      const threadId = await ctx.db.insert("adminThreads", {
+        orgId: args.orgId,
+        channelId: channel._id,
+        customerPhone: phone,
+        customerName: cleanOptional(args.customerName),
+        orderId: cleanOptional(args.orderId),
+        lastInboundAt: args.createdAt,
+        archived: false,
+        createdAt: args.createdAt,
+        updatedAt: args.createdAt,
+      });
+      thread = await ctx.db.get(threadId);
+    } else {
+      await ctx.db.patch(thread._id, {
+        customerName: cleanOptional(args.customerName) ?? thread.customerName,
+        orderId: cleanOptional(args.orderId) ?? thread.orderId,
+        lastInboundAt: Math.max(thread.lastInboundAt ?? 0, args.createdAt),
+        archived: false,
+        archivedAt: undefined,
+        updatedAt: Math.max(thread.updatedAt, args.createdAt),
+      });
+    }
+    if (!thread) throw new Error("Admin thread insert failed.");
+    const messageId = await ctx.db.insert("adminThreadMessages", {
+      orgId: args.orgId,
+      threadId: thread._id,
+      direction: "inbound",
+      messageType: "text",
+      content: args.content.trim(),
+      providerMessageId: args.providerMessageId,
+      providerEventId: cleanOptional(args.providerEventId),
+      status: "delivered",
+      createdAt: args.createdAt,
+      updatedAt: args.createdAt,
+    });
+    return { threadId: thread._id, messageId, deduped: false };
   },
 });
