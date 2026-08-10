@@ -43,6 +43,24 @@ test("renders a past date as read-only history without current operational alert
   expect(html).not.toContain("Perlu perhatian");
   expect(html).not.toContain("Order ganda");
   expect(html).toContain("/panel/performance?period=day&amp;date=2026-08-06&amp;basis=work");
+  expect(html).toContain('data-dashboard-mobile-controls="true"');
+  expect(html).toContain('data-dashboard-desktop-controls="true"');
+});
+
+test("puts business metrics before operational attention on the mobile reading path", () => {
+  const html = renderToStaticMarkup(
+    <OwnerHome now={Date.parse("2026-08-08T11:00:00+07:00")} />,
+  );
+
+  const metricsIndex = html.indexOf('data-dashboard-section="metrics"');
+  const attentionIndex = html.indexOf('data-dashboard-section="attention"');
+
+  expect(metricsIndex).toBeGreaterThan(-1);
+  expect(attentionIndex).toBeGreaterThan(-1);
+  expect(metricsIndex).toBeLessThan(attentionIndex);
+  expect(html).toContain("md:hidden");
+  expect(html).toContain("md:block");
+  expect(html).toContain("xl:grid-cols-3 grid-cols-2");
 });
 
 test("presents duplicate orders as a readable structured list", () => {

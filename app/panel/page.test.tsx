@@ -42,7 +42,7 @@ test("dashboard renders the operational snapshot without a disabled trend", () =
   expect(html).toContain("Closing Rate");
   expect(html).toContain("Top CS");
   expect(html).toContain("Top Produk");
-  expect(html.indexOf("Perlu perhatian")).toBeLessThan(html.indexOf("Kinerja bisnis"));
+  expect(html.indexOf("Kinerja bisnis")).toBeLessThan(html.indexOf("Perlu perhatian"));
   expect(html).not.toContain("Trend Harian");
   expect(html).not.toContain("Pekerjaan berikutnya");
   expect(html).not.toContain("Order Double");

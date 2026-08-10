@@ -23,8 +23,8 @@ export function LedgerSection({ title, description, action, children, className 
   );
 }
 
-export function LedgerMetricGrid({ children }: { children: ReactNode }) {
-  return <div className="grid sm:grid-cols-2 xl:grid-cols-3">{children}</div>;
+export function LedgerMetricGrid({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cn('grid sm:grid-cols-2 xl:grid-cols-3', className)}>{children}</div>;
 }
 
 const metricTone = {

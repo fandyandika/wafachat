@@ -26,6 +26,7 @@ import {
   isHistoricalDashboardRange,
   type DashboardDayDraft,
 } from './dashboard-history-filter';
+import { DashboardMobileCommandBar } from './dashboard-mobile-command-bar';
 import { resolveDashboardDay } from '@/lib/history-period';
 import { windowKeyToday } from '@/lib/report-window-core';
 
@@ -61,33 +62,47 @@ export function OwnerHome({
 
   return (
     <div className="space-y-4">
-      <DashboardContextBar
-        title="Kendali operasional"
-        period={historical ? `Mode histori · ${formatDashboardBoundary(range)}` : `${data.periodLabel} · ${formatDashboardBoundary(range)}`}
-        updatedAt={formatDashboardUpdatedAt(data.lastUpdatedAt)}
-        actions={(
-          <>
+      <div data-dashboard-mobile-controls="true" className="md:hidden">
+        <DashboardMobileCommandBar
+          today={today}
+          currentWorkDate={currentWorkDate}
+          applied={selection}
+          range={range}
+          periodLabel={data.periodLabel}
+          updatedAt={formatDashboardUpdatedAt(data.lastUpdatedAt)}
+          loading={data.loading}
+          onApply={setSelection}
+          onRefresh={data.refreshAll}
+        />
+      </div>
+
+      <div data-dashboard-desktop-controls="true" className="hidden space-y-4 md:block">
+        <DashboardContextBar
+          title="Kendali operasional"
+          period={historical ? `Mode histori · ${formatDashboardBoundary(range)}` : `${data.periodLabel} · ${formatDashboardBoundary(range)}`}
+          updatedAt={formatDashboardUpdatedAt(data.lastUpdatedAt)}
+          actions={(
             <Button variant="outline" size="sm" onClick={data.refreshAll} disabled={data.loading}>
               <RefreshCw className={cn('size-4', data.loading && 'animate-spin')} />
               Refresh
             </Button>
-          </>
-        )}
-      />
-
-      <div className="flex flex-col gap-3 border-b border-ledger-rule bg-card px-4 py-4 lg:flex-row lg:items-end lg:justify-between">
-        <DashboardHistoryFilter
-          today={today}
-          currentWorkDate={currentWorkDate}
-          applied={selection}
-          onApply={setSelection}
+          )}
         />
-        <Link
-          href={dashboardPerformanceHref(selection)}
-          className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-semibold text-ledger-ink transition-colors hover:bg-muted"
-        >
-          Lihat analisis lengkap <ArrowRight className="size-4" />
-        </Link>
+
+        <div className="flex flex-col gap-3 border-b border-ledger-rule bg-card px-4 py-4 lg:flex-row lg:items-end lg:justify-between">
+          <DashboardHistoryFilter
+            today={today}
+            currentWorkDate={currentWorkDate}
+            applied={selection}
+            onApply={setSelection}
+          />
+          <Link
+            href={dashboardPerformanceHref(selection)}
+            className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-semibold text-ledger-ink transition-colors hover:bg-muted"
+          >
+            Lihat analisis lengkap <ArrowRight className="size-4" />
+          </Link>
+        </div>
       </div>
 
       {errors.length ? (
@@ -98,33 +113,10 @@ export function OwnerHome({
       ) : null}
 
       <div className={cn('grid gap-4', !historical && 'xl:grid-cols-[minmax(0,1fr)_20rem]')}>
-        {!historical ? <LedgerSection title="Perlu perhatian" className="xl:col-start-2">
-          <div className="p-4">
-            {!data.ready.duplicates ? (
-              <div className="space-y-2 py-2">
-                <StatusStamp>Memeriksa</StatusStamp>
-                <p className="text-sm text-muted-foreground">Memeriksa data operasional…</p>
-              </div>
-            ) : data.duplicateOrders.length ? (
-              <button type="button" onClick={() => setDuplicatesOpen(true)} className="flex min-h-11 w-full items-center justify-between gap-3 border-b border-ledger-rule py-2 text-left">
-                <span>
-                  <span className="block font-semibold text-ledger-ink">Order ganda</span>
-                  <span className="text-sm text-muted-foreground">{data.duplicateOrders.length} customer perlu diperiksa</span>
-                </span>
-                <StatusStamp tone="warning">Perlu cek</StatusStamp>
-              </button>
-            ) : (
-              <div className="space-y-2 py-2">
-                <StatusStamp tone="positive">Operasional normal</StatusStamp>
-                <p className="text-sm text-muted-foreground">Tidak ada perhatian mendesak.</p>
-              </div>
-            )}
-          </div>
-        </LedgerSection> : null}
-
-        <LedgerSection title="Kinerja bisnis" description="Snapshot periode aktif" className={cn(!historical && 'xl:col-start-1 xl:row-start-1')}>
+        <div data-dashboard-section="metrics" className={cn(!historical && 'xl:col-start-1 xl:row-start-1')}>
+          <LedgerSection title="Kinerja bisnis" description="Snapshot periode aktif">
           {data.ready.summary && data.ready.performance ? (
-            <LedgerMetricGrid>
+            <LedgerMetricGrid className="grid-cols-2">
               <LedgerMetric label="Leads" value={<AnimatedNumber value={data.stats.orders} />} detail={data.periodLabel} />
               <LedgerMetric label="Closing" value={<AnimatedNumber value={data.totalClosing} />} detail={data.periodLabel} tone="positive" />
               <LedgerMetric label="Closing Rate" value={`${data.closingRate.toFixed(1)}%`} detail={data.periodLabel} tone="positive" />
@@ -137,7 +129,31 @@ export function OwnerHome({
               {Array.from({ length: 6 }).map((_, index) => <div key={index} className="min-h-28 border-b border-r border-ledger-rule p-5"><Skeleton className="h-3 w-20" /><Skeleton className="mt-4 h-7 w-24" /><Skeleton className="mt-2 h-3 w-16" /></div>)}
             </div>
           )}
-        </LedgerSection>
+          </LedgerSection>
+        </div>
+
+        {!historical ? (
+          <div data-dashboard-section="attention" className="xl:col-start-2 xl:row-start-1">
+            <div className="rounded-xl border border-ledger-rule bg-card p-4 xl:hidden">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Perlu perhatian</p>
+              <AttentionContent
+                ready={data.ready.duplicates}
+                count={data.duplicateOrders.length}
+                onOpen={() => setDuplicatesOpen(true)}
+                compact
+              />
+            </div>
+            <LedgerSection title="Perlu perhatian" className="hidden xl:block">
+              <div className="p-4">
+                <AttentionContent
+                  ready={data.ready.duplicates}
+                  count={data.duplicateOrders.length}
+                  onOpen={() => setDuplicatesOpen(true)}
+                />
+              </div>
+            </LedgerSection>
+          </div>
+        ) : null}
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -146,6 +162,53 @@ export function OwnerHome({
       </div>
 
       {!historical ? <DuplicateSheet open={duplicatesOpen} onOpenChange={setDuplicatesOpen} rows={data.duplicateOrders} /> : null}
+    </div>
+  );
+}
+
+function AttentionContent({
+  ready,
+  count,
+  onOpen,
+  compact = false,
+}: {
+  ready: boolean;
+  count: number;
+  onOpen: () => void;
+  compact?: boolean;
+}) {
+  if (!ready) {
+    return (
+      <div className={cn('flex items-center justify-between gap-3', compact ? 'mt-2' : 'py-2')}>
+        <p className="text-sm text-muted-foreground">Memeriksa data operasional…</p>
+        <StatusStamp>Memeriksa</StatusStamp>
+      </div>
+    );
+  }
+
+  if (count) {
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        className={cn(
+          'flex min-h-11 w-full items-center justify-between gap-3 text-left',
+          compact ? 'mt-1' : 'border-b border-ledger-rule py-2',
+        )}
+      >
+        <span>
+          <span className="block font-semibold text-ledger-ink">Order ganda</span>
+          <span className="text-sm text-muted-foreground">{count} customer perlu diperiksa</span>
+        </span>
+        <StatusStamp tone="warning">Perlu cek</StatusStamp>
+      </button>
+    );
+  }
+
+  return (
+    <div className={cn('flex items-center justify-between gap-3', compact ? 'mt-2' : 'py-2')}>
+      <p className="text-sm text-muted-foreground">Tidak ada perhatian mendesak.</p>
+      <StatusStamp tone="positive">Normal</StatusStamp>
     </div>
   );
 }

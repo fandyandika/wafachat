@@ -49,4 +49,9 @@ test("panel shell exposes one accessible content target without legacy global fi
   expect(html).not.toContain("cs=");
   expect(html).toContain("Pustaka Islam");
   expect(html).toContain("Owner");
+  expect(html).toContain('data-panel-mobile-role="true"');
+  expect(html).toContain('data-panel-desktop-org="true"');
+  expect(html).toContain("md:hidden");
+  expect(html).toContain("md:block");
+  expect(html).toContain("p-3 pb-24");
 });

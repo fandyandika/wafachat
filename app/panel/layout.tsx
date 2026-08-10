@@ -97,7 +97,7 @@ function PanelShell({ children }: { children: React.ReactNode }) {
         </aside>
 
         <main id="panel-main" className="min-w-0 flex-1">
-          <header className="sticky top-0 z-10 border-b border-ledger-rule bg-card px-4 py-3 md:px-8">
+          <header className="sticky top-0 z-10 border-b border-ledger-rule bg-card px-3 py-2.5 md:px-8 md:py-3">
             <div className="mx-auto flex w-full max-w-[1440px] items-center justify-between gap-4">
               <div className="flex min-w-0 items-center gap-3">
                 <button
@@ -108,15 +108,18 @@ function PanelShell({ children }: { children: React.ReactNode }) {
                 >
                   {navHidden ? <PanelLeft className="size-5" /> : <PanelLeftClose className="size-5" />}
                 </button>
-                <h1 className="truncate text-xl font-semibold tracking-tight text-ledger-ink md:text-2xl">{title}</h1>
+                <h1 className="truncate text-lg font-semibold tracking-tight text-ledger-ink md:text-2xl">{title}</h1>
               </div>
-              <div className="min-w-0 text-right leading-tight">
+              <p data-panel-mobile-role="true" className="shrink-0 text-xs font-medium text-muted-foreground md:hidden">
+                {roleLabel}
+              </p>
+              <div data-panel-desktop-org="true" className="hidden min-w-0 text-right leading-tight md:block">
                 <p className="truncate text-sm font-semibold text-ledger-ink">{organizationName}</p>
                 <p className="text-xs text-muted-foreground">{roleLabel}</p>
               </div>
             </div>
           </header>
-          <div className={cn('mx-auto w-full max-w-[1440px] space-y-6', isWorkspace ? 'p-2 pb-20 md:p-4 md:pb-4' : 'p-4 pb-24 md:p-6 md:pb-8')}>{children}</div>
+          <div className={cn('mx-auto w-full max-w-[1440px] space-y-6', isWorkspace ? 'p-2 pb-20 md:p-4 md:pb-4' : 'p-3 pb-24 sm:p-4 md:p-6 md:pb-8')}>{children}</div>
         </main>
       </div>
 
