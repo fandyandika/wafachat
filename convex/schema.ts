@@ -509,6 +509,96 @@ export default defineSchema({
     .index("by_org_status_closedAt", ["orgId", "status", "closedAt"])
     .index("by_org_csKey_closedAt", ["orgId", "csKey", "closedAt"]),
 
+  adminChannels: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    provider: v.literal("kirimdev"),
+    displayPhone: v.optional(v.string()),
+    providerNumberId: v.optional(v.string()),
+    isActive: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_active", ["orgId", "isActive"])
+    .index("by_org_providerNumberId", ["orgId", "providerNumberId"]),
+
+  adminTemplates: defineTable({
+    orgId: v.id("organizations"),
+    channelId: v.id("adminChannels"),
+    label: v.string(),
+    templateName: v.string(),
+    language: v.string(),
+    category: v.literal("expedition"),
+    variables: v.array(v.object({
+      key: v.string(),
+      label: v.string(),
+      required: v.boolean(),
+    })),
+    isActive: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_channel", ["orgId", "channelId"])
+    .index("by_org_channel_active", ["orgId", "channelId", "isActive"]),
+
+  adminThreads: defineTable({
+    orgId: v.id("organizations"),
+    channelId: v.id("adminChannels"),
+    customerPhone: v.string(),
+    customerName: v.optional(v.string()),
+    orderId: v.optional(v.string()),
+    lastInboundAt: v.optional(v.number()),
+    lastOutboundAt: v.optional(v.number()),
+    archivedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_channel_customerPhone", ["orgId", "channelId", "customerPhone"])
+    .index("by_org_channel_updatedAt", ["orgId", "channelId", "updatedAt"])
+    .index("by_org_orderId", ["orgId", "orderId"]),
+
+  adminThreadMessages: defineTable({
+    orgId: v.id("organizations"),
+    threadId: v.id("adminThreads"),
+    direction: v.union(v.literal("inbound"), v.literal("outbound")),
+    messageType: v.union(v.literal("template"), v.literal("text")),
+    content: v.string(),
+    templateName: v.optional(v.string()),
+    providerMessageId: v.optional(v.string()),
+    providerEventId: v.optional(v.string()),
+    clientRequestId: v.optional(v.string()),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("accepted"),
+      v.literal("delivered"),
+      v.literal("read"),
+      v.literal("failed"),
+    ),
+    failureReason: v.optional(v.string()),
+    actorUserId: v.optional(v.string()),
+    actorName: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_thread_createdAt", ["orgId", "threadId", "createdAt"])
+    .index("by_org_providerMessageId", ["orgId", "providerMessageId"])
+    .index("by_org_providerEventId", ["orgId", "providerEventId"])
+    .index("by_org_clientRequestId", ["orgId", "clientRequestId"]),
+
+  adminProviderEvents: defineTable({
+    orgId: v.id("organizations"),
+    providerEventId: v.string(),
+    kind: v.string(),
+    rawBody: v.string(),
+    status: v.union(v.literal("received"), v.literal("processed"), v.literal("skipped"), v.literal("failed")),
+    error: v.optional(v.string()),
+    receivedAt: v.number(),
+    processedAt: v.optional(v.number()),
+  })
+    .index("by_org_providerEventId", ["orgId", "providerEventId"])
+    .index("by_org_status_receivedAt", ["orgId", "status", "receivedAt"]),
+
   settings: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     key: v.string(),
