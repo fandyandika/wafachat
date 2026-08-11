@@ -227,7 +227,9 @@ export const reserveDueFollowUp = mutation({
           .eq("normalizedName", normalizeCsName(conversation.assignedCsName)))
         .unique();
     }
-    const phoneNumberId = agent?.providerNumberId ?? agent?.providerNumberIds?.[0];
+    // A multi-number alias set does not prove which sender owns this conversation.
+    // Only the canonical scalar claim is safe for outbound Follow-up.
+    const phoneNumberId = agent?.providerNumberId;
     if (!agent?.isActive || !phoneNumberId) throw new Error("Nomor API CS belum dikonfigurasi.");
 
     const template = templates[0];

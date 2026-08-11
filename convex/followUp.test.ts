@@ -471,6 +471,26 @@ test("reserveDueFollowUp atomically reserves once and returns immutable provider
   expect(duplicate).toEqual({ shouldSend: false, status: "sending" });
 });
 
+test("reserveDueFollowUp fails closed when a CS has no canonical sender claim", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "manual-admin", role: "admin", name: "Manual Admin", email: "manual@wafachat" });
+  const orgId = await seedOrg(t);
+  const conversationId = await seedDueManualFollowUp(t, orgId, "04");
+  await t.run(async (ctx) => {
+    const agent = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", "nabila"))
+      .unique();
+    await ctx.db.patch(agent!._id, { providerNumberId: undefined, providerNumberIds: ["pn-a", "pn-b"] });
+  });
+
+  await expect(asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+    conversationId,
+    stage: 1,
+    requestId: "55555555-5555-4555-8555-555555555555",
+  })).rejects.toThrow(/Nomor API CS belum dikonfigurasi/);
+});
+
 test("unknown finalization blocks a new request and accepted H+1 advances exactly one day", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "manual-admin", role: "admin", name: "Manual Admin", email: "manual@wafachat" });
