@@ -4,7 +4,8 @@ import { expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
-import { windowKeyFor } from "./lib";
+import { windowKeyFor, windowRangeForKey } from "./lib";
+import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
 
 const modules = (import.meta as any).glob("./**/*.{ts,js}");
 
@@ -826,6 +827,83 @@ test("getFollowUpEffectiveness: counts closings with FU touches", async () => {
   expect(res.totalClosings).toBe(1);
   expect(res.fromFollowUp).toBe(1);
   expect(res.byStage.h2).toBe(1);
+});
+
+test("getFollowUpEffectiveness uses completed rollups when a 30-day KPI exceeds the raw row cap", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "volume-admin", role: "admin", name: "Admin", email: "volume@w" });
+  const orgId = await seedOrg(t);
+  const windowKey = windowKeyFor(now - 2 * 24 * HOUR);
+  const window = windowRangeForKey(windowKey);
+
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 901; index++) {
+      const orderId = `FU-VOLUME-${index}`;
+      const phone = `62888${String(index).padStart(7, "0")}`;
+      await ctx.db.insert("shippingRecaps", {
+        orgId,
+        orderIdBerdu: orderId,
+        customerPhone: phone,
+        customerName: orderId,
+        csName: "Nabila",
+        csKey: "nabila",
+        closedAt: window.startAt + index + 1,
+        recipientName: orderId,
+        recipientPhone: phone,
+        recipientAddress: "",
+        recipientDistrict: "",
+        recipientCity: "",
+        packageContent: "X",
+        paymentMethod: "cod" as const,
+        status: "ready" as const,
+        flags: [],
+        sourceMessageText: "",
+        version: 1,
+        followUpTouchesAtClose: index % 3,
+        createdAt: window.startAt + index + 1,
+        updatedAt: window.startAt + index + 1,
+      });
+    }
+    await ctx.db.insert("dailyRollups", {
+      orgId,
+      windowKey,
+      csKey: "nabila",
+      csName: "Nabila",
+      leadOrders: 0,
+      leadsCust: 0,
+      closings: 901,
+      closedCust: 901,
+      cancelled: 0,
+      manualClosings: 0,
+      delivered: 0,
+      revenue: 0,
+      discount: 0,
+      cod: 901,
+      transfer: 0,
+      fuClosings: 600,
+      fuH1: 300,
+      fuH2: 300,
+      fuH3: 0,
+      byProduct: [],
+      updatedAt: window.endAt,
+    });
+    await ctx.db.insert("rollupWindows", {
+      orgId,
+      windowKey,
+      schemaVersion: ROLLUP_SCHEMA_VERSION,
+      completedAt: window.endAt,
+    });
+  });
+
+  const result = await asAdmin.query(api.followUp.getFollowUpEffectiveness, {
+    startAt: window.startAt,
+    endAt: window.endAt,
+  });
+  expect(result).toEqual({
+    totalClosings: 901,
+    fromFollowUp: 600,
+    byStage: { h1: 300, h2: 300, h3: 0 },
+  });
 });
 
 test("follow-up effectiveness uses half-open neighboring windows", async () => {

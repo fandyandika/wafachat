@@ -3,7 +3,7 @@ import { paginationOptsValidator } from "convex/server";
 import { requireScopedMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { csKey, isInternalTestPhone, normalizeCsName, normalizePhone } from "./lib";
+import { csKey, isInternalTestPhone, normalizeCsName, normalizePhone, windowKeyFor, windowRangeForKey } from "./lib";
 import { eligibleStage } from "./followUpMath";
 import { getInternalPhoneSet } from "./orgSettings";
 import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
@@ -11,6 +11,7 @@ import { getBoundedActiveAgentRegistry } from "./agents";
 import { advanceAfterAccepted, FOLLOW_UP_EXPIRY_MS } from "./followUpModel";
 import { internal } from "./_generated/api";
 import { buildTemplatePayload, sendKirimDevMessage } from "../lib/kirimdev";
+import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
@@ -835,9 +836,64 @@ export const getFollowUpEffectiveness = query({
   }),
   handler: async (ctx, args) => {
     const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getFollowUpEffectiveness", args.csName);
-    return computeFollowUpEffectivenessRaw(ctx, orgId, { ...args, csName: effectiveCsName });
+    return computeFollowUpEffectiveness(ctx, orgId, { ...args, csName: effectiveCsName });
   },
 });
+
+async function computeFollowUpEffectiveness(
+  ctx: any,
+  orgId: Id<"organizations">,
+  args: { startAt: number; endAt: number; csName?: string },
+) {
+  assertPublicAnalyticsRange(args.startAt, args.endAt, "followUp.getFollowUpEffectiveness");
+  const requestedCsKey = args.csName ? csKey(args.csName) : undefined;
+  const result = { totalClosings: 0, fromFollowUp: 0, byStage: { h1: 0, h2: 0, h3: 0 } };
+  let windowKey = windowKeyFor(args.startAt);
+  const lastWindowKey = windowKeyFor(args.endAt - 1);
+
+  while (windowKey <= lastWindowKey) {
+    const window = windowRangeForKey(windowKey);
+    const startAt = Math.max(args.startAt, window.startAt);
+    const endAt = Math.min(args.endAt, window.endAt);
+    const marker = await ctx.db
+      .query("rollupWindows")
+      .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey))
+      .unique();
+    const canUseRollup = startAt === window.startAt
+      && endAt === window.endAt
+      && window.endAt <= Date.now()
+      && marker?.schemaVersion === ROLLUP_SCHEMA_VERSION;
+
+    if (canUseRollup) {
+      const rows = await (requestedCsKey
+        ? ctx.db.query("dailyRollups").withIndex("by_org_window_cs", (q: any) => q
+          .eq("orgId", orgId).eq("windowKey", windowKey).eq("csKey", requestedCsKey))
+        : ctx.db.query("dailyRollups").withIndex("by_org_windowKey", (q: any) => q
+          .eq("orgId", orgId).eq("windowKey", windowKey)))
+        .take(101);
+      if (rows.length > 100) throw new Error("Terlalu banyak baris rollup CS untuk satu hari.");
+      for (const row of rows) {
+        result.totalClosings += row.closings;
+        result.fromFollowUp += row.fuClosings;
+        result.byStage.h1 += row.fuH1;
+        result.byStage.h2 += row.fuH2;
+        result.byStage.h3 += row.fuH3;
+      }
+    } else {
+      const raw = await computeFollowUpEffectivenessRaw(ctx, orgId, { startAt, endAt, csName: args.csName });
+      result.totalClosings += raw.totalClosings;
+      result.fromFollowUp += raw.fromFollowUp;
+      result.byStage.h1 += raw.byStage.h1;
+      result.byStage.h2 += raw.byStage.h2;
+      result.byStage.h3 += raw.byStage.h3;
+    }
+
+    const [year, month, day] = windowKey.split("-").map(Number);
+    const next = new Date(Date.UTC(year, month - 1, day + 1));
+    windowKey = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, "0")}-${String(next.getUTCDate()).padStart(2, "0")}`;
+  }
+  return result;
+}
 
 export async function computeFollowUpEffectivenessRaw(
   ctx: any,
