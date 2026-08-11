@@ -10,6 +10,134 @@ import { cn } from "@/lib/utils";
 
 type Feedback = { kind: "ok" | "error"; message: string } | null;
 
+type AdminTemplateOption = {
+  id: string;
+  label: string;
+  variables: Array<{ key: string; label: string; required: boolean }>;
+};
+
+type AdminExpeditionNewChatDialogProps = {
+  templates: AdminTemplateOption[];
+  selectedTemplate?: AdminTemplateOption;
+  templateId: string;
+  templateValues: Record<string, string>;
+  customerPhone: string;
+  customerName: string;
+  productName: string;
+  totalAmount: string;
+  busy: boolean;
+  onCustomerPhoneChange: (value: string) => void;
+  onCustomerNameChange: (value: string) => void;
+  onProductNameChange: (value: string) => void;
+  onTotalAmountChange: (value: string) => void;
+  onTemplateChange: (value: string) => void;
+  onTemplateValueChange: (key: string, value: string) => void;
+  onClose: () => void;
+  onSend: () => void;
+};
+
+export function parseOptionalRupiah(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const normalized = trimmed.replace(/[.\s]/g, "");
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error("Harga total harus berupa rupiah bulat yang tidak negatif.");
+  }
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error("Harga total harus berupa rupiah bulat yang tidak negatif.");
+  }
+  return parsed;
+}
+
+function formatRupiah(value: number) {
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+export function AdminExpeditionNewChatDialog({
+  templates,
+  selectedTemplate,
+  templateId,
+  templateValues,
+  customerPhone,
+  customerName,
+  productName,
+  totalAmount,
+  busy,
+  onCustomerPhoneChange,
+  onCustomerNameChange,
+  onProductNameChange,
+  onTotalAmountChange,
+  onTemplateChange,
+  onTemplateValueChange,
+  onClose,
+  onSend,
+}: AdminExpeditionNewChatDialogProps) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="new-expedition-title">
+      <div className="max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-card p-5 shadow-xl sm:max-w-lg sm:rounded-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 id="new-expedition-title" className="text-lg font-semibold">Hubungi customer</h3>
+            <p className="text-sm text-muted-foreground">Mulai percakapan dengan template approved.</p>
+          </div>
+          <Button variant="ghost" size="icon" aria-label="Tutup" onClick={onClose}>×</Button>
+        </div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <label className="grid gap-1.5 text-sm font-medium">
+            Nomor WhatsApp
+            <input inputMode="tel" value={customerPhone} onChange={(event) => onCustomerPhoneChange(event.target.value)} placeholder="08xxx / 62xxx" className="min-h-11 rounded-lg border border-input bg-background px-3" />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            <span>Nama customer <span className="font-normal text-muted-foreground">(opsional)</span></span>
+            <input value={customerName} onChange={(event) => onCustomerNameChange(event.target.value)} className="min-h-11 rounded-lg border border-input bg-background px-3" />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            <span>Produk <span className="font-normal text-muted-foreground">(opsional)</span></span>
+            <input value={productName} onChange={(event) => onProductNameChange(event.target.value)} className="min-h-11 rounded-lg border border-input bg-background px-3" />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium">
+            <span>Harga total <span className="font-normal text-muted-foreground">(opsional)</span></span>
+            <input inputMode="numeric" value={totalAmount} onChange={(event) => onTotalAmountChange(event.target.value)} placeholder="189.000" className="min-h-11 rounded-lg border border-input bg-background px-3" />
+          </label>
+          <label className="grid gap-1.5 text-sm font-medium sm:col-span-2">
+            Template
+            <select value={templateId} onChange={(event) => onTemplateChange(event.target.value)} className="min-h-11 rounded-lg border border-input bg-background px-3">
+              {templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
+            </select>
+          </label>
+          {selectedTemplate?.variables.map((variable) => (
+            <label key={variable.key} className="grid gap-1.5 text-sm font-medium sm:col-span-2">
+              <span>{variable.label}{!variable.required && <span className="font-normal text-muted-foreground"> (opsional)</span>}</span>
+              <input value={templateValues[variable.key] ?? ""} onChange={(event) => onTemplateValueChange(variable.key, event.target.value)} className="min-h-11 rounded-lg border border-input bg-background px-3" />
+            </label>
+          ))}
+          {selectedTemplate?.variables.length === 0 && (
+            <p className="rounded-lg border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground sm:col-span-2">
+              Template tanpa variabel — siap dikirim sesuai isi approved di KirimDev.
+            </p>
+          )}
+        </div>
+        {selectedTemplate && (
+          <div className="mt-4 rounded-xl border border-ledger-rule bg-muted/30 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Preview template</p>
+            <p className="mt-1 text-sm font-medium">{selectedTemplate.label}</p>
+            {selectedTemplate.variables.length > 0 && <dl className="mt-2 space-y-1 text-xs">{selectedTemplate.variables.map((variable) => <div key={variable.key} className="flex justify-between gap-4"><dt className="text-muted-foreground">{variable.label}</dt><dd className="truncate text-right font-medium">{templateValues[variable.key] || "—"}</dd></div>)}</dl>}
+          </div>
+        )}
+        <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <Button variant="outline" disabled={busy} onClick={onClose}>Batal</Button>
+          <Button disabled={busy || !customerPhone.trim() || !selectedTemplate} onClick={onSend}>{busy ? <RefreshCw className="size-4 animate-spin" /> : <Send className="size-4" />} Kirim template</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function requestId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
@@ -45,7 +173,8 @@ export function AdminExpeditionInbox() {
   const [newOpen, setNewOpen] = useState(false);
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerName, setCustomerName] = useState("");
-  const [orderId, setOrderId] = useState("");
+  const [productName, setProductName] = useState("");
+  const [totalAmount, setTotalAmount] = useState("");
   const [templateId, setTemplateId] = useState("");
   const [templateValues, setTemplateValues] = useState<Record<string, string>>({});
   const [reply, setReply] = useState("");
@@ -71,14 +200,16 @@ export function AdminExpeditionInbox() {
     setBusy(true);
     setFeedback(null);
     try {
+      const parsedTotalAmount = parseOptionalRupiah(totalAmount);
       const response = await fetch("/api/admin-inbox/send-template", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           channelId: setup.channel.id,
           customerPhone,
-          customerName: customerName || undefined,
-          orderId: orderId || undefined,
+          customerName: customerName.trim() || undefined,
+          productName: productName.trim() || undefined,
+          totalAmount: parsedTotalAmount,
           templateId: selectedTemplate.id,
           values: selectedTemplate.variables.map((variable) => ({ key: variable.key, value: templateValues[variable.key] ?? "" })),
           clientRequestId: attemptId,
@@ -91,7 +222,8 @@ export function AdminExpeditionInbox() {
       setNewOpen(false);
       setCustomerPhone("");
       setCustomerName("");
-      setOrderId("");
+      setProductName("");
+      setTotalAmount("");
       setTemplateValues({});
       setTemplateAttemptId(null);
     } catch (error) {
@@ -208,7 +340,7 @@ export function AdminExpeditionInbox() {
                   <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold">{(thread.customerName || thread.customerPhone).slice(0, 2).toUpperCase()}</span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center justify-between gap-2"><strong className="truncate text-sm">{thread.customerName || thread.customerPhone}</strong><span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel(thread.updatedAt)}</span></span>
-                    <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{thread.orderId ? `Order ${thread.orderId}` : thread.customerPhone}</span><span className={cn("shrink-0 rounded-full px-2 py-0.5", thread.windowOpen ? "bg-emerald-100 text-emerald-800" : "bg-muted")}>{thread.windowOpen ? "24 jam aktif" : "Template"}</span></span>
+                    <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{thread.productName || thread.customerPhone}</span><span className={cn("shrink-0 rounded-full px-2 py-0.5", thread.windowOpen ? "bg-emerald-100 text-emerald-800" : "bg-muted")}>{thread.windowOpen ? "24 jam aktif" : "Template"}</span></span>
                   </span>
                 </button>
               ))}
@@ -224,7 +356,10 @@ export function AdminExpeditionInbox() {
             <div className="flex min-h-[calc(100dvh-12rem)] flex-col">
               <header className="flex items-center gap-3 border-b border-ledger-rule px-3 py-3 md:px-5">
                 <Button variant="ghost" size="icon" className="lg:hidden" aria-label="Kembali ke daftar" onClick={() => setSelectedId(null)}><ArrowLeft className="size-5" /></Button>
-                <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold">{selectedThread.customerName || selectedThread.customerPhone}</p><p className="truncate text-xs text-muted-foreground">{selectedThread.customerPhone}{selectedThread.orderId ? ` · Order ${selectedThread.orderId}` : ""}</p></div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold">{selectedThread.customerName || selectedThread.customerPhone}</p>
+                  <p className="truncate text-xs text-muted-foreground">{selectedThread.customerPhone}{selectedThread.productName ? ` · ${selectedThread.productName}` : ""}{selectedThread.totalAmount !== undefined ? ` · ${formatRupiah(selectedThread.totalAmount)}` : ""}</p>
+                </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {linkedOrder && (linkedOrder.status === "cancelled" || linkedOrder.status === "cancelled_after_export" ? linkedOrder.canUndo ? (
                     <Button size="sm" variant="outline" disabled={busy} onClick={() => void undoCancellation()}><RotateCcw className="size-3.5" /> <span className="hidden sm:inline">Batalkan pembatalan</span></Button>
@@ -251,7 +386,7 @@ export function AdminExpeditionInbox() {
                 {selectedThread.windowOpen ? (
                   <div className="flex items-end gap-2"><label className="sr-only" htmlFor="admin-inbox-reply">Balas customer</label><textarea id="admin-inbox-reply" rows={1} value={reply} onChange={(event) => setReply(event.target.value)} placeholder="Tulis balasan…" className="min-h-11 flex-1 resize-none rounded-xl border border-input bg-background px-3 py-2.5 text-sm" /><Button size="icon" aria-label="Kirim balasan" disabled={busy || !reply.trim()} onClick={() => void sendReply()}><Send className="size-4" /></Button></div>
                 ) : (
-                  <div className="flex items-center justify-between gap-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-950"><span className="flex items-center gap-2"><Clock3 className="size-4" /> Jendela 24 jam tertutup.</span><Button size="sm" variant="outline" onClick={() => { setCustomerPhone(selectedThread.customerPhone); setCustomerName(selectedThread.customerName ?? ""); setOrderId(selectedThread.orderId ?? ""); setNewOpen(true); }}>Kirim template</Button></div>
+                  <div className="flex items-center justify-between gap-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-950"><span className="flex items-center gap-2"><Clock3 className="size-4" /> Jendela 24 jam tertutup.</span><Button size="sm" variant="outline" onClick={() => { setCustomerPhone(selectedThread.customerPhone); setCustomerName(selectedThread.customerName ?? ""); setProductName(selectedThread.productName ?? ""); setTotalAmount(selectedThread.totalAmount === undefined ? "" : String(selectedThread.totalAmount)); setNewOpen(true); }}>Kirim template</Button></div>
                 )}
               </footer>
             </div>
@@ -260,20 +395,25 @@ export function AdminExpeditionInbox() {
       </div>
 
       {newOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-labelledby="new-expedition-title">
-          <div className="max-h-[92dvh] w-full overflow-y-auto rounded-t-2xl bg-card p-5 shadow-xl sm:max-w-lg sm:rounded-2xl">
-            <div className="flex items-start justify-between gap-3"><div><h3 id="new-expedition-title" className="text-lg font-semibold">Hubungi customer</h3><p className="text-sm text-muted-foreground">Percakapan baru wajib dimulai dengan template approved.</p></div><Button variant="ghost" size="icon" aria-label="Tutup" onClick={() => setNewOpen(false)}>×</Button></div>
-            <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <label className="grid gap-1.5 text-sm font-medium">Nomor WhatsApp<input inputMode="tel" value={customerPhone} onChange={(event) => setCustomerPhone(event.target.value)} placeholder="08xxx / 62xxx" className="min-h-11 rounded-lg border border-input bg-background px-3" /></label>
-              <label className="grid gap-1.5 text-sm font-medium">Nama customer <span className="sr-only">opsional</span><input value={customerName} onChange={(event) => setCustomerName(event.target.value)} className="min-h-11 rounded-lg border border-input bg-background px-3" /></label>
-              <label className="grid gap-1.5 text-sm font-medium sm:col-span-2">ID order <span className="font-normal text-muted-foreground">(opsional)</span><input value={orderId} onChange={(event) => setOrderId(event.target.value)} className="min-h-11 rounded-lg border border-input bg-background px-3" /></label>
-              <label className="grid gap-1.5 text-sm font-medium sm:col-span-2">Template<select value={selectedTemplate ? String(selectedTemplate.id) : ""} onChange={(event) => { setTemplateId(event.target.value); setTemplateValues({}); }} className="min-h-11 rounded-lg border border-input bg-background px-3">{activeTemplates.map((template) => <option key={String(template.id)} value={String(template.id)}>{template.label}</option>)}</select></label>
-              {selectedTemplate?.variables.map((variable) => <label key={variable.key} className="grid gap-1.5 text-sm font-medium sm:col-span-2">{variable.label}{!variable.required && <span className="font-normal text-muted-foreground"> (opsional)</span>}<input value={templateValues[variable.key] ?? ""} onChange={(event) => setTemplateValues((current) => ({ ...current, [variable.key]: event.target.value }))} className="min-h-11 rounded-lg border border-input bg-background px-3" /></label>)}
-            </div>
-            {selectedTemplate && <div className="mt-4 rounded-xl border border-ledger-rule bg-muted/30 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Preview template</p><p className="mt-1 text-sm font-medium">{selectedTemplate.label}</p>{selectedTemplate.variables.length > 0 && <dl className="mt-2 space-y-1 text-xs">{selectedTemplate.variables.map((variable) => <div key={variable.key} className="flex justify-between gap-4"><dt className="text-muted-foreground">{variable.label}</dt><dd className="truncate text-right font-medium">{templateValues[variable.key] || "—"}</dd></div>)}</dl>}</div>}
-            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button variant="outline" disabled={busy} onClick={() => setNewOpen(false)}>Batal</Button><Button disabled={busy || !customerPhone.trim() || !selectedTemplate} onClick={() => void sendTemplate()}>{busy ? <RefreshCw className="size-4 animate-spin" /> : <Send className="size-4" />} Kirim template</Button></div>
-          </div>
-        </div>
+        <AdminExpeditionNewChatDialog
+          templates={activeTemplates}
+          selectedTemplate={selectedTemplate}
+          templateId={selectedTemplate ? String(selectedTemplate.id) : ""}
+          templateValues={templateValues}
+          customerPhone={customerPhone}
+          customerName={customerName}
+          productName={productName}
+          totalAmount={totalAmount}
+          busy={busy}
+          onCustomerPhoneChange={setCustomerPhone}
+          onCustomerNameChange={setCustomerName}
+          onProductNameChange={setProductName}
+          onTotalAmountChange={setTotalAmount}
+          onTemplateChange={(value) => { setTemplateId(value); setTemplateValues({}); }}
+          onTemplateValueChange={(key, value) => setTemplateValues((current) => ({ ...current, [key]: value }))}
+          onClose={() => setNewOpen(false)}
+          onSend={() => void sendTemplate()}
+        />
       )}
 
       {cancelOpen && linkedOrder && (
