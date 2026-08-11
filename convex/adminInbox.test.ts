@@ -80,6 +80,12 @@ test("setup reports exact missing requirements without exposing secrets", async 
   const setup = await asAdmin.query(api.adminInbox.getSetup, {});
   expect(setup.ready).toBe(false);
   expect(setup.missing).toEqual(["Nomor API KirimDev", "KIRIMDEV_API_KEY"]);
+  expect(setup.templates).toMatchObject([{
+    templateName: "expedition_status_v1",
+    language: "id",
+    variables: [],
+    isActive: true,
+  }]);
   expect(JSON.stringify(setup)).not.toContain("kdv_");
 });
 
@@ -352,6 +358,72 @@ test("template send reservation is allowlisted, ordered, and idempotent", async 
   expect(duplicate).toMatchObject({ shouldSend: false, messageId: first.messageId });
   const messages = await t.run((ctx) => ctx.db.query("adminThreadMessages").collect());
   expect(messages).toHaveLength(1);
+});
+
+test("zero-variable reservation stores and refreshes optional customer context", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  process.env.PANEL_AUTH_SECRET = "server-secret";
+  const asAdmin = t.withIdentity(ADMIN);
+  const { channelId } = await asAdmin.mutation(api.adminInbox.upsertChannel, {
+    name: "Admin Ekspedisi", providerNumberId: "pn_admin", isActive: true,
+  });
+  const { templateId } = await asAdmin.mutation(api.adminInbox.upsertTemplate, {
+    channelId, label: "Kurir tidak merespons", templateName: "no_respons_kurir", language: "id",
+    variables: [], isActive: true,
+  });
+
+  const first = await t.mutation(api.adminInbox.prepareTemplateSend, {
+    authSecret: "server-secret", orgId, actorUserId: "admin-1", actorName: "Owner", channelId,
+    customerPhone: "0857-1568-2110", customerName: " Fandi ", productName: " Quran Mapping ",
+    totalAmount: 189_000, templateId, values: [], clientRequestId: "context-request-1",
+  });
+  expect(first).toMatchObject({ shouldSend: true, orderedValues: [] });
+
+  await t.mutation(api.adminInbox.prepareTemplateSend, {
+    authSecret: "server-secret", orgId, actorUserId: "admin-1", actorName: "Owner", channelId,
+    customerPhone: "+62 857 1568 2110", productName: "Quran Mapping V2",
+    templateId, values: [], clientRequestId: "context-request-2",
+  });
+
+  const threads = await t.run((ctx) => ctx.db.query("adminThreads").collect());
+  expect(threads).toHaveLength(1);
+  expect(threads[0]).toMatchObject({
+    customerPhone: "6285715682110",
+    customerName: "Fandi",
+    productName: "Quran Mapping V2",
+    totalAmount: 189_000,
+  });
+  const listed = await asAdmin.query(api.adminInbox.listThreads, {
+    channelId,
+    paginationOpts: { numItems: 10, cursor: null },
+  });
+  expect(listed.page[0]).toMatchObject({
+    customerName: "Fandi",
+    productName: "Quran Mapping V2",
+    totalAmount: 189_000,
+  });
+  const messages = await t.run((ctx) => ctx.db.query("adminThreadMessages").collect());
+  expect(messages).toHaveLength(2);
+});
+
+test("template reservation rejects invalid total before creating a message", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  process.env.PANEL_AUTH_SECRET = "server-secret";
+  const asAdmin = t.withIdentity(ADMIN);
+  const { channelId } = await asAdmin.mutation(api.adminInbox.upsertChannel, {
+    name: "Admin Ekspedisi", providerNumberId: "pn_admin", isActive: true,
+  });
+  const { templateId } = await asAdmin.mutation(api.adminInbox.upsertTemplate, {
+    channelId, label: "Paket ditolak", templateName: "paket_ditolak", language: "id", variables: [], isActive: true,
+  });
+
+  await expect(t.mutation(api.adminInbox.prepareTemplateSend, {
+    authSecret: "server-secret", orgId, actorUserId: "admin-1", actorName: "Owner", channelId,
+    customerPhone: "085715682110", totalAmount: -1, templateId, values: [], clientRequestId: "bad-total",
+  })).rejects.toThrow("Harga total");
+  expect(await t.run((ctx) => ctx.db.query("adminThreadMessages").collect())).toHaveLength(0);
 });
 
 test("sendTemplate action uses Convex KirimDev secret and does not resend a duplicate request", async () => {

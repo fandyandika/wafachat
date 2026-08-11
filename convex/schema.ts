@@ -646,6 +646,8 @@ export default defineSchema({
     channelId: v.id("adminChannels"),
     customerPhone: v.string(),
     customerName: v.optional(v.string()),
+    productName: v.optional(v.string()),
+    totalAmount: v.optional(v.number()),
     orderId: v.optional(v.string()),
     lastInboundAt: v.optional(v.number()),
     lastOutboundAt: v.optional(v.number()),

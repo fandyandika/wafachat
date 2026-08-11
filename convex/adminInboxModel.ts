@@ -19,6 +19,14 @@ export function normalizeAdminRecipient(value: string): string {
   return digits;
 }
 
+export function normalizeOptionalAdminTotal(value: number | null | undefined): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error("Harga total harus berupa rupiah bulat yang tidak negatif.");
+  }
+  return value;
+}
+
 export function adminWindowExpiresAt(lastInboundAt?: number): number | undefined {
   return lastInboundAt === undefined ? undefined : lastInboundAt + ADMIN_WINDOW_MS;
 }

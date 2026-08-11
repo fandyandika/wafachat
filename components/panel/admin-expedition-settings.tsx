@@ -24,7 +24,7 @@ export function AdminExpeditionSettings() {
   const [templateLabel, setTemplateLabel] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [language, setLanguage] = useState("id");
-  const [variables, setVariables] = useState<VariableDraft[]>([{ ...EMPTY_VARIABLE }]);
+  const [variables, setVariables] = useState<VariableDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
@@ -59,7 +59,7 @@ export function AdminExpeditionSettings() {
     setTemplateLabel("");
     setTemplateName("");
     setLanguage("id");
-    setVariables([{ ...EMPTY_VARIABLE }]);
+    setVariables([]);
   }
 
   if (setup === undefined) {
@@ -174,11 +174,19 @@ export function AdminExpeditionSettings() {
 
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium">Variabel template</p>
+                <div>
+                  <p className="text-sm font-medium">Variabel template</p>
+                  <p className="text-xs text-muted-foreground">Tambahkan hanya jika template approved di Meta memang memiliki variabel.</p>
+                </div>
                 <Button variant="outline" size="sm" className="min-h-11" onClick={() => setVariables((current) => [...current, { ...EMPTY_VARIABLE }])}>
                   <Plus className="size-4" /> Tambah variabel
                 </Button>
               </div>
+              {variables.length === 0 && (
+                <p className="rounded-lg border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+                  Template tanpa variabel
+                </p>
+              )}
               {variables.map((variable, index) => (
                 <div key={index} className="grid gap-2 rounded-lg border border-border p-3 md:grid-cols-[1fr_1fr_auto_auto] md:items-end">
                   <label className="grid gap-1 text-xs font-medium" htmlFor={`admin-variable-key-${index}`}>
@@ -193,7 +201,7 @@ export function AdminExpeditionSettings() {
                     <Switch id={`admin-variable-required-${index}`} checked={variable.required} onCheckedChange={(value) => updateVariable(index, { required: value })} />
                     Wajib
                   </label>
-                  <Button variant="outline" size="icon" className="size-11 text-destructive" aria-label={`Hapus variabel ${index + 1}`} disabled={variables.length === 1} onClick={() => setVariables((current) => current.filter((_, itemIndex) => itemIndex !== index))}>
+                  <Button variant="outline" size="icon" className="size-11 text-destructive" aria-label={`Hapus variabel ${index + 1}`} onClick={() => setVariables((current) => current.filter((_, itemIndex) => itemIndex !== index))}>
                     <Trash2 className="size-4" />
                   </Button>
                 </div>
