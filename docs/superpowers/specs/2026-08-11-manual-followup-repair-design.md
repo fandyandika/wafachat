@@ -5,15 +5,16 @@
 
 ## Goal
 
-Repair Follow-up into a reliable, manual H+1/H+2 tool for CS. It must stay isolated from the existing n8n automatic order notification and from the Admin Expedition Inbox.
+Repair Follow-up into a reliable, manual H+1/H+2/H+3 tool for CS. It must stay isolated from the existing n8n automatic order notification and from the Admin Expedition Inbox.
 
 ## Decisions
 
 - Follow-up sending is manual. There is no automatic follow-up cron or per-CS auto toggle.
-- The funnel has exactly two stages: H+1 and H+2.
+- The funnel has exactly three stages: H+1, H+2, and H+3 as the final follow-up.
 - H+1 becomes due 24 hours after the customer's latest inbound message when the latest message is outbound.
 - H+2 becomes due 24 hours after a successful H+1 send, provided the customer has not replied and the order has not closed.
-- A successful H+2 completes the cycle.
+- H+3 becomes due 24 hours after a successful H+2 send, provided the customer has not replied and the order has not closed.
+- A successful H+3 completes the cycle.
 - A new customer inbound resets the cycle. The cycle can be armed again after the CS replies to that new inbound.
 - Closing, cancellation, a done marker, manual archive, or inactivity beyond five days removes the conversation from the actionable queue.
 - Template names are production configuration, never source-code placeholders.
@@ -31,7 +32,7 @@ Add optional materialized Follow-up fields and indexed read paths to `conversati
 
 ### 3. Add a separate Follow-up queue table
 
-Valid but unnecessary for the current two-stage funnel. It would add synchronization and retention complexity while duplicating conversation identity fields.
+Valid but unnecessary for the current three-stage funnel. It would add synchronization and retention complexity while duplicating conversation identity fields.
 
 ## Data Model
 
@@ -39,7 +40,7 @@ Add optional fields to existing conversation rows so the schema can deploy befor
 
 - `followUpCsKey`: normalized CS identity used by the queue index.
 - `followUpCycleInboundAt`: latest inbound timestamp that identifies the current cycle.
-- `followUpNextStage`: literal `1` or `2`.
+- `followUpNextStage`: literal `1`, `2`, or `3`.
 - `followUpDueAt`: timestamp when that stage becomes actionable.
 - `followUpState`: `waiting`, `sending`, `unknown`, `failed`, `complete`, or `archived`.
 - `followUpRequestId`: current client request identifier.
@@ -60,7 +61,7 @@ Create an organization-scoped `followUpTemplates` table with one active row per 
 - `orgId`, `stage`, `label`, `templateName`, `language`, `variables`, `isActive`, timestamps.
 - Variables are an ordered, bounded list of `customer_name`, `product_name`, or `order_id`.
 - Owner Settings configures the exact Meta/KirimDev-approved names and variable order.
-- Sending is blocked with an explicit readiness message until both H+1 and H+2 are configured.
+- Sending is blocked with an explicit readiness message until H+1, H+2, and H+3 are configured.
 
 The CS selects the stage implied by the queue. The CS cannot choose an arbitrary template or force a future stage.
 
@@ -86,6 +87,13 @@ The CS selects the stage implied by the queue. The CS cannot choose an arbitrary
 - Set `followUpState = waiting`.
 
 ### H+2 accepted
+
+- Persist the provider message ID and one outbound template message.
+- Set `followUpNextStage = 3`.
+- Set `followUpDueAt = acceptedAt + 24 hours`.
+- Set `followUpState = waiting`.
+
+### H+3 accepted
 
 - Persist the provider message ID and one outbound template message.
 - Clear `followUpNextStage` and `followUpDueAt`.
@@ -128,8 +136,8 @@ The provider idempotency key includes conversation ID, cycle inbound timestamp, 
 
 ## UI
 
-- Remove Auto, H+3, and manual stage-move controls.
-- Keep tabs: Semua, H+1, H+2, Closing, Arsip.
+- Remove Auto and manual stage-move controls.
+- Keep tabs: Semua, H+1, H+2, H+3, Closing, Arsip.
 - Show due time, customer, product, order, CS, and clear readiness/error status.
 - A candidate has one primary action: send the stage currently due.
 - Disable sending while reservation/action is in flight.
@@ -141,19 +149,19 @@ The provider idempotency key includes conversation ID, cycle inbound timestamp, 
 1. Deploy additive schema, indexed queue, auth guards, and inactive template configuration.
 2. Disable/remove the auto-follow-up cron and UI controls in the same release.
 3. Run the paginated recent-conversation migration.
-4. Configure exact approved H+1/H+2 templates.
-5. UAT with an internal test number: H+1, reply reset, H+2 timing, closing removal, duplicate-click protection, and CS isolation.
+4. Configure exact approved H+1/H+2/H+3 templates.
+5. UAT with an internal test number: H+1, reply reset, H+2/H+3 timing, final-cycle completion, closing removal, duplicate-click protection, and CS isolation.
 6. Enable manual sending only after UAT passes. There is no auto-send activation step.
 
 ## Testing
 
-- Pure transition tests for inbound, outbound, H+1, H+2, reply reset, closing, and five-day expiry.
+- Pure transition tests for inbound, outbound, H+1, H+2, H+3, reply reset, closing, and five-day expiry.
 - Convex tests for indexed pagination and more than 100 recent conversations.
-- Timing regression: H+2 is not eligible minutes after a late H+1.
+- Timing regressions: H+2 is not eligible minutes after a late H+1, and H+3 is not eligible minutes after a late H+2.
 - Reservation tests for duplicate request, concurrent request, provider timeout, and definite failure.
 - Authorization tests for anonymous, cross-CS, and cross-organization access.
 - Route tests proving signed identity forwarding and no `PANEL_AUTH_SECRET` dependency.
-- UI tests proving Auto, H+3, and stage override are absent.
+- UI tests proving Auto and stage override are absent while H+3 is shown as the final stage.
 - Full tests, TypeScript, Convex codegen/deploy validation, production build, and post-deploy smoke checks.
 
 ## Success Criteria
@@ -162,6 +170,8 @@ The provider idempotency key includes conversation ID, cycle inbound timestamp, 
 - Queue reads stay indexed and paginated.
 - A customer receives at most one message for a stage/cycle/request.
 - H+2 cannot send until 24 hours after accepted H+1.
+- H+3 cannot send until 24 hours after accepted H+2.
+- A successful H+3 completes the cycle and produces no further due stage.
 - Reply or closing removes the customer before another send.
 - CS cannot view or mutate another CS's Follow-up data.
 - No code or deployment change touches the n8n automatic order-notification workflow.
