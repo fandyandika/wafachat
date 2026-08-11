@@ -1,7 +1,7 @@
 # Manual Follow-up Repair Design
 
 **Date:** 2026-08-11  
-**Status:** Approved direction, pending written-spec review
+**Status:** Approved
 
 ## Goal
 
