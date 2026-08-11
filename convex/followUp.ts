@@ -381,16 +381,27 @@ export const sendFollowUp = action({
 });
 
 export const archiveFollowUp = mutation({
-  args: { conversationId: v.id("conversations"), authSecret: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
+  args: { conversationId: v.id("conversations") },
+  returns: v.object({ ok: v.literal(true) }),
+  handler: async (ctx, args) => {
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.archiveFollowUp");
     const c = await ctx.db.get(args.conversationId);
-    if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
+    if (!c || String(c.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    if (viewer.role === "cs" && (!effectiveCsName || csKey(c.assignedCsName) !== csKey(effectiveCsName))) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
     const now = Date.now();
-    await ctx.db.patch(args.conversationId, { status: "closed", followUpArchivedAt: now, updatedAt: now });
-    return { ok: true };
+    await ctx.db.patch(args.conversationId, {
+      status: "closed",
+      followUpArchivedAt: now,
+      followUpNextStage: undefined,
+      followUpDueAt: undefined,
+      followUpState: "archived",
+      followUpRequestId: undefined,
+      followUpLastError: undefined,
+      updatedAt: now,
+    });
+    return { ok: true as const };
   },
 });
 
@@ -414,28 +425,47 @@ export const setFollowUpStage = mutation({
 
 // Feature #2: undo archive
 export const unarchiveFollowUp = mutation({
-  args: { conversationId: v.id("conversations"), authSecret: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
+  args: { conversationId: v.id("conversations") },
+  returns: v.object({ ok: v.literal(true) }),
+  handler: async (ctx, args) => {
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.unarchiveFollowUp");
     const c = await ctx.db.get(args.conversationId);
-    if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
+    if (!c || String(c.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    if (viewer.role === "cs" && (!effectiveCsName || csKey(c.assignedCsName) !== csKey(effectiveCsName))) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
     const now = Date.now();
-    await ctx.db.patch(args.conversationId, { status: "active", followUpArchivedAt: undefined, updatedAt: now });
-    return { ok: true };
+    await ctx.db.patch(args.conversationId, {
+      status: "active",
+      followUpArchivedAt: undefined,
+      followUpNextStage: undefined,
+      followUpDueAt: undefined,
+      followUpState: undefined,
+      followUpRequestId: undefined,
+      followUpLastError: undefined,
+      updatedAt: now,
+    });
+    return { ok: true as const };
   },
 });
 
 export const getArchivedFollowUps = query({
   args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
+  returns: v.array(v.object({
+    conversationId: v.id("conversations"),
+    customerName: v.string(),
+    customerPhone: v.string(),
+    orderId: v.string(),
+    csName: v.string(),
+    followUpArchivedAt: v.number(),
+  })),
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "followUp.getArchivedFollowUps");
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getArchivedFollowUps", args.csName);
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
     const since = now - 14 * DAY;
-    const csKeyMemo = args.csName ? csKey(args.csName) : null;
+    const csKeyMemo = effectiveCsName ? csKey(effectiveCsName) : null;
 
     // Manual archive sets status="closed" + followUpArchivedAt, so read only recently-closed
     // conversations via the index (NOT a full-table .filter().collect() scan) then keep the
@@ -526,9 +556,14 @@ export const getAutoFollowUp = query({
 // Feature #10: KPI — follow-up effectiveness
 export const getFollowUpEffectiveness = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  returns: v.object({
+    totalClosings: v.number(),
+    fromFollowUp: v.number(),
+    byStage: v.object({ h1: v.number(), h2: v.number(), h3: v.number() }),
+  }),
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "followUp.getFollowUpEffectiveness");
-    return computeFollowUpEffectivenessRaw(ctx, orgId, args);
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getFollowUpEffectiveness", args.csName);
+    return computeFollowUpEffectivenessRaw(ctx, orgId, { ...args, csName: effectiveCsName });
   },
 });
 
@@ -570,8 +605,19 @@ export async function computeFollowUpEffectivenessRaw(
 // a lead that closed after ≥1 follow-up touch gets fromFollowUp=true so the funnel's effect is visible.
 export const getClosedFollowUps = query({
   args: { csName: v.optional(v.string()), sinceDays: v.optional(v.number()), nowOverride: v.optional(v.number()) },
+  returns: v.array(v.object({
+    conversationId: v.optional(v.id("conversations")),
+    customerName: v.string(),
+    customerPhone: v.string(),
+    csName: v.string(),
+    orderId: v.string(),
+    closedAt: v.number(),
+    product: v.string(),
+    touches: v.number(),
+    fromFollowUp: v.boolean(),
+  })),
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "followUp.getClosedFollowUps");
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getClosedFollowUps", args.csName);
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
@@ -580,7 +626,7 @@ export const getClosedFollowUps = query({
       throw new Error("followUp.getClosedFollowUps: range exceeds 35 days");
     }
     const since = now - sinceDays * DAY;
-    const csKeyMemo = args.csName ? csKey(args.csName) : null;
+    const csKeyMemo = effectiveCsName ? csKey(effectiveCsName) : null;
 
     const recaps = await collectExactBounded(ctx.db
       .query("shippingRecaps")

@@ -153,6 +153,66 @@ test("manual CS touch after H+1 becomes due advances to H+2 with a fresh day", a
   });
 });
 
+test("message history rejects anonymous callers", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const conversationId = await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId,
+    orderId: "HISTORY-ANON",
+    customerPhone: "628805",
+    customerName: "Anonymous",
+    assignedCsName: "Aisyah",
+    status: "active",
+    aiEnabled: false,
+    note: "",
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+
+  await expect(t.query(api.messages.listMessages, { conversationId, limit: 50 }))
+    .rejects.toThrow(/requires a logged-in user/);
+});
+
+test("message history rejects a CS reading another CS conversation", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const csUserId = await t.run((ctx) => ctx.db.insert("users", {
+    orgId,
+    email: "history-aisyah@wafachat.test",
+    name: "Aisyah",
+    passwordHash: "test",
+    role: "cs",
+    csName: "Aisyah",
+    isActive: true,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const lilaConversation = await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId,
+    orderId: "HISTORY-LILA",
+    customerPhone: "628806",
+    customerName: "Lila Customer",
+    assignedCsName: "Lila",
+    status: "active",
+    aiEnabled: false,
+    note: "",
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const asAisyah = t.withIdentity({
+    subject: String(csUserId),
+    role: "cs",
+    name: "Aisyah",
+    email: "history-aisyah@wafachat.test",
+    csName: "Aisyah",
+  });
+
+  await expect(asAisyah.query(api.messages.listMessages, {
+    conversationId: lilaConversation,
+    limit: 50,
+  })).rejects.toThrow(/conversation scope/);
+});
+
 test("appendMessageFromN8n: same externalMessageId twice -> one row", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });

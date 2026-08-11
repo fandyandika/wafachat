@@ -487,24 +487,22 @@ test("sendFollowUp: missing KIRIMDEV_API_KEY -> not ok, fetch not called", async
   vi.unstubAllGlobals();
 });
 
-test("archiveFollowUp: wrong secret -> not ok, status unchanged", async () => {
+test("archiveFollowUp: anonymous caller is rejected and status is unchanged", async () => {
   const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   let convId: any;
   const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-13", customerPhone: "62813b" });
   });
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-  const res = await asAdmin.mutation(api.followUp.archiveFollowUp, { conversationId: convId, authSecret: "WRONG" });
-  expect(res.ok).toBe(false);
+  await expect(t.mutation(api.followUp.archiveFollowUp, { conversationId: convId }))
+    .rejects.toThrow(/requires a logged-in user/);
   await t.run(async (ctx) => {
     const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
     expect(c!.status).toBe("active"); // should not change
   });
 });
 
-test("archiveFollowUp: right secret -> ok, status closed", async () => {
+test("archiveFollowUp: signed admin can archive an own-tenant conversation", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
   let convId: any;
@@ -512,14 +510,46 @@ test("archiveFollowUp: right secret -> ok, status closed", async () => {
   await t.run(async (ctx) => {
     convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-14", customerPhone: "62814b" });
   });
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-  const res = await asAdmin.mutation(api.followUp.archiveFollowUp, { conversationId: convId, authSecret: "s3cret" });
+  const res = await asAdmin.mutation(api.followUp.archiveFollowUp, { conversationId: convId });
   expect(res.ok).toBe(true);
   await t.run(async (ctx) => {
     const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
     expect(c!.status).toBe("closed");
     expect(c!.followUpArchivedAt).toBeDefined();
   });
+});
+
+test("archiveFollowUp: CS cannot archive another CS conversation", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const userId = await t.run((ctx) => ctx.db.insert("users", {
+    orgId,
+    email: "archive-aisyah@wafachat.test",
+    name: "Aisyah",
+    passwordHash: "test",
+    role: "cs",
+    csName: "Aisyah",
+    isActive: true,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const conversationId = await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId,
+    ...convBase,
+    orderId: "ARCHIVE-LILA",
+    customerPhone: "628149",
+    assignedCsName: "Lila",
+  }));
+  const asAisyah = t.withIdentity({
+    subject: String(userId),
+    role: "cs",
+    name: "Aisyah",
+    email: "archive-aisyah@wafachat.test",
+    csName: "Aisyah",
+  });
+
+  await expect(asAisyah.mutation(api.followUp.archiveFollowUp, { conversationId }))
+    .rejects.toThrow(/conversation scope/);
 });
 
 // Feature #8: manual stage override
@@ -614,8 +644,7 @@ test("unarchiveFollowUp: restores to active + clears timestamp", async () => {
   await t.run(async (ctx) => {
     convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-18", customerPhone: "62818", status: "closed", followUpArchivedAt: now - 1 * HOUR });
   });
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-  const res = await asAdmin.mutation(api.followUp.unarchiveFollowUp, { conversationId: convId, authSecret: "s3cret" });
+  const res = await asAdmin.mutation(api.followUp.unarchiveFollowUp, { conversationId: convId });
   expect(res.ok).toBe(true);
   await t.run(async (ctx) => {
     const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
@@ -643,6 +672,55 @@ test("getArchivedFollowUps: lists recent manual archives, scoped by CS", async (
   expect(res.find((r) => r.orderId === "O-19")).toBeDefined();
   expect(res.find((r) => r.orderId === "O-20")).toBeUndefined();
   expect(res[0].followUpArchivedAt).toBeGreaterThan(res[1]?.followUpArchivedAt ?? 0);
+});
+
+test("CS archived list ignores a client request for another CS", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const userId = await t.run((ctx) => ctx.db.insert("users", {
+    orgId,
+    email: "archived-aisyah@wafachat.test",
+    name: "Aisyah",
+    passwordHash: "test",
+    role: "cs",
+    csName: "Aisyah",
+    isActive: true,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  await t.run(async (ctx) => {
+    await ctx.db.insert("conversations", {
+      orgId,
+      ...convBase,
+      orderId: "ARCHIVED-AISYAH",
+      customerPhone: "628181",
+      assignedCsName: "Aisyah",
+      status: "closed",
+      followUpArchivedAt: now - HOUR,
+    });
+    await ctx.db.insert("conversations", {
+      orgId,
+      ...convBase,
+      orderId: "ARCHIVED-LILA",
+      customerPhone: "628182",
+      assignedCsName: "Lila",
+      status: "closed",
+      followUpArchivedAt: now - HOUR,
+    });
+  });
+  const asAisyah = t.withIdentity({
+    subject: String(userId),
+    role: "cs",
+    name: "Aisyah",
+    email: "archived-aisyah@wafachat.test",
+    csName: "Aisyah",
+  });
+
+  const rows = await asAisyah.query(api.followUp.getArchivedFollowUps, {
+    csName: "Lila",
+    nowOverride: now,
+  });
+  expect(rows.map((row) => row.orderId)).toEqual(["ARCHIVED-AISYAH"]);
 });
 
 // Feature #5b: auto-send toggle

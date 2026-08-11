@@ -15,10 +15,20 @@ export async function POST(req: NextRequest) {
   try {
     const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
     convex.setAuth(await signConvexToken(session));
-    const rows = await convex.query(api.followUp.getFollowUpCandidates, { csName: session.csName });
+    const rows = await convex.query(api.followUp.listDueFollowUps, {
+      csName: session.csName,
+      now: Date.now(),
+      paginationOpts: { numItems: 100, cursor: null },
+    });
+    const counts = rows.page.reduce((result, row) => {
+      if (row.stage === 1) result.h1++;
+      else if (row.stage === 2) result.h2++;
+      else result.h3++;
+      return result;
+    }, { h1: 0, h2: 0, h3: 0 });
     return NextResponse.json({
       ok: true,
-      counts: { h1: rows.stage1.length, h2: rows.stage2.length, h3: rows.stage3.length },
+      counts,
     });
   } catch (error) {
     return NextResponse.json({ ok: false, error: (error as Error).message || 'Gagal memuat antrean' }, { status: 500 });

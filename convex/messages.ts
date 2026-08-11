@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
+import { requireAdmin, requireAdminOrg, requireMemberOrg, requireScopedMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizePhone, csKey, windowKeyFor } from "./lib";
@@ -75,8 +75,37 @@ export const listMessages = query({
     conversationId: v.id("conversations"),
     limit: v.optional(v.number()),
   },
+  returns: v.array(v.object({
+    _id: v.id("messages"),
+    _creationTime: v.number(),
+    orgId: v.id("organizations"),
+    conversationId: v.id("conversations"),
+    orderId: v.string(),
+    customerPhone: v.string(),
+    role: v.union(v.literal("customer"), v.literal("ai"), v.literal("cs"), v.literal("system")),
+    direction: v.union(v.literal("inbound"), v.literal("outbound")),
+    content: v.string(),
+    messageType: v.union(v.literal("text"), v.literal("image"), v.literal("template"), v.literal("button")),
+    source: v.union(v.literal("kirimchat"), v.literal("panel"), v.literal("n8n"), v.literal("ingest")),
+    externalMessageId: v.optional(v.string()),
+    createdAt: v.number(),
+  })),
   handler: async (ctx, args) => {
-    const limit = Math.min(args.limit ?? 50, 50);
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "messages.listMessages");
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || String(conversation.orgId) !== String(orgId)) {
+      throw new Error("conversation not found");
+    }
+    if (
+      viewer.role === "cs" &&
+      (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))
+    ) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
+    const requestedLimit = args.limit ?? 50;
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(Math.floor(requestedLimit), 50))
+      : 50;
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", args.conversationId))
