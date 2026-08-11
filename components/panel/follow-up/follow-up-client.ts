@@ -10,7 +10,7 @@ import type {
 type Requester = typeof fetch;
 
 export class FollowUpClientError extends Error {
-  constructor(message: string, public readonly status: number) {
+  constructor(message: string, public readonly status: number, public readonly code?: string) {
     super(message);
     this.name = 'FollowUpClientError';
   }
@@ -27,7 +27,7 @@ async function postJson<T>(url: string, body: unknown, request: Requester = fetc
   }
   const result = await response.json().catch(() => ({ ok: false, error: 'Respons server tidak valid.' }));
   if (!response.ok || !result.ok) {
-    throw new FollowUpClientError(result.error ?? 'Permintaan gagal.', response.status);
+    throw new FollowUpClientError(result.error ?? 'Permintaan gagal.', response.status, result.status);
   }
   return result as T;
 }

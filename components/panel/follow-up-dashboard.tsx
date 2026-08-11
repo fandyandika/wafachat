@@ -10,6 +10,7 @@ import { fetchHistory, fetchQueue, searchCustomers } from './follow-up/follow-up
 import type { FollowUpHistoryRow, FollowUpHistoryView, FollowUpQueueRow, FollowUpSearchRow, FollowUpStage } from './follow-up/follow-up-types';
 import { FollowUpList } from './follow-up/follow-up-list';
 import { FollowUpDetail } from './follow-up/follow-up-detail';
+import { TemplateSendDialog } from './follow-up/template-send-dialog';
 
 export type FollowUpView = 'action' | 'search' | 'sent' | 'review' | 'completed';
 type ListRow = FollowUpQueueRow | FollowUpSearchRow | FollowUpHistoryRow;
@@ -36,6 +37,7 @@ export function FollowUpDashboard() {
   const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs'; csName?: string } | null>(null);
   const { cs } = usePanelFilters();
   const csList = useQuery(api.cs.listCs, {}) ?? [];
+  const templateSetup = useQuery(api.followUpTemplates.getFollowUpTemplateSetup, {});
   const [csFilter, setCsFilter] = useState(cs && cs !== 'all' ? cs : 'all');
   const [view, setView] = useState<FollowUpView>('action');
   const [stage, setStage] = useState<'all' | FollowUpStage>('all');
@@ -47,6 +49,7 @@ export function FollowUpDashboard() {
   const [searchInput, setSearchInput] = useState('');
   const [searchMessage, setSearchMessage] = useState('Masukkan minimal 3 karakter, lalu tekan Cari.');
   const [pagination, setPagination] = useState({ isDone: true, continueCursor: '' });
+  const [templateCandidate, setTemplateCandidate] = useState<FollowUpQueueRow | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
@@ -103,6 +106,9 @@ export function FollowUpDashboard() {
     ? rows
     : rows.filter((row) => row.stage === stage);
   const retry = () => view === 'action' ? loadQueue() : view === 'search' ? runSearch() : loadHistory(view);
+  const templateSender = templateCandidate
+    ? csList.find((item) => item.csName.replace(/^CS\s+/i, '').trim().toLocaleLowerCase('id-ID') === templateCandidate.csName.replace(/^CS\s+/i, '').trim().toLocaleLowerCase('id-ID'))
+    : undefined;
 
   return <div className="mx-auto flex h-[calc(100dvh-8.25rem)] min-h-[32rem] max-w-[1500px] flex-col overflow-hidden rounded-2xl border bg-background shadow-sm md:h-[calc(100dvh-5rem)]">
     <div className={`border-b bg-card p-3 md:p-4 ${mobileDetail ? 'hidden md:block' : ''}`}>
@@ -138,8 +144,16 @@ export function FollowUpDashboard() {
         {!loading && !pagination.isDone && <div className="p-3"><Button variant="outline" className="min-h-11 w-full" onClick={() => view === 'action' ? loadQueue(pagination.continueCursor, true) : view !== 'search' && loadHistory(view, pagination.continueCursor, true)}>Muat berikutnya</Button></div>}
       </section>
       <main className={`${mobileDetail ? 'block' : 'hidden md:block'} min-w-0 flex-1`}>
-        <FollowUpDetail candidate={queueSelection} onBack={() => setMobileDetail(false)} onChanged={() => { setSelected(null); setMobileDetail(false); void loadQueue(); }} />
+        <FollowUpDetail candidate={queueSelection} onBack={() => setMobileDetail(false)} onChanged={() => { setSelected(null); setMobileDetail(false); void loadQueue(); }} onSendTemplate={setTemplateCandidate} />
       </main>
     </div>
+    <TemplateSendDialog
+      open={templateCandidate !== null}
+      candidate={templateCandidate}
+      sender={templateSender ? { csName: templateSender.csName, providerNumberId: templateSender.providerNumberId } : undefined}
+      templates={(templateSetup?.templates ?? []).map((item) => ({ ...item, id: String(item.id) }))}
+      onClose={() => setTemplateCandidate(null)}
+      onAccepted={() => { setTemplateCandidate(null); setSelected(null); setMobileDetail(false); switchView('sent'); }}
+    />
   </div>;
 }
