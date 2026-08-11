@@ -58,6 +58,26 @@ function formatRupiah(value: number) {
   }).format(value);
 }
 
+type AdminThreadContext = {
+  customerPhone: string;
+  productName?: string;
+  totalAmount?: number;
+  orderId?: string;
+};
+
+export function adminThreadListSubtitle(context: AdminThreadContext) {
+  return context.productName || (context.orderId ? `Order ${context.orderId}` : context.customerPhone);
+}
+
+export function adminThreadMeta(context: AdminThreadContext) {
+  return [
+    context.customerPhone,
+    context.productName,
+    context.totalAmount === undefined ? undefined : formatRupiah(context.totalAmount),
+    context.orderId ? `Order ${context.orderId}` : undefined,
+  ].filter(Boolean).join(" · ");
+}
+
 export function AdminExpeditionNewChatDialog({
   templates,
   selectedTemplate,
@@ -340,7 +360,7 @@ export function AdminExpeditionInbox() {
                   <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold">{(thread.customerName || thread.customerPhone).slice(0, 2).toUpperCase()}</span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center justify-between gap-2"><strong className="truncate text-sm">{thread.customerName || thread.customerPhone}</strong><span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel(thread.updatedAt)}</span></span>
-                    <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{thread.productName || thread.customerPhone}</span><span className={cn("shrink-0 rounded-full px-2 py-0.5", thread.windowOpen ? "bg-emerald-100 text-emerald-800" : "bg-muted")}>{thread.windowOpen ? "24 jam aktif" : "Template"}</span></span>
+                    <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{adminThreadListSubtitle(thread)}</span><span className={cn("shrink-0 rounded-full px-2 py-0.5", thread.windowOpen ? "bg-emerald-100 text-emerald-800" : "bg-muted")}>{thread.windowOpen ? "24 jam aktif" : "Template"}</span></span>
                   </span>
                 </button>
               ))}
@@ -358,7 +378,7 @@ export function AdminExpeditionInbox() {
                 <Button variant="ghost" size="icon" className="lg:hidden" aria-label="Kembali ke daftar" onClick={() => setSelectedId(null)}><ArrowLeft className="size-5" /></Button>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{selectedThread.customerName || selectedThread.customerPhone}</p>
-                  <p className="truncate text-xs text-muted-foreground">{selectedThread.customerPhone}{selectedThread.productName ? ` · ${selectedThread.productName}` : ""}{selectedThread.totalAmount !== undefined ? ` · ${formatRupiah(selectedThread.totalAmount)}` : ""}</p>
+                  <p className="truncate text-xs text-muted-foreground">{adminThreadMeta(selectedThread)}</p>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {linkedOrder && (linkedOrder.status === "cancelled" || linkedOrder.status === "cancelled_after_export" ? linkedOrder.canUndo ? (

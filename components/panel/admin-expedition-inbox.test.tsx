@@ -19,6 +19,8 @@ vi.mock("@/components/ui/button", () => ({
 import {
   AdminExpeditionInbox,
   AdminExpeditionNewChatDialog,
+  adminThreadListSubtitle,
+  adminThreadMeta,
   parseOptionalRupiah,
 } from "./admin-expedition-inbox";
 
@@ -73,4 +75,17 @@ test("optional rupiah parser accepts Indonesian grouping and rejects ambiguous v
   expect(parseOptionalRupiah(" 189 000 ")).toBe(189_000);
   expect(() => parseOptionalRupiah("1,5")).toThrow("Harga total");
   expect(() => parseOptionalRupiah("Rp189.000")).toThrow("Harga total");
+});
+
+test("verified order context remains visible without guessing from a phone", () => {
+  expect(adminThreadListSubtitle({ customerPhone: "6285715682110", orderId: "ORD-1" }))
+    .toBe("Order ORD-1");
+  expect(adminThreadListSubtitle({ customerPhone: "6285715682110", productName: "Quran Mapping", orderId: "ORD-1" }))
+    .toBe("Quran Mapping");
+  expect(adminThreadMeta({
+    customerPhone: "6285715682110",
+    productName: "Quran Mapping",
+    totalAmount: 189_000,
+    orderId: "ORD-1",
+  })).toContain("Order ORD-1");
 });
