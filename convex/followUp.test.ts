@@ -1,6 +1,6 @@
 // convex/followUp.test.ts
 import { convexTest } from "convex-test";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
@@ -59,6 +59,29 @@ test("listDueFollowUps paginates 150 due conversations without a read-limit fail
   expect(first.page).toHaveLength(100);
   expect(second.page).toHaveLength(50);
   expect(new Set([...first.page, ...second.page].map((row) => String(row.conversationId))).size).toBe(150);
+});
+
+test("listDueFollowUps excludes a stale inbound cycle even when dueAt is recent", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "expiry-admin", role: "admin", name: "Admin", email: "expiry@wafachat.test" });
+  const orgId = await seedOrg(t);
+  await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId,
+    ...convBase,
+    orderId: "STALE-CYCLE",
+    customerPhone: "62890009999",
+    followUpCsKey: "nabila",
+    followUpCycleInboundAt: now - 6 * 24 * HOUR,
+    followUpNextStage: 1,
+    followUpDueAt: now - HOUR,
+    followUpState: "waiting",
+  }));
+
+  const result = await asAdmin.query(api.followUp.listDueFollowUps, {
+    now,
+    paginationOpts: { numItems: 100, cursor: null },
+  });
+  expect(result.page).toEqual([]);
 });
 
 test("recent follow-up backfill materializes at most 25 conversations per page", async () => {
@@ -191,7 +214,7 @@ test("getFollowUpCandidates: stale conversation (updated >6d ago) excluded by re
     await ctx.db.insert("messages", { orgId, ...msg(conv, "O-OLD", "628990", "inbound", now - 8 * DAY) });
     await ctx.db.insert("messages", { orgId, ...msg(conv, "O-OLD", "628990", "outbound", now - 8 * DAY + HOUR) });
   });
-  const r = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  const r = await t.query(internal.followUp.getFollowUpCandidatesDiagnostic, { orgId, nowOverride: now });
   expect(r.stage1.find((c) => c.orderId === "O-OLD")).toBeUndefined();
   expect(r.stage2.find((c) => c.orderId === "O-OLD")).toBeUndefined();
 });
@@ -206,12 +229,12 @@ test("getFollowUpCandidates: ghosted >24h, not closed -> stage1", async () => {
     await ctx.db.insert("messages", { orgId, ...msg(conv, "O-1", "62811", "inbound", now - 30 * HOUR) });
     await ctx.db.insert("messages", { orgId, ...msg(conv, "O-1", "62811", "outbound", now - 29 * HOUR) });
   });
-  const r = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  const r = await t.query(internal.followUp.getFollowUpCandidatesDiagnostic, { orgId, nowOverride: now });
   expect(r.stage1.map((c) => c.orderId)).toContain("O-1");
   expect(r.stage2.length).toBe(0);
 });
 
-test("CS follow-up candidates cannot request another CS scope", async () => {
+test("internal follow-up candidate diagnostic accepts an explicit CS scope", async () => {
   const t = convexTest(schema, modules);
   const orgId = await seedOrg(t);
   const csUserId = await t.run((ctx: any) => ctx.db.insert("users", {
@@ -248,8 +271,9 @@ test("CS follow-up candidates cannot request another CS scope", async () => {
     }
   });
 
-  const result = await asCs.query(api.followUp.getFollowUpCandidates, {
-    csName: "Lila",
+  const result = await t.query(internal.followUp.getFollowUpCandidatesDiagnostic, {
+    orgId,
+    csName: "Aisyah",
     nowOverride: now,
   });
   expect(result.stage1.map((row) => row.orderId)).toEqual(["O-AISYAH"]);
@@ -272,7 +296,7 @@ test("getFollowUpCandidates: closed (shippingRecap) excluded", async () => {
       createdAt: now - 20 * HOUR, updatedAt: now - 20 * HOUR,
     });
   });
-  const r = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  const r = await t.query(internal.followUp.getFollowUpCandidatesDiagnostic, { orgId, nowOverride: now });
   expect(r.stage1.length).toBe(0);
 });
 
@@ -290,7 +314,7 @@ test("getFollowUpCandidates: csName scope filters to that CS", async () => {
       await ctx.db.insert("messages", { orgId, ...msg(c, o, p, "outbound", now - 29 * HOUR) });
     }
   });
-  const r = await asAdmin.query(api.followUp.getFollowUpCandidates, { csName: "Nabila", nowOverride: now });
+  const r = await t.query(internal.followUp.getFollowUpCandidatesDiagnostic, { orgId, csName: "Nabila", nowOverride: now });
   expect(r.stage1.map((c) => c.orderId)).toEqual(["O-3"]);
 });
 
@@ -307,7 +331,7 @@ test("getFollowUpCandidates: stage-2 (H+2) after a post-window touch (manual or 
     // H+1 follow-up touch (post-window outbound, e.g. sent by hand via WABA) 25h ago → ≥20h elapsed, still silent.
     await ctx.db.insert("messages", { orgId, ...msg(conv, "O-5", "62815", "outbound", now - 25 * HOUR) });
   });
-  const r = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  const r = await t.query(internal.followUp.getFollowUpCandidatesDiagnostic, { orgId, nowOverride: now });
   expect(r.stage2.map((c) => c.orderId)).toContain("O-5");
   expect(r.stage1.length).toBe(0);
 });
@@ -349,7 +373,7 @@ test("long alternating history keeps the latest inbound, post-window outbound to
     expect(touches.map((m: any) => m.createdAt)).toEqual([touchAt]);
   });
 
-  const candidates = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  const candidates = await t.query(internal.followUp.getFollowUpCandidatesDiagnostic, { orgId, nowOverride: now });
   expect(candidates.stage2.find((c) => c.orderId === orderId)).toMatchObject({ lastInboundAt, touchAts: [touchAt] });
   const candidacy = await t.query(internal.followUp.candidacyFor, { conversationId: convId, nowOverride: now });
   expect(candidacy?.eligible).toBe(2);
@@ -367,7 +391,7 @@ test("getFollowUpCandidates: ANTI-DOUBLE — a fresh manual-via-WABA touch drops
     // CS already followed up by hand (post-window outbound) 2h ago → touchCount 1, too soon for H+2.
     await ctx.db.insert("messages", { orgId, ...msg(conv, "O-6", "62816", "outbound", now - 2 * HOUR) });
   });
-  const r = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  const r = await t.query(internal.followUp.getFollowUpCandidatesDiagnostic, { orgId, nowOverride: now });
   expect(r.stage1.find((c) => c.orderId === "O-6")).toBeUndefined(); // not re-offered for H+1
   expect(r.stage2.find((c) => c.orderId === "O-6")).toBeUndefined(); // not yet due for H+2
 });
@@ -384,7 +408,7 @@ test("getFollowUpCandidates: dedupe — one customer with two ghosted orders yie
       await ctx.db.insert("messages", { orgId, ...msg(conv, oid, "62817", "outbound", now - (h - 1) * HOUR) });
     }
   });
-  const r = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
+  const r = await t.query(internal.followUp.getFollowUpCandidatesDiagnostic, { orgId, nowOverride: now });
   const forPhone = [...r.stage1, ...r.stage2].filter((c) => c.customerPhone === "62817");
   expect(forPhone.length).toBe(1);
   expect(forPhone[0].orderId).toBe("O-7a"); // keeps the most recently active order (30h > 40h ago)
@@ -404,7 +428,7 @@ async function seedDueManualFollowUp(t: any, orgId: any, suffix: string, stage: 
       orderId: `MANUAL-${suffix}`,
       customerPhone: `628777${suffix}`,
       followUpCsKey: "nabila",
-      followUpCycleInboundAt: now - 30 * HOUR,
+      followUpCycleInboundAt: Date.now() - 30 * HOUR,
       followUpNextStage: stage,
       followUpDueAt: Date.now() - HOUR,
       followUpState: "waiting",
@@ -420,22 +444,24 @@ async function seedDueManualFollowUp(t: any, orgId: any, suffix: string, stage: 
       .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "nabila"))
       .first();
     if (!existingCs) await ctx.db.insert("csConfigs", { orgId, ...csCfg("Nabila") });
-    const existingTemplate = await ctx.db
-      .query("followUpTemplates")
-      .withIndex("by_org_stage", (q: any) => q.eq("orgId", orgId).eq("stage", stage))
-      .first();
-    if (!existingTemplate) {
-      await ctx.db.insert("followUpTemplates", {
-        orgId,
-        stage,
-        label: `H+${stage}`,
-        templateName: `follow_up_h${stage}`,
-        language: "id",
-        variables: ["customer_name", "product_name", "order_id"],
-        isActive: true,
-        createdAt: now,
-        updatedAt: now,
-      });
+    for (const templateStage of [1, 2, 3] as const) {
+      const existingTemplate = await ctx.db
+        .query("followUpTemplates")
+        .withIndex("by_org_stage", (q: any) => q.eq("orgId", orgId).eq("stage", templateStage))
+        .first();
+      if (!existingTemplate) {
+        await ctx.db.insert("followUpTemplates", {
+          orgId,
+          stage: templateStage,
+          label: `H+${templateStage}`,
+          templateName: `follow_up_h${templateStage}`,
+          language: "id",
+          variables: ["customer_name", "product_name", "order_id"],
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
     }
     return conversationId;
   });
@@ -447,12 +473,12 @@ test("reserveDueFollowUp atomically reserves once and returns immutable provider
   const orgId = await seedOrg(t);
   const conversationId = await seedDueManualFollowUp(t, orgId, "01");
 
-  const first = await asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+  const first = await asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
     conversationId,
     stage: 1,
     requestId: "11111111-1111-4111-8111-111111111111",
   });
-  const duplicate = await asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+  const duplicate = await asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
     conversationId,
     stage: 1,
     requestId: "11111111-1111-4111-8111-111111111111",
@@ -471,6 +497,77 @@ test("reserveDueFollowUp atomically reserves once and returns immutable provider
   expect(duplicate).toEqual({ shouldSend: false, status: "sending" });
 });
 
+test("sendDueFollowUp owns provider acceptance and advances the queue", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "send-admin", role: "admin", name: "Send Admin", email: "send@wafachat" });
+  const orgId = await seedOrg(t);
+  const conversationId = await seedDueManualFollowUp(t, orgId, "05");
+  process.env.KIRIMDEV_API_KEY = "k_test";
+  process.env.KIRIMDEV_BASE_URL = "https://api.test/v1";
+  const request = vi.fn(async () => new Response(JSON.stringify({ messages: [{ id: "wamid.action.1" }] }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  }));
+  vi.stubGlobal("fetch", request);
+
+  const result = await asAdmin.action(api.followUp.sendDueFollowUp, {
+    conversationId,
+    stage: 1,
+    requestId: "66666666-6666-4666-8666-666666666666",
+  });
+
+  expect(result).toMatchObject({ ok: true, status: "accepted", providerMessageId: "wamid.action.1" });
+  expect(request).toHaveBeenCalledOnce();
+  await t.run(async (ctx) => {
+    const conversation = await ctx.db.get(conversationId);
+    expect(conversation).toMatchObject({ followUpState: "waiting", followUpNextStage: 2 });
+  });
+  vi.unstubAllGlobals();
+});
+
+test("reservation requires all H+1, H+2, and H+3 templates", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "template-admin", role: "admin", name: "Admin", email: "template@wafachat" });
+  const orgId = await seedOrg(t);
+  const conversationId = await seedDueManualFollowUp(t, orgId, "06");
+  await t.run(async (ctx) => {
+    const template = await ctx.db
+      .query("followUpTemplates")
+      .withIndex("by_org_stage", (q) => q.eq("orgId", orgId).eq("stage", 3))
+      .unique();
+    await ctx.db.delete(template!._id);
+  });
+
+  await expect(asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
+    conversationId,
+    stage: 1,
+    requestId: "77777777-7777-4777-8777-777777777777",
+  })).rejects.toThrow(/H\+1, H\+2, dan H\+3/);
+});
+
+test("expired sending lease becomes operator-visible unknown status", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "lease-admin", role: "admin", name: "Admin", email: "lease@wafachat" });
+  const orgId = await seedOrg(t);
+  const conversationId = await seedDueManualFollowUp(t, orgId, "07");
+  const requestId = "88888888-8888-4888-8888-888888888888";
+  await asAdmin.mutation(internal.followUp.reserveDueFollowUp, { conversationId, stage: 1, requestId });
+  await t.run(async (ctx) => {
+    const conversation = await ctx.db.get(conversationId) as Doc<"conversations">;
+    await ctx.db.patch(conversationId, { updatedAt: conversation.updatedAt + 1 });
+  });
+  expect(await t.mutation(internal.followUp.expireSendingReservation, { conversationId, requestId }))
+    .toEqual({ expired: true });
+  const attention = await asAdmin.query(api.followUp.listFollowUpAttention, {
+    state: "unknown",
+    paginationOpts: { numItems: 50, cursor: null },
+  });
+  expect(attention.page).toContainEqual(expect.objectContaining({
+    conversationId,
+    state: "unknown",
+  }));
+});
+
 test("reserveDueFollowUp fails closed when a CS has no canonical sender claim", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "manual-admin", role: "admin", name: "Manual Admin", email: "manual@wafachat" });
@@ -484,7 +581,7 @@ test("reserveDueFollowUp fails closed when a CS has no canonical sender claim", 
     await ctx.db.patch(agent!._id, { providerNumberId: undefined, providerNumberIds: ["pn-a", "pn-b"] });
   });
 
-  await expect(asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+  await expect(asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
     conversationId,
     stage: 1,
     requestId: "55555555-5555-4555-8555-555555555555",
@@ -498,30 +595,30 @@ test("unknown finalization blocks a new request and accepted H+1 advances exactl
   const unknownConversationId = await seedDueManualFollowUp(t, orgId, "02");
   const acceptedConversationId = await seedDueManualFollowUp(t, orgId, "03");
 
-  await asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+  await asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
     conversationId: unknownConversationId,
     stage: 1,
     requestId: "22222222-2222-4222-8222-222222222222",
   });
-  await asAdmin.mutation(api.followUp.finalizeDueFollowUp, {
+  await asAdmin.mutation(internal.followUp.finalizeDueFollowUp, {
     conversationId: unknownConversationId,
     requestId: "22222222-2222-4222-8222-222222222222",
     outcome: "unknown",
     error: "Timeout provider",
   });
-  await expect(asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+  await expect(asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
     conversationId: unknownConversationId,
     stage: 1,
     requestId: "33333333-3333-4333-8333-333333333333",
   })).rejects.toThrow(/belum diketahui/i);
 
-  await asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+  await asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
     conversationId: acceptedConversationId,
     stage: 1,
     requestId: "44444444-4444-4444-8444-444444444444",
   });
   const acceptedAt = Date.now();
-  await asAdmin.mutation(api.followUp.finalizeDueFollowUp, {
+  await asAdmin.mutation(internal.followUp.finalizeDueFollowUp, {
     conversationId: acceptedConversationId,
     requestId: "44444444-4444-4444-8444-444444444444",
     outcome: "accepted",

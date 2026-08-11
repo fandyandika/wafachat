@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
   const session = await verifySession(req.cookies.get('auth_token')?.value);
   if (!session) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
 
-  const { csName } = await req.json().catch(() => ({ csName: undefined }));
+  const { csName, cursor } = await req.json().catch(() => ({ csName: undefined, cursor: undefined }));
   if (session.role === 'cs' && !session.csName?.trim()) {
     return NextResponse.json({ ok: false, error: 'CS scope required' }, { status: 403 });
   }
@@ -25,22 +25,36 @@ export async function POST(req: NextRequest) {
     const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
     // Carry the verified caller's identity into Convex (guarded queries reject anonymous).
     convex.setAuth(await signConvexToken(session));
-    const [queue, kpi] = await Promise.all([
+    const [queue, kpi, sending, failed, unknown] = await Promise.all([
       convex.query(api.followUp.listDueFollowUps, {
         csName: cs,
         now,
-        paginationOpts: { numItems: 100, cursor: null },
+        paginationOpts: { numItems: 100, cursor: typeof cursor === 'string' ? cursor : null },
       }),
       convex.query(api.followUp.getFollowUpEffectiveness, { startAt: thirtyDaysAgo, endAt: now, csName: cs }),
+      ...(['sending', 'failed', 'unknown'] as const).map((state) => convex.query(api.followUp.listFollowUpAttention, {
+        csName: cs,
+        state,
+        paginationOpts: { numItems: 50, cursor: null },
+      })),
     ]);
     const candidates = {
       stage1: queue.page.filter((row) => row.stage === 1),
       stage2: queue.page.filter((row) => row.stage === 2),
       stage3: queue.page.filter((row) => row.stage === 3),
-      isDone: queue.isDone,
-      continueCursor: queue.continueCursor,
     };
-    return NextResponse.json({ ok: true, candidates, kpi });
+    return NextResponse.json({
+      ok: true,
+      candidates,
+      kpi,
+      attention: [...sending.page, ...failed.page, ...unknown.page].sort((a, b) => b.updatedAt - a.updatedAt),
+      attentionPagination: {
+        sending: { isDone: sending.isDone, continueCursor: sending.continueCursor },
+        failed: { isDone: failed.isDone, continueCursor: failed.continueCursor },
+        unknown: { isDone: unknown.isDone, continueCursor: unknown.continueCursor },
+      },
+      pagination: { isDone: queue.isDone, continueCursor: queue.continueCursor },
+    });
   } catch (e) {
     return NextResponse.json({ ok: false, error: (e as Error).message || 'failed' }, { status: 500 });
   }

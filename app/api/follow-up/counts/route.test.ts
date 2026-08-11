@@ -37,23 +37,34 @@ test('follow-up counts require an assigned CS session', async () => {
   expect((await POST(request())).status).toBe(403);
 });
 
-test('follow-up counts use the verified CS scope, explicit time, and one indexed queue read', async () => {
+test('follow-up counts use the verified CS scope and aggregate every indexed queue page', async () => {
   state.session = { role: 'cs', name: 'Aisyah', email: 'aisyah@test', csName: 'Aisyah' };
-  state.query.mockResolvedValue({
-    page: [{ stage: 1 }, { stage: 1 }, { stage: 2 }],
-    isDone: true,
-    continueCursor: 'done',
-  });
+  state.query
+    .mockResolvedValueOnce({
+      page: [{ stage: 1 }, { stage: 1 }],
+      isDone: false,
+      continueCursor: 'page-2',
+    })
+    .mockResolvedValueOnce({
+      page: [{ stage: 2 }],
+      isDone: true,
+      continueCursor: 'done',
+    });
 
   const response = await POST(request());
 
   expect(response.status).toBe(200);
-  expect(state.query).toHaveBeenCalledTimes(1);
+  expect(state.query).toHaveBeenCalledTimes(2);
   expect(state.setAuth).toHaveBeenCalledWith('token');
   expect(state.query.mock.calls[0][1]).toEqual({
     csName: 'Aisyah',
     now: 123_456,
     paginationOpts: { numItems: 100, cursor: null },
   });
-  expect(await response.json()).toEqual({ ok: true, counts: { h1: 2, h2: 1, h3: 0 } });
+  expect(state.query.mock.calls[1][1]).toEqual({
+    csName: 'Aisyah',
+    now: 123_456,
+    paginationOpts: { numItems: 100, cursor: 'page-2' },
+  });
+  expect(await response.json()).toEqual({ ok: true, counts: { h1: 2, h2: 1, h3: 0 }, truncated: false });
 });

@@ -3,22 +3,17 @@ import { NextRequest } from "next/server";
 
 const state = vi.hoisted(() => ({
   session: null as null | Record<string, unknown>,
-  mutation: vi.fn(),
+  action: vi.fn(),
   setAuth: vi.fn(),
-  send: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-jwt", () => ({ verifySession: vi.fn(async () => state.session) }));
 vi.mock("@/lib/convex-token", () => ({ signConvexToken: vi.fn(async () => "signed-token") }));
 vi.mock("convex/browser", () => ({
   ConvexHttpClient: class {
-    mutation = state.mutation;
+    action = state.action;
     setAuth = state.setAuth;
   },
-}));
-vi.mock("@/lib/kirimdev", () => ({
-  buildTemplatePayload: vi.fn((to, templateName, language, orderedValues) => ({ to, templateName, language, orderedValues })),
-  sendKirimDevMessage: state.send,
 }));
 
 import { POST } from "./route";
@@ -35,86 +30,43 @@ function request(body: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   state.session = null;
-  state.mutation.mockReset();
+  state.action.mockReset();
   state.setAuth.mockReset();
-  state.send.mockReset();
-  process.env.KIRIMDEV_API_KEY = "k_test";
-  process.env.KIRIMDEV_BASE_URL = "https://api.test/v1";
 });
 
 test("manual send rejects an anonymous request", async () => {
   expect((await POST(request())).status).toBe(401);
 });
 
-test("manual send reserves with signed identity, sends once, and finalizes acceptance", async () => {
+test("manual send delegates the complete provider workflow to the signed Convex action", async () => {
   state.session = { userId: "admin", role: "admin", name: "Admin", email: "admin@test" };
-  state.mutation
-    .mockResolvedValueOnce({
-      shouldSend: true,
-      status: "sending",
-      to: "6285715682110",
-      phoneNumberId: "pn_cs",
-      templateName: "follow_up_h1",
-      language: "id",
-      orderedValues: ["Fandi", "Quran Mapping", "O-1"],
-      idempotencyKey: "fu-conv-cycle-1-request",
-    })
-    .mockResolvedValueOnce({ ok: true, status: "accepted" });
-  state.send.mockResolvedValue({ ok: true, providerMessageId: "wamid.1" });
+  state.action.mockResolvedValue({ ok: true, status: "accepted", providerMessageId: "wamid.1" });
 
   const response = await POST(request({ conversationId: "conv1", stage: 1, requestId }));
 
   expect(response.status).toBe(200);
   expect(state.setAuth).toHaveBeenCalledWith("signed-token");
-  expect(state.send).toHaveBeenCalledOnce();
-  expect(state.send).toHaveBeenCalledWith(expect.objectContaining({
-    apiKey: "k_test",
-    phoneNumberId: "pn_cs",
-    idempotencyKey: "fu-conv-cycle-1-request",
-  }));
-  expect(state.mutation.mock.calls[1][1]).toMatchObject({
-    conversationId: "conv1",
-    requestId,
-    outcome: "accepted",
-    providerMessageId: "wamid.1",
-  });
+  expect(state.action).toHaveBeenCalledOnce();
+  expect(state.action.mock.calls[0][1]).toEqual({ conversationId: "conv1", stage: 1, requestId });
   expect(await response.json()).toMatchObject({ ok: true, status: "accepted" });
 });
 
-test("manual send does not call provider for a duplicate reservation", async () => {
+test("manual send reports an in-progress duplicate reservation", async () => {
   state.session = { userId: "admin", role: "admin", name: "Admin", email: "admin@test" };
-  state.mutation.mockResolvedValueOnce({ shouldSend: false, status: "sending" });
+  state.action.mockResolvedValueOnce({ ok: false, status: "sending" });
 
   const response = await POST(request({ conversationId: "conv1", stage: 1, requestId }));
 
   expect(response.status).toBe(202);
-  expect(state.send).not.toHaveBeenCalled();
-  expect(state.mutation).toHaveBeenCalledOnce();
+  expect(state.action).toHaveBeenCalledOnce();
 });
 
-test("manual send records transport uncertainty and blocks silent retries", async () => {
+test("manual send exposes provider uncertainty without silently retrying", async () => {
   state.session = { userId: "admin", role: "admin", name: "Admin", email: "admin@test" };
-  state.mutation
-    .mockResolvedValueOnce({
-      shouldSend: true,
-      status: "sending",
-      to: "6285715682110",
-      phoneNumberId: "pn_cs",
-      templateName: "follow_up_h1",
-      language: "id",
-      orderedValues: [],
-      idempotencyKey: "fu-conv-cycle-1-request",
-    })
-    .mockResolvedValueOnce({ ok: true, status: "unknown" });
-  state.send.mockResolvedValue({ ok: false, error: "Timeout", statusUnknown: true });
+  state.action.mockResolvedValueOnce({ ok: false, status: "unknown", error: "Timeout" });
 
   const response = await POST(request({ conversationId: "conv1", stage: 1, requestId }));
 
   expect(response.status).toBe(502);
-  expect(state.mutation.mock.calls[1][1]).toMatchObject({
-    conversationId: "conv1",
-    requestId,
-    outcome: "unknown",
-    error: "Timeout",
-  });
+  expect(await response.json()).toMatchObject({ ok: false, status: "unknown", error: "Timeout" });
 });

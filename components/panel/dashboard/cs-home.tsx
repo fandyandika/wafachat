@@ -23,6 +23,7 @@ export function CsHome({ me }: { me: Me }) {
     includePerformance: false,
   });
   const [counts, setCounts] = useState<QueueCounts>();
+  const [countsTruncated, setCountsTruncated] = useState(false);
   const [countsError, setCountsError] = useState<string | null>(null);
 
   const loadCounts = useCallback(async () => {
@@ -31,6 +32,7 @@ export function CsHome({ me }: { me: Me }) {
     const body = await response.json();
     if (!response.ok || !body.ok) throw new Error(body.error || 'Gagal memuat antrean');
     setCounts(body.counts as QueueCounts);
+    setCountsTruncated(body.truncated === true);
   }, []);
 
   useEffect(() => {
@@ -64,9 +66,9 @@ export function CsHome({ me }: { me: Me }) {
       >
         {countsError ? <p role="alert" className="border-b border-negative bg-negative-soft px-4 py-2 text-sm text-negative">{countsError}</p> : null}
         <LedgerMetricGrid>
-          <LedgerMetric label="H+1" value={counts?.h1 ?? '—'} detail="Tindak lanjut pertama" />
-          <LedgerMetric label="H+2" value={counts?.h2 ?? '—'} detail="Pengingat" />
-          <LedgerMetric label="H+3" value={counts?.h3 ?? '—'} detail="Penawaran terakhir" />
+          <LedgerMetric label="H+1" value={counts ? `${counts.h1}${countsTruncated ? '+' : ''}` : '—'} detail={countsTruncated ? 'Minimum · antrean besar' : 'Tindak lanjut pertama'} />
+          <LedgerMetric label="H+2" value={counts ? `${counts.h2}${countsTruncated ? '+' : ''}` : '—'} detail={countsTruncated ? 'Minimum · antrean besar' : 'Pengingat'} />
+          <LedgerMetric label="H+3" value={counts ? `${counts.h3}${countsTruncated ? '+' : ''}` : '—'} detail={countsTruncated ? 'Minimum · antrean besar' : 'Penawaran terakhir'} />
         </LedgerMetricGrid>
       </LedgerSection>
 

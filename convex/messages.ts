@@ -11,7 +11,7 @@ import { countFollowUpTouchesBeforeTime } from "./followUp";
 import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
-import { advanceAfterAccepted, armH1AfterOutbound } from "./followUpModel";
+import { armH1AfterOutbound } from "./followUpModel";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }, orgId: Id<"organizations">) {
   if (args.orderId) {
@@ -334,20 +334,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     );
     if (lastInbound && lastInbound.createdAt <= createdAt && effectiveCsKey) {
       const sameCycle = conversation.followUpCycleInboundAt === lastInbound.createdAt;
-      const currentStage = conversation.followUpNextStage as 1 | 2 | 3 | undefined;
-      if (
-        sameCycle &&
-        conversation.followUpState === "waiting" &&
-        currentStage != null &&
-        conversation.followUpDueAt != null &&
-        createdAt >= conversation.followUpDueAt
-      ) {
-        const advanced = advanceAfterAccepted(currentStage, createdAt);
-        convPatch.followUpCsKey = effectiveCsKey;
-        convPatch.followUpNextStage = advanced.nextStage ?? undefined;
-        convPatch.followUpDueAt = advanced.dueAt ?? undefined;
-        convPatch.followUpState = advanced.state;
-      } else if (!sameCycle || conversation.followUpState == null) {
+      if (!sameCycle || conversation.followUpState == null) {
         const armed = armH1AfterOutbound(lastInbound.createdAt, effectiveCsKey);
         convPatch.followUpCsKey = armed.csKey;
         convPatch.followUpCycleInboundAt = lastInbound.createdAt;
@@ -355,9 +342,11 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
         convPatch.followUpDueAt = armed.dueAt;
         convPatch.followUpState = armed.state;
       }
-      convPatch.followUpRequestId = undefined;
-      convPatch.followUpProviderMessageId = undefined;
-      convPatch.followUpLastError = undefined;
+      if (!sameCycle || conversation.followUpState == null) {
+        convPatch.followUpRequestId = undefined;
+        convPatch.followUpProviderMessageId = undefined;
+        convPatch.followUpLastError = undefined;
+      }
     }
   }
   await ctx.db.patch(conversation._id, convPatch);

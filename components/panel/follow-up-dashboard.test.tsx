@@ -64,11 +64,11 @@ test("snapshot failure is announced with a retry and a retry can recover", async
 });
 
 test("queue keyboard navigation wraps and supports Home and End", () => {
-  expect(getNextFollowUpTabIndex("ArrowRight", 5, 6)).toBe(0);
-  expect(getNextFollowUpTabIndex("ArrowLeft", 0, 6)).toBe(5);
-  expect(getNextFollowUpTabIndex("Home", 3, 6)).toBe(0);
-  expect(getNextFollowUpTabIndex("End", 1, 6)).toBe(5);
-  expect(getNextFollowUpTabIndex("Enter", 1, 6)).toBeNull();
+  expect(getNextFollowUpTabIndex("ArrowRight", 6, 7)).toBe(0);
+  expect(getNextFollowUpTabIndex("ArrowLeft", 0, 7)).toBe(6);
+  expect(getNextFollowUpTabIndex("Home", 3, 7)).toBe(0);
+  expect(getNextFollowUpTabIndex("End", 1, 7)).toBe(6);
+  expect(getNextFollowUpTabIndex("Enter", 1, 7)).toBeNull();
 });
 
 test("mobile follow-up controls and row selection keep 44px targets", () => {
@@ -77,7 +77,7 @@ test("mobile follow-up controls and row selection keep 44px targets", () => {
   expect(html).toMatch(/title="Urutkan[^>]+min-h-11[^>]+md:min-h-9/);
   expect(html).toMatch(/title="Muat ulang daftar"[^>]+min-h-11[^>]+min-w-11/);
   expect(html).toMatch(/title="Filter per CS"[^>]+min-h-11[^>]+md:min-h-9/);
-  expect(html.match(/role="tab"[^>]+min-h-11[^>]+md:min-h-9/g)).toHaveLength(6);
+  expect(html.match(/role="tab"[^>]+min-h-11[^>]+md:min-h-9/g)).toHaveLength(7);
   expect(check).toMatch(/h-11 w-11[^>]+md:h-9 md:w-9/);
 });
 
@@ -86,6 +86,8 @@ test("manual workspace has no automatic or stage-override controls and includes 
   expect(source).not.toContain("Auto-send");
   expect(source).not.toContain("Pindah:");
   expect(source).not.toContain("/api/follow-up/set-stage");
+  expect(source).not.toContain("Kirim massal");
+  expect(source).toContain("Perlu dicek");
   expect(source).toContain("H+3 · Follow-up terakhir");
   expect(source).toContain("crypto.randomUUID()");
 });

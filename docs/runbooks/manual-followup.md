@@ -23,8 +23,9 @@ Never store or display the KirimDev API key or App Secret in these form fields.
 
 - A real customer inbound clears the previous cycle.
 - A real CS outbound reply arms H+1 for 24 hours after that inbound.
+- Outbound chat biasa tidak memajukan H+1/H+2/H+3. Hanya template yang diterima provider melalui tombol kirim WafaChat yang memajukan tahap.
 - A closing, cancellation, done marker, archive, or stale lifecycle transition removes the lead from the actionable queue.
-- The workspace reads one indexed, paginated snapshot on load/refresh. It is not a continuous heavy Convex query.
+- The workspace reads one indexed, paginated snapshot on load/refresh. Pages after the first 100 are loaded explicitly with **Muat antrean berikutnya**; it is not a continuous heavy Convex query.
 - The stage shown on a card comes from the server and cannot be manually changed.
 
 ## Safe UAT
@@ -49,6 +50,8 @@ Every click uses a request UUID and the provider key:
 - Repeating the same request never starts a second provider send.
 - A definite provider rejection is recorded as `failed`.
 - A timeout or accepted response without a provider message ID is recorded as `unknown` and blocks further sends.
+- A `sending` reservation that is not finalized within two minutes is changed to `unknown`, so it cannot remain hidden or be retried silently.
+- Status `sending`, `failed`, and `unknown` are visible in the **Perlu dicek** tab.
 - For `unknown`, inspect KirimDev message history using the customer, time, template, and idempotency key. Do not retry with a new request until the provider outcome is reconciled by an operator/developer.
 
 ## Recent backfill
@@ -69,5 +72,5 @@ For the first 24 hours, observe:
 - provider acceptance/error/timeout rate;
 - duplicate outbound template messages by external message ID;
 - waiting/sending/unknown/failed queue state counts;
-- Convex I/O for `listDueFollowUps`, `reserveDueFollowUp`, and `finalizeDueFollowUp`;
+- Convex I/O for `listDueFollowUps`, `listFollowUpAttention`, and `sendDueFollowUp`;
 - continued normal operation of n8n order notifications.

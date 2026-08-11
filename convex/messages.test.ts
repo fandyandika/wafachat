@@ -112,7 +112,7 @@ test("system order-notification outbound never arms manual follow-up", async () 
   expect(conversation?.followUpDueAt).toBeUndefined();
 });
 
-test("manual CS touch after H+1 becomes due advances to H+2 with a fresh day", async () => {
+test("an arbitrary CS outbound does not advance an approved-template follow-up stage", async () => {
   const t = convexTest(schema);
   await seedOrg(t);
   const inboundAt = 30_000;
@@ -147,8 +147,8 @@ test("manual CS touch after H+1 becomes due advances to H+2 with a fresh day", a
 
   const conversation = await t.run(async (ctx) => (await ctx.db.get(inbound.conversationId)) as Doc<"conversations"> | null);
   expect(conversation).toMatchObject({
-    followUpNextStage: 2,
-    followUpDueAt: h1At + DAY,
+    followUpNextStage: 1,
+    followUpDueAt: inboundAt + DAY,
     followUpState: "waiting",
   });
 });

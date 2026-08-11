@@ -1,4 +1,4 @@
-import { query, mutation, internalQuery } from "./_generated/server";
+import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireScopedMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
@@ -9,6 +9,8 @@ import { getInternalPhoneSet } from "./orgSettings";
 import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 import { getBoundedActiveAgentRegistry } from "./agents";
 import { advanceAfterAccepted, FOLLOW_UP_EXPIRY_MS } from "./followUpModel";
+import { internal } from "./_generated/api";
+import { buildTemplatePayload, sendKirimDevMessage } from "../lib/kirimdev";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
@@ -26,6 +28,19 @@ const dueFollowUpValidator = v.object({
   stage: followUpStageValidator,
   dueAt: v.number(),
 });
+
+const attentionFollowUpValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  stage: v.optional(followUpStageValidator),
+  state: v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown")),
+  lastError: v.optional(v.string()),
+  updatedAt: v.number(),
+});
+const attentionStateValidator = v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown"));
 
 export const listDueFollowUps = query({
   args: {
@@ -94,7 +109,10 @@ export const listDueFollowUps = query({
             .paginate(paginationOpts);
 
     return {
-      page: result.page.map((row) => ({
+      page: result.page
+        .filter((row) => row.followUpCycleInboundAt !== undefined
+          && row.followUpCycleInboundAt >= args.now - FOLLOW_UP_EXPIRY_MS)
+        .map((row) => ({
         conversationId: row._id,
         customerName: row.customerName,
         customerPhone: row.customerPhone,
@@ -105,6 +123,63 @@ export const listDueFollowUps = query({
         stage: row.followUpNextStage!,
         dueAt: row.followUpDueAt!,
       })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+export const listFollowUpAttention = query({
+  args: {
+    csName: v.optional(v.string()),
+    state: attentionStateValidator,
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(attentionFollowUpValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listFollowUpAttention",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 100)),
+    };
+    const result = await (effectiveCsKey
+      ? ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpCsKey_state_dueAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpState", args.state))
+          .order("desc")
+          .paginate(paginationOpts)
+      : ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpState_dueAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpState", args.state))
+          .order("desc")
+          .paginate(paginationOpts));
+
+    return {
+      page: result.page.map((row) => ({
+        conversationId: row._id,
+        customerName: row.customerName,
+        customerPhone: row.customerPhone,
+        orderId: row.orderId,
+        csName: row.assignedCsName,
+        stage: row.followUpNextStage,
+        state: row.followUpState as "sending" | "failed" | "unknown",
+        lastError: row.followUpLastError,
+        updatedAt: row.updatedAt,
+      })).sort((a, b) => b.updatedAt - a.updatedAt),
       isDone: result.isDone,
       continueCursor: result.continueCursor,
     };
@@ -134,6 +209,24 @@ const reservationResultValidator = v.union(
 
 const REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type ReservationStatus = "sending" | "accepted" | "failed" | "unknown";
+type ReservationResult =
+  | { shouldSend: false; status: ReservationStatus }
+  | {
+      shouldSend: true;
+      status: "sending";
+      to: string;
+      phoneNumberId: string;
+      templateName: string;
+      language: string;
+      orderedValues: string[];
+      idempotencyKey: string;
+    };
+type SendDueFollowUpResult = {
+  ok: boolean;
+  status: ReservationStatus;
+  providerMessageId?: string;
+  error?: string;
+};
 
 function followUpVariableValue(
   variable: "customer_name" | "product_name" | "order_id",
@@ -144,7 +237,7 @@ function followUpVariableValue(
   return values.orderId;
 }
 
-export const reserveDueFollowUp = mutation({
+export const reserveDueFollowUp = internalMutation({
   args: {
     conversationId: v.id("conversations"),
     stage: followUpStageValidator,
@@ -186,8 +279,8 @@ export const reserveDueFollowUp = mutation({
       conversation.followUpNextStage !== args.stage ||
       conversation.followUpDueAt === undefined ||
       conversation.followUpDueAt > currentTime ||
-      conversation.followUpDueAt < currentTime - FOLLOW_UP_EXPIRY_MS ||
-      conversation.followUpCycleInboundAt === undefined
+      conversation.followUpCycleInboundAt === undefined ||
+      conversation.followUpCycleInboundAt < currentTime - FOLLOW_UP_EXPIRY_MS
     ) {
       throw new Error("Follow-up ini tidak lagi jatuh tempo.");
     }
@@ -196,8 +289,8 @@ export const reserveDueFollowUp = mutation({
       .query("shippingRecaps")
       .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", orgId).eq("orderIdBerdu", conversation.orderId))
       .first();
-    if (recap && recap.status !== "cancelled" && recap.status !== "cancelled_after_export") {
-      throw new Error("Order sudah memiliki rekap closing.");
+    if (recap) {
+      throw new Error("Order sudah closing atau dibatalkan.");
     }
 
     const orders = await ctx.db
@@ -212,6 +305,13 @@ export const reserveDueFollowUp = mutation({
       .take(2);
     if (templates.length !== 1 || !templates[0].isActive) {
       throw new Error(`Template H+${args.stage} belum aktif.`);
+    }
+    const activeTemplates = await ctx.db
+      .query("followUpTemplates")
+      .withIndex("by_org_active_stage", (q) => q.eq("orgId", orgId).eq("isActive", true))
+      .take(4);
+    if (activeTemplates.length !== 3 || new Set(activeTemplates.map((row) => row.stage)).size !== 3) {
+      throw new Error("Lengkapi dan aktifkan template H+1, H+2, dan H+3 sebelum mengirim.");
     }
 
     const agentKey = conversation.followUpCsKey ?? csKey(conversation.assignedCsName);
@@ -248,6 +348,10 @@ export const reserveDueFollowUp = mutation({
       followUpLastError: undefined,
       updatedAt: currentTime,
     });
+    await ctx.scheduler.runAfter(2 * 60_000, internal.followUp.expireSendingReservation, {
+      conversationId: conversation._id,
+      requestId: args.requestId,
+    });
     return {
       shouldSend: true as const,
       status: "sending" as const,
@@ -261,7 +365,7 @@ export const reserveDueFollowUp = mutation({
   },
 });
 
-export const finalizeDueFollowUp = mutation({
+export const finalizeDueFollowUp = internalMutation({
   args: {
     conversationId: v.id("conversations"),
     requestId: v.string(),
@@ -334,6 +438,111 @@ export const finalizeDueFollowUp = mutation({
       updatedAt: finalizedAt,
     });
     return { ok: true as const, status: "accepted" as const };
+  },
+});
+
+export const expireSendingReservation = internalMutation({
+  args: {
+    conversationId: v.id("conversations"),
+    requestId: v.string(),
+  },
+  returns: v.object({ expired: v.boolean() }),
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversationId);
+    if (
+      !conversation
+      || conversation.followUpState !== "sending"
+      || conversation.followUpRequestId !== args.requestId
+    ) {
+      return { expired: false };
+    }
+    await ctx.db.patch(conversation._id, {
+      followUpState: "unknown",
+      followUpLastError: "Pengiriman tidak selesai dalam batas waktu. Periksa riwayat KirimDev sebelum mencoba lagi.",
+      updatedAt: Date.now(),
+    });
+    return { expired: true };
+  },
+});
+
+const sendDueFollowUpResultValidator = v.object({
+  ok: v.boolean(),
+  status: reservationStatusValidator,
+  providerMessageId: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
+
+export const sendDueFollowUp = action({
+  args: {
+    conversationId: v.id("conversations"),
+    stage: followUpStageValidator,
+    requestId: v.string(),
+  },
+  returns: sendDueFollowUpResultValidator,
+  handler: async (ctx, args): Promise<SendDueFollowUpResult> => {
+    const reservation: ReservationResult = await ctx.runMutation(internal.followUp.reserveDueFollowUp, args);
+    if (!reservation.shouldSend) {
+      return { ok: reservation.status === "accepted", status: reservation.status };
+    }
+
+    const apiKey = process.env.KIRIMDEV_API_KEY;
+    if (!apiKey) {
+      const error = "KIRIMDEV_API_KEY belum dikonfigurasi.";
+      await ctx.runMutation(internal.followUp.finalizeDueFollowUp, {
+        conversationId: args.conversationId,
+        requestId: args.requestId,
+        outcome: "failed",
+        error,
+      });
+      return { ok: false, status: "failed", error };
+    }
+
+    try {
+      const result = await sendKirimDevMessage({
+        apiKey,
+        baseUrl: process.env.KIRIMDEV_BASE_URL || "https://api.kirimdev.com/v1",
+        phoneNumberId: reservation.phoneNumberId,
+        payload: buildTemplatePayload(
+          reservation.to,
+          reservation.templateName,
+          reservation.language,
+          reservation.orderedValues,
+        ),
+        idempotencyKey: reservation.idempotencyKey,
+      });
+      if (result.ok) {
+        await ctx.runMutation(internal.followUp.finalizeDueFollowUp, {
+          conversationId: args.conversationId,
+          requestId: args.requestId,
+          outcome: "accepted",
+          providerMessageId: result.providerMessageId,
+          acceptedAt: Date.now(),
+        });
+        return {
+          ok: true,
+          status: "accepted",
+          providerMessageId: result.providerMessageId,
+        };
+      }
+
+      const outcome = result.statusUnknown ? "unknown" as const : "failed" as const;
+      await ctx.runMutation(internal.followUp.finalizeDueFollowUp, {
+        conversationId: args.conversationId,
+        requestId: args.requestId,
+        outcome,
+        error: result.error,
+      });
+      return { ok: false, status: outcome, error: result.error };
+    } catch {
+      const error = "Status pengiriman belum diketahui. Periksa riwayat KirimDev sebelum mencoba lagi.";
+      await ctx.runMutation(internal.followUp.finalizeDueFollowUp, {
+        conversationId: args.conversationId,
+        requestId: args.requestId,
+        outcome: "unknown",
+        error,
+      });
+      return { ok: false, status: "unknown", error };
+    }
   },
 });
 
@@ -462,12 +671,13 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
     return { stage1, stage2, stage3 };
 }
 
-export const getFollowUpCandidates = query({
-  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getFollowUpCandidates", args.csName);
-    return followUpCandidatesHandler(ctx, { ...args, orgId, csName: effectiveCsName });
+export const getFollowUpCandidatesDiagnostic = internalQuery({
+  args: {
+    orgId: v.id("organizations"),
+    csName: v.optional(v.string()),
+    nowOverride: v.optional(v.number()),
   },
+  handler: followUpCandidatesHandler,
 });
 
 export const archiveFollowUp = mutation({

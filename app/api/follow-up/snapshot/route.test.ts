@@ -45,7 +45,10 @@ test('snapshot ignores a client CS override and passes signed identity with expl
       isDone: true,
       continueCursor: 'done',
     })
-    .mockResolvedValueOnce({ totalClosings: 0, fromFollowUp: 0, byStage: { h1: 0, h2: 0, h3: 0 } });
+    .mockResolvedValueOnce({ totalClosings: 0, fromFollowUp: 0, byStage: { h1: 0, h2: 0, h3: 0 } })
+    .mockResolvedValueOnce({ page: [], isDone: true, continueCursor: 'sending-done' })
+    .mockResolvedValueOnce({ page: [], isDone: true, continueCursor: 'failed-done' })
+    .mockResolvedValueOnce({ page: [], isDone: true, continueCursor: 'unknown-done' });
 
   const response = await POST(request({ csName: 'Lila' }));
 
@@ -60,6 +63,12 @@ test('snapshot ignores a client CS override and passes signed identity with expl
     startAt: 200_000 - 30 * 24 * 60 * 60 * 1000,
     endAt: 200_000,
     csName: 'Aisyah',
+  });
+  expect(state.query.mock.calls[2][1]).toEqual({
+    csName: 'Aisyah', state: 'sending', paginationOpts: { numItems: 50, cursor: null },
+  });
+  expect(state.query.mock.calls[4][1]).toEqual({
+    csName: 'Aisyah', state: 'unknown', paginationOpts: { numItems: 50, cursor: null },
   });
   expect((await response.json()).candidates).toMatchObject({
     stage1: [{ stage: 1, orderId: 'A' }],
