@@ -335,7 +335,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     if (lastInbound && lastInbound.createdAt <= createdAt && effectiveCsKey) {
       const sameCycle = conversation.followUpCycleInboundAt === lastInbound.createdAt;
       if (!sameCycle || conversation.followUpState == null) {
-        const armed = armH1AfterOutbound(lastInbound.createdAt, effectiveCsKey);
+        const armed = armH1AfterOutbound(lastInbound.createdAt, effectiveCsKey, createdAt);
         convPatch.followUpCsKey = armed.csKey;
         convPatch.followUpCycleInboundAt = lastInbound.createdAt;
         convPatch.followUpNextStage = armed.nextStage;

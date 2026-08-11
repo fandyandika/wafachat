@@ -50,7 +50,7 @@ test("new inbound clears an old due follow-up cycle", async () => {
   expect(conversation?.followUpState).toBeUndefined();
 });
 
-test("real CS outbound after inbound arms H+1 from the inbound timestamp", async () => {
+test("real CS outbound after inbound arms H+1 from the CS reply timestamp", async () => {
   const t = convexTest(schema);
   await seedOrg(t);
   const inboundAt = 10_000;
@@ -79,7 +79,7 @@ test("real CS outbound after inbound arms H+1 from the inbound timestamp", async
     followUpCsKey: "aisyah",
     followUpCycleInboundAt: inboundAt,
     followUpNextStage: 1,
-    followUpDueAt: inboundAt + DAY,
+    followUpDueAt: inboundAt + 1_000 + DAY,
     followUpState: "waiting",
   });
 });
@@ -148,7 +148,7 @@ test("an arbitrary CS outbound does not advance an approved-template follow-up s
   const conversation = await t.run(async (ctx) => (await ctx.db.get(inbound.conversationId)) as Doc<"conversations"> | null);
   expect(conversation).toMatchObject({
     followUpNextStage: 1,
-    followUpDueAt: inboundAt + DAY,
+    followUpDueAt: inboundAt + 1_000 + DAY,
     followUpState: "waiting",
   });
 });

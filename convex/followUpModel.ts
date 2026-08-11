@@ -9,7 +9,7 @@ export type FollowUpState =
   | "archived";
 
 export const FOLLOW_UP_DAY_MS = 24 * 60 * 60 * 1_000;
-export const FOLLOW_UP_EXPIRY_MS = 5 * FOLLOW_UP_DAY_MS;
+export const FOLLOW_UP_EXPIRY_MS = 7 * FOLLOW_UP_DAY_MS;
 
 export function resetForInbound(cycleInboundAt: number) {
   return {
@@ -20,11 +20,11 @@ export function resetForInbound(cycleInboundAt: number) {
   } as const;
 }
 
-export function armH1AfterOutbound(cycleInboundAt: number, csKey: string) {
+export function armH1AfterOutbound(cycleInboundAt: number, csKey: string, outboundAt: number) {
   return {
     csKey,
     nextStage: 1,
-    dueAt: cycleInboundAt + FOLLOW_UP_DAY_MS,
+    dueAt: outboundAt + FOLLOW_UP_DAY_MS,
     state: "waiting",
   } as const;
 }

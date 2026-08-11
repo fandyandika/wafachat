@@ -62,7 +62,7 @@ test("listDueFollowUps paginates 150 due conversations without a read-limit fail
   expect(new Set([...first.page, ...second.page].map((row) => String(row.conversationId))).size).toBe(150);
 });
 
-test("listDueFollowUps excludes a stale inbound cycle even when dueAt is recent", async () => {
+test("listDueFollowUps excludes an inbound cycle older than seven days even when dueAt is recent", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "expiry-admin", role: "admin", name: "Admin", email: "expiry@wafachat.test" });
   const orgId = await seedOrg(t);
@@ -72,7 +72,7 @@ test("listDueFollowUps excludes a stale inbound cycle even when dueAt is recent"
     orderId: "STALE-CYCLE",
     customerPhone: "62890009999",
     followUpCsKey: "nabila",
-    followUpCycleInboundAt: now - 6 * 24 * HOUR,
+    followUpCycleInboundAt: now - 8 * 24 * HOUR,
     followUpNextStage: 1,
     followUpDueAt: now - HOUR,
     followUpState: "waiting",
