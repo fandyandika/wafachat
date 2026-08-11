@@ -37,6 +37,8 @@ test("settings uses task sections and no native browser dialogs", () => {
   expect(source).toContain('htmlFor={`${cs.key}-${field}`}');
   expect(source).toContain('id={`${cs.key}-${field}`}');
   expect(source).toContain("min-h-11 cursor-pointer");
+  expect(source).toContain("KirimDev phone_number_id");
+  expect(source).toContain("setProviderNumberIds");
   for (const [control] of source.matchAll(
     /<(?:input|select|button)\b[\s\S]*?\n\s*>/g,
   )) {

@@ -7,7 +7,7 @@ import { DEFAULT_CONFIGS } from "./csConfigs";
 type CsRow = {
   csName: string; normalizedName: string; key: string; avatarUrl: string | null;
   isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
-  reportingEnabled: boolean; csPhone?: string; berduStaffIds?: string[];
+  reportingEnabled: boolean; csPhone?: string; providerNumberId?: string; berduStaffIds?: string[];
   registryKey?: string; nameAliases?: string[];
 };
 
@@ -18,13 +18,15 @@ export const listCs = query({
     // CS registry comes from csConfigs (~6 rows) + built-in DEFAULT_CONFIGS — NOT from a
     // 90-day scan of the orders table (that read ~18k docs on every render, on every page,
     // and was the single biggest avoidable DB I/O cost). New CS are registered in Settings.
-    const stored = await ctx.db.query("csConfigs").collect();
-    // Filter to viewer-org's configs only; built-in DEFAULT_CONFIGS still shown to all (they have no orgId)
-    const filtered = stored.filter((c) => String(c.orgId) === String(orgId));
+    const filtered = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .take(101);
+    if (filtered.length > 100) throw new Error("Terlalu banyak konfigurasi CS.");
 
     type Entry = {
       csName: string; isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
-      reportingEnabled: boolean; csPhone?: string; berduStaffIds?: string[]; avatarStorageId?: typeof stored[number]["avatarStorageId"];
+      reportingEnabled: boolean; csPhone?: string; providerNumberId?: string; berduStaffIds?: string[]; avatarStorageId?: typeof filtered[number]["avatarStorageId"];
       registryKey?: string; nameAliases?: string[];
     };
     const byKey = new Map<string, Entry>();
@@ -44,7 +46,7 @@ export const listCs = query({
       byKey.set(k, {
         csName: c.csName, isActive: c.isActive, orderAutomationEnabled: c.orderAutomationEnabled,
         aiAssistantEnabled: c.aiAssistantEnabled, reportingEnabled: c.reportingEnabled,
-        csPhone: c.csPhone, berduStaffIds: c.berduStaffIds, avatarStorageId: c.avatarStorageId,
+        csPhone: c.csPhone, providerNumberId: c.providerNumberId, berduStaffIds: c.berduStaffIds, avatarStorageId: c.avatarStorageId,
         registryKey: c.key, nameAliases: c.nameAliases,
       });
     }
@@ -59,6 +61,7 @@ export const listCs = query({
         aiAssistantEnabled: e.aiAssistantEnabled,
         reportingEnabled: e.reportingEnabled,
         csPhone: e.csPhone,
+        providerNumberId: e.providerNumberId,
         berduStaffIds: e.berduStaffIds,
         registryKey: e.registryKey,
         nameAliases: e.nameAliases,

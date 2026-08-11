@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type HTMLAttributes } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import {
@@ -51,6 +51,7 @@ export function settingsSectionsForRole(role: "admin" | "cs" | null) {
 type CsRow = {
   csName: string;
   csPhone?: string;
+  providerNumberId?: string;
   orderAutomationEnabled: boolean;
   aiAssistantEnabled: boolean;
   reportingEnabled: boolean;
@@ -237,6 +238,8 @@ function CsvField({
   disabled,
   label,
   placeholder,
+  maxItems,
+  inputMode,
   save,
 }: {
   csName: string;
@@ -244,6 +247,8 @@ function CsvField({
   disabled: boolean;
   label: string;
   placeholder: string;
+  maxItems?: number;
+  inputMode?: HTMLAttributes<HTMLInputElement>["inputMode"];
   save: (value: string[]) => Promise<unknown>;
 }) {
   const [value, setValue] = useState(initial.join(", "));
@@ -266,6 +271,7 @@ function CsvField({
           id={id}
           className="min-h-11 min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs sm:min-h-7"
           placeholder={placeholder}
+          inputMode={inputMode}
           value={value}
           disabled={disabled || busy}
           onChange={(event) => setValue(event.target.value)}
@@ -280,6 +286,9 @@ function CsvField({
               setBusy(true);
               setErr(null);
               try {
+                if (maxItems !== undefined && parsed.length > maxItems) {
+                  throw new Error(`Maksimal ${maxItems} nilai.`);
+                }
                 await save(parsed);
               } catch (error) {
                 setErr(
@@ -711,6 +720,7 @@ export function SettingsDashboard() {
   const renameCs = useMutation(api.csConfigs.renameCs);
   const deleteCsConfig = useMutation(api.csConfigs.deleteCsConfig);
   const setBerduStaffIds = useMutation(api.csConfigs.setBerduStaffIds);
+  const setProviderNumberIds = useMutation(api.csConfigs.setProviderNumberIds);
   const setNameAliases = useMutation(api.agents.setNameAliases);
   const requestedSection = searchParams.get("section");
   const [section, setSection] = useState<SettingsSection>(
@@ -1007,6 +1017,18 @@ export function SettingsDashboard() {
                   </div>
                 )}
                 <div className="grid gap-3 lg:grid-cols-2">
+                  <CsvField
+                    csName={cs.csName}
+                    initial={cs.providerNumberId ? [cs.providerNumberId] : []}
+                    disabled={busy === cs.csName}
+                    label="KirimDev phone_number_id"
+                    placeholder="Contoh: 1197250776802755"
+                    maxItems={1}
+                    inputMode="numeric"
+                    save={(providerNumberIds) =>
+                      setProviderNumberIds({ csName: cs.csName, providerNumberIds })
+                    }
+                  />
                   <CsvField
                     csName={cs.csName}
                     initial={cs.berduStaffIds ?? []}

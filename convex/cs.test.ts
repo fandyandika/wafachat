@@ -21,6 +21,8 @@ test("listCs derives from csConfigs + DEFAULT_CONFIGS, NOT from orders (no 90-da
     await ctx.db.insert("csConfigs", {
       orgId,
       normalizedName: "nabila", csName: "Nabila",
+      providerNumberId: "1149779461560484",
+      providerNumberIds: ["1149779461560484"],
       orderAutomationEnabled: false, aiAssistantEnabled: false, reportingEnabled: true, isActive: true,
       createdAt: t0, updatedAt: t0,
     });
@@ -37,6 +39,7 @@ test("listCs derives from csConfigs + DEFAULT_CONFIGS, NOT from orders (no 90-da
   // Default flags surface for a default-only CS (CS Aisyah default orderAutomationEnabled = true):
   expect(rows.find((r) => r.key === "aisyah")!.orderAutomationEnabled).toBe(true);
   expect(rows.find((r) => r.key === "aisyah")!.avatarUrl).toBeNull();
+  expect(rows.find((r) => r.key === "nabila")!.providerNumberId).toBe("1149779461560484");
 });
 
 test("setCsAvatar stores avatarStorageId and replacing removes the old file", async () => {
