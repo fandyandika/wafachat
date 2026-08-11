@@ -156,7 +156,17 @@ export const processConversationIds = internalMutation({
       ) continue;
       const reason = await closeReason(ctx, conversation, args.orgId, args.now);
       if (!reason) continue;
-      if (!args.dryRun) await ctx.db.patch(id, { status: "closed", updatedAt: args.now });
+      if (!args.dryRun) {
+        await ctx.db.patch(id, {
+          status: "closed",
+          followUpNextStage: undefined,
+          followUpDueAt: undefined,
+          followUpState: reason === "stale" ? "archived" : "complete",
+          followUpRequestId: undefined,
+          followUpLastError: undefined,
+          updatedAt: args.now,
+        });
+      }
       if (reason === "won") closedWon++;
       else if (reason === "marker") closedMarker++;
       else closedStale++;

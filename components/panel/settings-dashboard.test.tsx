@@ -57,6 +57,7 @@ test("only administrators receive administrative setting sections", () => {
     "team",
     "cs",
     "expedition",
+    "follow-up",
   ]);
 });
 

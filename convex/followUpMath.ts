@@ -23,9 +23,9 @@ export const FOLLOWUP_STAGES: FollowUpStageConfig[] = [
   { stage: 1, label: "H+1", templateName: "followup_h1", language: "id",
     minHoursSinceLastInbound: 24 },                                                    // >=24h, 0 touches
   { stage: 2, label: "H+2", templateName: "followup_h2", language: "id",
-    requiresPrevStage: 1, minHoursSinceLastInbound: 48 }, // >=48h (day 2), 1 touch already sent
+    requiresPrevStage: 1, minHoursSinceLastInbound: 48, minHoursSincePrevStage: 24 },
   { stage: 3, label: "H+3", templateName: "followup_h3", language: "id",
-    requiresPrevStage: 2, minHoursSinceLastInbound: 72 }, // >=72h (day 3), 2 touches -> goodbye -> archive
+    requiresPrevStage: 2, minHoursSinceLastInbound: 72, minHoursSincePrevStage: 24 },
 ];
 
 const HOUR = 3_600_000;

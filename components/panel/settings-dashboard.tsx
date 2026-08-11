@@ -32,14 +32,16 @@ import { Switch } from "@/components/ui/switch";
 import { resizeImage } from "@/lib/resize-image";
 import { cn } from "@/lib/utils";
 import { AdminExpeditionSettings } from "@/components/panel/admin-expedition-settings";
+import { FollowUpTemplateSettings } from "@/components/panel/follow-up-template-settings";
 
-export type SettingsSection = "account" | "organization" | "team" | "cs" | "expedition";
+export type SettingsSection = "account" | "organization" | "team" | "cs" | "expedition" | "follow-up";
 const SETTINGS_SECTIONS: Array<{ value: SettingsSection; label: string }> = [
   { value: "account", label: "Akun" },
   { value: "organization", label: "Organisasi" },
   { value: "team", label: "Tim" },
   { value: "cs", label: "Konfigurasi CS" },
   { value: "expedition", label: "Admin Ekspedisi" },
+  { value: "follow-up", label: "Template Follow-up" },
 ];
 
 export function settingsSectionsForRole(role: "admin" | "cs" | null) {
@@ -52,7 +54,6 @@ type CsRow = {
   orderAutomationEnabled: boolean;
   aiAssistantEnabled: boolean;
   reportingEnabled: boolean;
-  autoFollowUpEnabled?: boolean;
   isActive: boolean;
   berduStaffIds?: string[];
   registryKey?: string;
@@ -68,18 +69,12 @@ const CS_TOGGLES: Array<{
     | "orderAutomationEnabled"
     | "aiAssistantEnabled"
     | "reportingEnabled"
-    | "autoFollowUpEnabled"
     | "isActive"
   >;
 }> = [
   { icon: Zap, label: "Otomasi Order", field: "orderAutomationEnabled" },
   { icon: MessageSquare, label: "AI Assistant", field: "aiAssistantEnabled" },
   { icon: TrendingUp, label: "Reporting", field: "reportingEnabled" },
-  {
-    icon: MessageSquare,
-    label: "Auto Follow-up",
-    field: "autoFollowUpEnabled",
-  },
   { icon: Power, label: "Aktif", field: "isActive" },
 ];
 
@@ -811,7 +806,6 @@ export function SettingsDashboard() {
         orderAutomationEnabled: cs.orderAutomationEnabled,
         aiAssistantEnabled: cs.aiAssistantEnabled,
         reportingEnabled: cs.reportingEnabled,
-        autoFollowUpEnabled: cs.autoFollowUpEnabled ?? undefined,
         isActive: cs.isActive,
         [field]: value,
       });
@@ -1084,6 +1078,7 @@ export function SettingsDashboard() {
           <AdminExpeditionSettings />
         </section>
       )}
+      {isAdmin && section === "follow-up" && <FollowUpTemplateSettings />}
       <AlertDialog
         open={Boolean(deleting)}
         onOpenChange={(open) => {

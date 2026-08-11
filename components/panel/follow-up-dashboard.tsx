@@ -6,7 +6,6 @@ import { api } from '@/convex/_generated/api';
 import type { Id } from '@/convex/_generated/dataModel';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Switch } from '@/components/ui/switch';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,19 +23,38 @@ type Candidate = {
   conversationId: string;
   customerName: string;
   customerPhone: string;
-  productName: string;
   orderId: string;
   csName: string;
-  lastInboundAt: number;
-  touchAts: number[];
-  lastMessageText: string;
+  csKey: string;
+  cycleInboundAt: number;
+  stage: 1 | 2 | 3;
+  dueAt: number;
 };
 type Staged = Candidate & { stage: 1 | 2 | 3 };
 type CandidatesData = { stage1: Candidate[]; stage2: Candidate[]; stage3: Candidate[] };
 type KpiData = { totalClosings: number; fromFollowUp: number; byStage: { h1: number; h2: number; h3: number } };
-type SnapshotData = { candidates: CandidatesData; kpi: KpiData };
+type AttentionRow = {
+  conversationId: string;
+  customerName: string;
+  customerPhone: string;
+  orderId: string;
+  csName: string;
+  stage?: 1 | 2 | 3;
+  state: 'sending' | 'failed' | 'unknown';
+  lastError?: string;
+  updatedAt: number;
+};
+type AttentionState = AttentionRow['state'];
+type AttentionPagination = Record<AttentionState, { isDone: boolean; continueCursor: string }>;
+type SnapshotData = {
+  candidates: CandidatesData;
+  kpi: KpiData;
+  attention: AttentionRow[];
+  attentionPagination: AttentionPagination;
+  pagination: { isDone: boolean; continueCursor: string };
+};
 
-type Tab = 'all' | 'stage1' | 'stage2' | 'stage3' | 'closing' | 'archived';
+type Tab = 'all' | 'stage1' | 'stage2' | 'stage3' | 'attention' | 'closing' | 'archived';
 
 type ArchivedRow = {
   conversationId: string;
@@ -63,18 +81,47 @@ const STAGE_LABEL: Record<1 | 2 | 3, string> = { 1: 'H+1', 2: 'H+2', 3: 'H+3' };
 const STAGE_TEMPLATE_LABELS: Record<1 | 2 | 3, string> = {
   1: 'H+1 · Tindak lanjut pertama',
   2: 'H+2 · Pengingat',
-  3: 'H+3 · Penawaran terakhir (penutup)',
+  3: 'H+3 · Follow-up terakhir',
 };
 
-export async function fetchFollowUpSnapshot(csName: string | undefined, request: typeof fetch = fetch): Promise<SnapshotData> {
+export async function fetchFollowUpSnapshot(
+  csName: string | undefined,
+  request: typeof fetch = fetch,
+  cursor?: string,
+): Promise<SnapshotData> {
   const response = await request('/api/follow-up/snapshot', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ csName }),
+    body: JSON.stringify({ csName, cursor }),
   });
   const result = await response.json();
   if (!response.ok || !result.ok) throw new Error(result.error || 'Gagal memuat antrean follow-up.');
-  return { candidates: result.candidates, kpi: result.kpi };
+  return {
+    candidates: result.candidates,
+    kpi: result.kpi,
+    attention: result.attention ?? [],
+    attentionPagination: result.attentionPagination ?? {
+      sending: { isDone: true, continueCursor: '' },
+      failed: { isDone: true, continueCursor: '' },
+      unknown: { isDone: true, continueCursor: '' },
+    },
+    pagination: result.pagination ?? { isDone: true, continueCursor: '' },
+  };
+}
+
+async function fetchFollowUpAttention(
+  csName: string | undefined,
+  state: AttentionState,
+  cursor: string,
+): Promise<{ page: AttentionRow[]; isDone: boolean; continueCursor: string }> {
+  const response = await fetch('/api/follow-up/attention', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ csName, state, cursor }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) throw new Error(result.error || 'Gagal memuat status Follow-up.');
+  return result;
 }
 
 export function getNextFollowUpTabIndex(key: string, currentIndex: number, tabCount: number): number | null {
@@ -100,31 +147,6 @@ function Avatar({ name }: { name: string }) {
       {initial}
     </div>
   );
-}
-
-function ProgressDots({ touchAts }: { touchAts: number[] }) {
-  return (
-    <div className="flex items-center gap-1" title={`${touchAts.length} follow-up terkirim`}>
-      {[1, 2, 3].map((n, i) => {
-        const done = touchAts.length > i;
-        return (
-          <span
-            key={n}
-            className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${
-              done ? 'bg-emerald-500 text-white' : 'border border-border bg-muted text-muted-foreground'
-            }`}
-          >
-            {n}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
-function truncateText(text: string, maxLen = 50): string {
-  if (!text) return '';
-  return text.length > maxLen ? text.substring(0, maxLen) + '…' : text;
 }
 
 export function RowCheck({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
@@ -189,8 +211,8 @@ function ChatListItem({
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <h3 className="truncate font-semibold text-foreground">{candidate.customerName || candidate.customerPhone || 'Unknown'}</h3>
-          <span className={`whitespace-nowrap text-xs font-medium ${Date.now() - candidate.lastInboundAt >= 24 * 60 * 60 * 1000 ? 'text-destructive' : 'text-muted-foreground'}`}>
-            Tertunda {formatRelativeTime(candidate.lastInboundAt)}
+          <span className="whitespace-nowrap text-xs font-medium text-destructive">
+            Jatuh tempo {formatRelativeTime(candidate.dueAt)}
           </span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
@@ -202,9 +224,8 @@ function ChatListItem({
               {candidate.csName?.replace(/^CS\s+/i, '') || '—'}
             </span>
           </div>
-          <ProgressDots touchAts={candidate.touchAts} />
+          <span className="truncate text-[11px] text-muted-foreground">{candidate.orderId}</span>
         </div>
-        <p className="mt-1 truncate text-xs text-muted-foreground">Pesan: {truncateText(candidate.lastMessageText)}</p>
         <p className="mt-1 text-xs font-medium text-primary">Tindakan berikutnya: kirim {STAGE_LABEL[candidate.stage]}</p>
       </div>
     </div>
@@ -237,6 +258,24 @@ function ArchivedListItem({
       <Button onClick={onRestore} disabled={isRestoring} variant="ghost" size="sm" className="shrink-0">
         {isRestoring ? 'Pulih…' : 'Pulihkan'}
       </Button>
+    </div>
+  );
+}
+
+function AttentionListItem({ row }: { row: AttentionRow }) {
+  const stateLabel = row.state === 'sending' ? 'Sedang diproses' : row.state === 'unknown' ? 'Status belum diketahui' : 'Pengiriman gagal';
+  return (
+    <div className="flex items-start gap-3 border-b border-border px-3 py-3">
+      <Avatar name={row.customerName} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="truncate font-semibold text-foreground">{row.customerName || row.customerPhone}</h3>
+          <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelativeTime(row.updatedAt)}</span>
+        </div>
+        <p className="mt-1 text-xs font-semibold text-amber-700">{stateLabel}{row.stage ? ` · ${STAGE_LABEL[row.stage]}` : ''}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{row.lastError || 'Tunggu pembaruan status sebelum mengambil tindakan.'}</p>
+        <p className="mt-1 truncate text-[11px] text-muted-foreground">{row.orderId} · {row.csName}</p>
+      </div>
     </div>
   );
 }
@@ -290,13 +329,13 @@ function MessageBubble({ message }: { message: any }) {
 
 // Conversation pane (single lead)
 function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged | null; onBack?: () => void; onChanged?: () => void }) {
-  const [selectedStage, setSelectedStage] = useState<1 | 2 | 3>(1);
   const [sending, setSending] = useState(false);
   const [archiving, setArchiving] = useState(false);
-  const [movingStage, setMovingStage] = useState(false);
   const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
   const [status, setStatus] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const requestIdRef = useRef<string | null>(null);
+  const templateSetup = useQuery(api.followUpTemplates.getFollowUpTemplateSetup, {});
 
   const messages = useQuery(
     api.messages.listMessages,
@@ -308,8 +347,9 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
   }, [messages]);
 
   useEffect(() => {
-    if (candidate) setSelectedStage(candidate.stage);
-  }, [candidate?.conversationId, candidate?.stage]);
+    requestIdRef.current = null;
+    setStatus(null);
+  }, [candidate?.conversationId]);
 
   if (!candidate) {
     return (
@@ -319,25 +359,31 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
     );
   }
 
-  const isStageDone = candidate.touchAts.length > selectedStage - 1;
-  const busy = sending || archiving || movingStage;
+  const busy = sending || archiving;
+  const templateReady = templateSetup?.ready === true;
 
   async function handleSend() {
     if (!candidate) return;
     setSending(true);
     setStatus(null);
+    const requestId = requestIdRef.current ?? crypto.randomUUID();
+    requestIdRef.current = requestId;
     try {
-      const r = await fetch('/api/follow-up/send', {
+      const response = await fetch('/api/follow-up/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: candidate.conversationId, stage: selectedStage }),
-      }).then((x) => x.json());
+        body: JSON.stringify({ conversationId: candidate.conversationId, stage: candidate.stage, requestId }),
+      });
+      const r = await response.json();
       if (r.ok) {
-        setStatus({ type: 'ok', message: `Follow-up ${STAGE_LABEL[selectedStage]} terkirim!` });
+        requestIdRef.current = null;
+        setStatus({ type: 'ok', message: `Follow-up ${STAGE_LABEL[candidate.stage]} diterima KirimDev.` });
         onChanged?.();
         setTimeout(() => setStatus(null), 2000);
       } else {
+        if (r.status !== 'unknown') requestIdRef.current = null;
         setStatus({ type: 'error', message: r.error || 'Gagal mengirim' });
+        onChanged?.();
       }
     } catch {
       setStatus({ type: 'error', message: 'Gagal menghubungi server' });
@@ -370,30 +416,6 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
     }
   }
 
-  async function handleMoveStage(newStage: 1 | 2 | 3) {
-    if (!candidate || candidate.stage === newStage) return;
-    setMovingStage(true);
-    setStatus(null);
-    try {
-      const r = await fetch('/api/follow-up/set-stage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: candidate.conversationId, stage: newStage }),
-      }).then((x) => x.json());
-      if (r.ok) {
-        setStatus({ type: 'ok', message: `Dipindah ke ${STAGE_LABEL[newStage]}` });
-        onChanged?.();
-        setTimeout(() => setStatus(null), 2000);
-      } else {
-        setStatus({ type: 'error', message: r.error || 'Gagal memindah tahap' });
-      }
-    } catch {
-      setStatus({ type: 'error', message: 'Gagal menghubungi server' });
-    } finally {
-      setMovingStage(false);
-    }
-  }
-
   return (
     <div className="flex h-full flex-col bg-background">
       {/* Header — compact (WhatsApp-like) */}
@@ -411,24 +433,7 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
               <p className="truncate text-xs text-muted-foreground">{candidate.customerPhone}</p>
             </div>
           </div>
-          <ProgressDots touchAts={candidate.touchAts} />
-        </div>
-        {/* Manual stage move */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-[11px] font-medium text-muted-foreground">Pindah:</span>
-          {([1, 2, 3] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => handleMoveStage(s)}
-              disabled={busy}
-              title="Geser manual kalau deteksi otomatis kurang pas"
-              className={`rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
-                candidate.stage === s ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-accent'
-              }`}
-            >
-              {STAGE_LABEL[s]}
-            </button>
-          ))}
+          <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-800">{STAGE_LABEL[candidate.stage]}</span>
         </div>
       </div>
 
@@ -471,23 +476,20 @@ function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged 
 
       {/* Composer */}
       <div className="shrink-0 space-y-1.5 border-t border-border bg-card p-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
-        <select
-          value={selectedStage}
-          onChange={(e) => setSelectedStage(parseInt(e.target.value) as 1 | 2 | 3)}
-          disabled={busy}
-          className="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground"
-        >
-          <option value={1}>{STAGE_TEMPLATE_LABELS[1]}</option>
-          <option value={2}>{STAGE_TEMPLATE_LABELS[2]}</option>
-          <option value={3}>{STAGE_TEMPLATE_LABELS[3]}</option>
-        </select>
+        <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/50 px-3 py-2 text-sm">
+          <span className="font-medium">{STAGE_TEMPLATE_LABELS[candidate.stage]}</span>
+          <span className="text-xs text-muted-foreground">Tahap ditentukan sistem</span>
+        </div>
+        {!templateReady && (
+          <p className="text-xs text-amber-700">Lengkapi tiga template di <a className="font-semibold underline" href="/panel/settings?section=follow-up">Settings</a> sebelum mengirim.</p>
+        )}
         <div className="flex items-center gap-2">
           <Button
             onClick={handleSend}
-            disabled={busy || isStageDone}
+            disabled={busy || !templateReady}
             className="h-10 flex-1 bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-700"
           >
-            {sending ? 'Mengirim…' : isStageDone ? `${STAGE_LABEL[selectedStage]} sudah dikirim` : `Kirim ${STAGE_LABEL[selectedStage]}`}
+            {sending ? 'Mengirim…' : `Kirim ${STAGE_LABEL[candidate.stage]}`}
           </Button>
           <Button onClick={() => setArchiveConfirmOpen(true)} disabled={busy} variant="outline" className="h-10 px-4">
             {archiving ? '…' : 'Arsip'}
@@ -581,15 +583,13 @@ export function FollowUpDashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showConvOnMobile, setShowConvOnMobile] = useState(false);
   const [sortBy, setSortBy] = useState<'oldest' | 'newest'>('oldest');
-  const [autoSendEnabled, setAutoSendEnabled] = useState(false);
-  const [togglingAutoSend, setTogglingAutoSend] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   // Bulk select
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; action: string } | null>(null);
   const [bulkStatus, setBulkStatus] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
-  const [bulkConfirmation, setBulkConfirmation] = useState<'kirim' | 'arsip' | null>(null);
+  const [bulkConfirmation, setBulkConfirmation] = useState<'arsip' | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
@@ -615,6 +615,15 @@ export function FollowUpDashboard() {
   // which is what blew the DB I/O budget. (Also fails gracefully if Convex is down.)
   const [data, setData] = useState<CandidatesData | undefined>(undefined);
   const [kpiData, setKpiData] = useState<KpiData | undefined>(undefined);
+  const [attentionData, setAttentionData] = useState<AttentionRow[]>([]);
+  const [attentionPagination, setAttentionPagination] = useState<AttentionPagination>({
+    sending: { isDone: true, continueCursor: '' },
+    failed: { isDone: true, continueCursor: '' },
+    unknown: { isDone: true, continueCursor: '' },
+  });
+  const [loadingAttention, setLoadingAttention] = useState(false);
+  const [pagination, setPagination] = useState({ isDone: true, continueCursor: '' });
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -627,12 +636,63 @@ export function FollowUpDashboard() {
       const snapshot = await fetchFollowUpSnapshot(csName);
       setData(snapshot.candidates);
       setKpiData(snapshot.kpi);
+      setAttentionData(snapshot.attention);
+      setAttentionPagination(snapshot.attentionPagination);
+      setPagination(snapshot.pagination);
     } catch (error) {
       setSnapshotError(error instanceof Error ? error.message : 'Gagal memuat antrean follow-up.');
     } finally {
       setRefreshing(false);
     }
   }, [me, csName]);
+
+  const loadMore = useCallback(async () => {
+    if (!pagination.continueCursor || pagination.isDone || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const snapshot = await fetchFollowUpSnapshot(csName, fetch, pagination.continueCursor);
+      setData((current) => {
+        const merge = (left: Candidate[] = [], right: Candidate[] = []) => {
+          const rows = new Map(left.map((row) => [row.conversationId, row]));
+          right.forEach((row) => rows.set(row.conversationId, row));
+          return [...rows.values()];
+        };
+        return {
+          stage1: merge(current?.stage1, snapshot.candidates.stage1),
+          stage2: merge(current?.stage2, snapshot.candidates.stage2),
+          stage3: merge(current?.stage3, snapshot.candidates.stage3),
+        };
+      });
+      setPagination(snapshot.pagination);
+    } catch (error) {
+      setSnapshotError(error instanceof Error ? error.message : 'Gagal memuat antrean berikutnya.');
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [csName, loadingMore, pagination]);
+
+  const loadMoreAttention = useCallback(async () => {
+    if (loadingAttention) return;
+    const state = (['sending', 'failed', 'unknown'] as const).find((key) => !attentionPagination[key].isDone);
+    if (!state) return;
+    setLoadingAttention(true);
+    try {
+      const result = await fetchFollowUpAttention(csName, state, attentionPagination[state].continueCursor);
+      setAttentionData((current) => {
+        const rows = new Map(current.map((row) => [row.conversationId, row]));
+        result.page.forEach((row) => rows.set(row.conversationId, row));
+        return [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+      });
+      setAttentionPagination((current) => ({
+        ...current,
+        [state]: { isDone: result.isDone, continueCursor: result.continueCursor },
+      }));
+    } catch (error) {
+      setSnapshotError(error instanceof Error ? error.message : 'Gagal memuat status berikutnya.');
+    } finally {
+      setLoadingAttention(false);
+    }
+  }, [attentionPagination, csName, loadingAttention]);
 
   useEffect(() => {
     loadSnapshot();
@@ -642,13 +702,6 @@ export function FollowUpDashboard() {
   // bounded ranges — fine to keep reactive.
   const archivedData = useQuery(api.followUp.getArchivedFollowUps, me && activeTab === 'archived' ? { csName } : 'skip');
   const closingData = useQuery(api.followUp.getClosedFollowUps, me && activeTab === 'closing' ? { csName, sinceDays: 7 } : 'skip');
-  const autoFollowUpData = useQuery(api.followUp.getAutoFollowUp, me && csName ? { csName } : 'skip');
-
-  useEffect(() => {
-    if (autoFollowUpData && typeof autoFollowUpData === 'object' && 'enabled' in autoFollowUpData) {
-      setAutoSendEnabled(autoFollowUpData.enabled);
-    }
-  }, [autoFollowUpData]);
 
   const isLoading =
     activeTab === 'archived'
@@ -662,8 +715,6 @@ export function FollowUpDashboard() {
     ...(data?.stage2 ?? []).map((c) => ({ ...c, stage: 2 as const })),
     ...(data?.stage3 ?? []).map((c) => ({ ...c, stage: 3 as const })),
   ];
-  const stageById = new Map(withStage.map((c) => [c.conversationId, c.stage]));
-
   const q = searchQuery.trim().toLowerCase();
   const matchesSearch = (name: string, phone: string) =>
     !q || name.toLowerCase().includes(q) || phone.includes(q);
@@ -675,7 +726,7 @@ export function FollowUpDashboard() {
   const activeList: Staged[] = withStage
     .filter((c) => (wantStage ? c.stage === wantStage : true))
     .filter((c) => matchesSearch(c.customerName, c.customerPhone))
-    .sort((a, b) => (sortBy === 'oldest' ? a.lastInboundAt - b.lastInboundAt : b.lastInboundAt - a.lastInboundAt));
+    .sort((a, b) => (sortBy === 'oldest' ? a.dueAt - b.dueAt : b.dueAt - a.dueAt));
 
   const archivedList: ArchivedRow[] = (archivedData ?? [])
     .filter((c) => matchesSearch(c.customerName, c.customerPhone))
@@ -690,6 +741,7 @@ export function FollowUpDashboard() {
     { key: 'stage1', label: 'H+1', count: data?.stage1.length ?? 0 },
     { key: 'stage2', label: 'H+2', count: data?.stage2.length ?? 0 },
     { key: 'stage3', label: 'H+3', count: data?.stage3.length ?? 0 },
+    { key: 'attention', label: 'Perlu dicek', count: attentionData.length },
     { key: 'closing', label: 'Closing', count: closingData?.length ?? 0 },
     { key: 'archived', label: 'Arsip', count: archivedData?.length ?? 0 },
   ];
@@ -726,7 +778,7 @@ export function FollowUpDashboard() {
     });
   };
 
-  async function runBulk(action: 'kirim' | 'arsip') {
+  async function runBulkArchive() {
     const ids = [...selectedIds];
     if (ids.length === 0 || bulkBusy) return;
     setBulkBusy(true);
@@ -734,20 +786,13 @@ export function FollowUpDashboard() {
     let ok = 0;
     let fail = 0;
     for (let i = 0; i < ids.length; i++) {
-      setBulkProgress({ done: i, total: ids.length, action });
+      setBulkProgress({ done: i, total: ids.length, action: 'arsip' });
       try {
-        const r =
-          action === 'kirim'
-            ? await fetch('/api/follow-up/send', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ conversationId: ids[i], stage: stageById.get(ids[i]) ?? 1 }),
-              }).then((x) => x.json())
-            : await fetch('/api/follow-up/archive', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ conversationId: ids[i] }),
-              }).then((x) => x.json());
+        const r = await fetch('/api/follow-up/archive', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conversationId: ids[i] }),
+        }).then((x) => x.json());
         if (r.ok) ok++;
         else fail++;
       } catch {
@@ -760,31 +805,9 @@ export function FollowUpDashboard() {
     loadSnapshot();
     setBulkStatus({
       type: fail ? 'error' : 'ok',
-      message: `${action === 'kirim' ? 'Kirim massal' : 'Arsip massal'}: ${ok} berhasil${fail ? `, ${fail} gagal` : ''}.`,
+      message: `Arsip massal: ${ok} berhasil${fail ? `, ${fail} gagal` : ''}.`,
     });
     setTimeout(() => setBulkStatus(null), 5000);
-  }
-
-  async function handleAutoSendToggle(newState: boolean) {
-    if (!csName) return;
-    setTogglingAutoSend(true);
-    try {
-      const r = await fetch('/api/follow-up/auto-toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csName, enabled: newState }),
-      }).then((x) => x.json());
-      if (r.ok) {
-        setAutoSendEnabled(newState);
-        setFeedback({ type: 'ok', message: `Auto-send ${newState ? 'diaktifkan' : 'dinonaktifkan'}.` });
-      } else {
-        setFeedback({ type: 'error', message: r.error || 'Gagal mengubah auto-send.' });
-      }
-    } catch {
-      setFeedback({ type: 'error', message: 'Gagal menghubungi server untuk mengubah auto-send.' });
-    } finally {
-      setTogglingAutoSend(false);
-    }
   }
 
   async function handleRestoreArchived(conversationId: string) {
@@ -916,25 +939,6 @@ export function FollowUpDashboard() {
               </button>
             ))}
           </div>
-          {/* Auto-send — compact ON/OFF + switch */}
-          <div
-            className="flex shrink-0 items-center gap-1"
-            title={!csName ? 'Pilih satu CS dulu untuk auto-send' : 'Auto-send 08–14 WIB'}
-          >
-            <span className="text-[10px] font-medium text-muted-foreground">Auto</span>
-            <span
-              className={`rounded px-1 py-0.5 text-[9px] font-bold ${
-                !csName ? 'bg-muted text-muted-foreground' : autoSendEnabled ? 'bg-emerald-600 text-white' : 'bg-zinc-300 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200'
-              }`}
-            >
-              {!csName ? '—' : autoSendEnabled ? 'ON' : 'OFF'}
-            </span>
-            <Switch
-              checked={autoSendEnabled}
-              onCheckedChange={handleAutoSendToggle}
-              disabled={!csName || togglingAutoSend}
-            />
-          </div>
         </div>
       </div>
 
@@ -973,7 +977,7 @@ export function FollowUpDashboard() {
           )}
 
           <div id="follow-up-queue" role="tabpanel" aria-labelledby={`follow-up-tab-${activeTab}`} className="flex-1 overflow-y-auto">
-            {snapshotError && data === undefined && activeTab !== 'archived' && activeTab !== 'closing' ? (
+            {snapshotError && data === undefined && activeTab !== 'archived' && activeTab !== 'closing' && activeTab !== 'attention' ? (
               <div className="p-3">
                 <FollowUpSnapshotError message={snapshotError} retrying={refreshing} onRetry={loadSnapshot} />
               </div>
@@ -983,6 +987,21 @@ export function FollowUpDashboard() {
                 <Skeleton className="h-20 w-full" />
                 <Skeleton className="h-20 w-full" />
               </div>
+            ) : activeTab === 'attention' ? (
+              attentionData.length === 0 ? (
+                <div className="p-3"><PanelState kind="empty" title="Tidak ada pengiriman yang perlu dicek" description="Status gagal atau belum diketahui akan muncul di sini." /></div>
+              ) : (
+                <>
+                  {attentionData.map((row) => <AttentionListItem key={row.conversationId} row={row} />)}
+                  {Object.values(attentionPagination).some((page) => !page.isDone) && (
+                    <div className="p-3">
+                      <Button type="button" variant="outline" className="w-full" onClick={loadMoreAttention} disabled={loadingAttention}>
+                        {loadingAttention ? 'Memuat…' : 'Muat status berikutnya'}
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )
             ) : activeTab === 'archived' ? (
               archivedList.length === 0 ? (
                 <div className="p-3"><PanelState kind="empty" title="Belum ada yang diarsipkan" description="Arsip follow-up akan muncul di sini." /></div>
@@ -1017,22 +1036,38 @@ export function FollowUpDashboard() {
                 ))
               )
             ) : activeList.length === 0 ? (
-              <div className="p-3"><PanelState kind="empty" title="Tidak ada yang perlu di-follow-up" description="Antrean baru akan muncul saat ada tindakan berikutnya." /></div>
+              <div className="space-y-3 p-3">
+                <PanelState kind="empty" title="Tidak ada yang perlu di-follow-up" description="Antrean baru akan muncul saat ada tindakan berikutnya." />
+                {!pagination.isDone && (
+                  <Button type="button" variant="outline" className="w-full" onClick={loadMore} disabled={loadingMore}>
+                    {loadingMore ? 'Memuat…' : 'Muat antrean berikutnya'}
+                  </Button>
+                )}
+              </div>
             ) : (
-              activeList.map((c) => (
-                <ChatListItem
-                  key={c.conversationId}
-                  candidate={c}
-                  isSelected={selectedId === c.conversationId}
-                  selectable={selectable}
-                  isChecked={selectedIds.has(c.conversationId)}
-                  onToggleCheck={() => toggleCheck(c.conversationId)}
-                  onClick={() => {
-                    setSelectedId(c.conversationId);
-                    setShowConvOnMobile(true);
-                  }}
-                />
-              ))
+              <>
+                {activeList.map((c) => (
+                  <ChatListItem
+                    key={c.conversationId}
+                    candidate={c}
+                    isSelected={selectedId === c.conversationId}
+                    selectable={selectable}
+                    isChecked={selectedIds.has(c.conversationId)}
+                    onToggleCheck={() => toggleCheck(c.conversationId)}
+                    onClick={() => {
+                      setSelectedId(c.conversationId);
+                      setShowConvOnMobile(true);
+                    }}
+                  />
+                ))}
+                {!pagination.isDone && (
+                  <div className="p-3">
+                    <Button type="button" variant="outline" className="w-full" onClick={loadMore} disabled={loadingMore}>
+                      {loadingMore ? 'Memuat…' : 'Muat antrean berikutnya'}
+                    </Button>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
@@ -1041,16 +1076,13 @@ export function FollowUpDashboard() {
             <div className="shrink-0 space-y-2 border-t border-border bg-card p-3">
               {bulkProgress ? (
                 <p role="status" aria-live="polite" className="text-center text-xs text-muted-foreground">
-                  {bulkProgress.action === 'kirim' ? 'Mengirim' : 'Mengarsip'} {bulkProgress.done + 1}/{bulkProgress.total}…
+                  Mengarsip {bulkProgress.done + 1}/{bulkProgress.total}…
                 </p>
               ) : (
                 <p className="text-xs font-medium text-foreground">{selectedIds.size} lead dipilih</p>
               )}
               <div className="flex gap-2">
-                <Button onClick={() => setBulkConfirmation('kirim')} disabled={bulkBusy} className="h-10 flex-1 bg-emerald-600 font-semibold text-white hover:bg-emerald-700">
-                  Kirim massal
-                </Button>
-                <Button onClick={() => setBulkConfirmation('arsip')} disabled={bulkBusy} variant="outline" className="h-10">
+                <Button onClick={() => setBulkConfirmation('arsip')} disabled={bulkBusy} variant="outline" className="h-10 flex-1">
                   Arsip massal
                 </Button>
                 <Button onClick={() => setSelectedIds(new Set())} disabled={bulkBusy} variant="ghost" className="h-10">
@@ -1075,23 +1107,21 @@ export function FollowUpDashboard() {
       <AlertDialog open={bulkConfirmation !== null} onOpenChange={(open) => !open && setBulkConfirmation(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{bulkConfirmation === 'kirim' ? 'Kirim follow-up massal?' : 'Arsipkan follow-up massal?'}</AlertDialogTitle>
+            <AlertDialogTitle>Arsipkan follow-up massal?</AlertDialogTitle>
             <AlertDialogDescription>
-              {bulkConfirmation === 'kirim'
-                ? `Kirim follow-up ke ${selectedIds.size} lead yang dipilih.`
-                : `Arsipkan ${selectedIds.size} lead yang dipilih dari antrean follow-up.`}
+              Arsipkan {selectedIds.size} lead yang dipilih dari antrean follow-up.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Batal</AlertDialogCancel>
             <AlertDialogAction
-              variant={bulkConfirmation === 'arsip' ? 'destructive' : 'default'}
+              variant="destructive"
               onClick={() => {
-                if (bulkConfirmation) runBulk(bulkConfirmation);
+                if (bulkConfirmation) runBulkArchive();
                 setBulkConfirmation(null);
               }}
             >
-              {bulkConfirmation === 'kirim' ? 'Kirim follow-up' : 'Arsipkan'}
+              Arsipkan
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

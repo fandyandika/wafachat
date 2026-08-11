@@ -2,9 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { ConvexHttpClient } from 'convex/browser';
 import { api } from '@/convex/_generated/api';
 import { verifySession } from '@/lib/auth-jwt';
-
-const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
-const secret = () => process.env.PANEL_AUTH_SECRET!;
+import { signConvexToken } from '@/lib/convex-token';
 
 export async function POST(req: NextRequest) {
   const session = await verifySession(req.cookies.get('auth_token')?.value);
@@ -15,9 +13,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'bad request' }, { status: 400 });
   }
 
-  const result = await convex.mutation(api.followUp.archiveFollowUp, {
-    conversationId,
-    authSecret: secret(),
-  });
+  const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
+  convex.setAuth(await signConvexToken(session));
+  const result = await convex.mutation(api.followUp.archiveFollowUp, { conversationId });
   return NextResponse.json(result);
 }

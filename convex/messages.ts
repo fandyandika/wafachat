@@ -1,5 +1,5 @@
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
-import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
+import { requireAdmin, requireAdminOrg, requireMemberOrg, requireScopedMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizePhone, csKey, windowKeyFor } from "./lib";
@@ -11,6 +11,7 @@ import { countFollowUpTouchesBeforeTime } from "./followUp";
 import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
+import { armH1AfterOutbound } from "./followUpModel";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }, orgId: Id<"organizations">) {
   if (args.orderId) {
@@ -74,8 +75,37 @@ export const listMessages = query({
     conversationId: v.id("conversations"),
     limit: v.optional(v.number()),
   },
+  returns: v.array(v.object({
+    _id: v.id("messages"),
+    _creationTime: v.number(),
+    orgId: v.id("organizations"),
+    conversationId: v.id("conversations"),
+    orderId: v.string(),
+    customerPhone: v.string(),
+    role: v.union(v.literal("customer"), v.literal("ai"), v.literal("cs"), v.literal("system")),
+    direction: v.union(v.literal("inbound"), v.literal("outbound")),
+    content: v.string(),
+    messageType: v.union(v.literal("text"), v.literal("image"), v.literal("template"), v.literal("button")),
+    source: v.union(v.literal("kirimchat"), v.literal("panel"), v.literal("n8n"), v.literal("ingest")),
+    externalMessageId: v.optional(v.string()),
+    createdAt: v.number(),
+  })),
   handler: async (ctx, args) => {
-    const limit = Math.min(args.limit ?? 50, 50);
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "messages.listMessages");
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || String(conversation.orgId) !== String(orgId)) {
+      throw new Error("conversation not found");
+    }
+    if (
+      viewer.role === "cs" &&
+      (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))
+    ) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
+    const requestedLimit = args.limit ?? 50;
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.max(1, Math.min(Math.floor(requestedLimit), 50))
+      : 50;
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", args.conversationId))
@@ -202,7 +232,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     orgId: args.orgId,
   });
 
-  const convPatch: { lastMessageAt: number; updatedAt: number; assignedCsName?: string; followUpStageOverride?: undefined; rtPendingInboundAt?: number | undefined } = {
+  const convPatch: Record<string, unknown> = {
     lastMessageAt: createdAt,
     updatedAt: createdAt,
   };
@@ -284,6 +314,40 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   // Feature #8: clear override on customer reply (customer reply resets the manual pin).
   if (args.direction === "inbound") {
     convPatch.followUpStageOverride = undefined;
+    convPatch.followUpCycleInboundAt = createdAt;
+    convPatch.followUpNextStage = undefined;
+    convPatch.followUpDueAt = undefined;
+    convPatch.followUpState = undefined;
+    convPatch.followUpRequestId = undefined;
+    convPatch.followUpProviderMessageId = undefined;
+    convPatch.followUpLastError = undefined;
+  } else if (args.role === "cs") {
+    const lastInbound = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_direction_createdAt", (q: any) => q
+        .eq("conversationId", conversation._id)
+        .eq("direction", "inbound"))
+      .order("desc")
+      .first();
+    const effectiveCsKey = csKey(
+      (convPatch.assignedCsName as string | undefined) ?? args.csName ?? conversation.assignedCsName,
+    );
+    if (lastInbound && lastInbound.createdAt <= createdAt && effectiveCsKey) {
+      const sameCycle = conversation.followUpCycleInboundAt === lastInbound.createdAt;
+      if (!sameCycle || conversation.followUpState == null) {
+        const armed = armH1AfterOutbound(lastInbound.createdAt, effectiveCsKey);
+        convPatch.followUpCsKey = armed.csKey;
+        convPatch.followUpCycleInboundAt = lastInbound.createdAt;
+        convPatch.followUpNextStage = armed.nextStage;
+        convPatch.followUpDueAt = armed.dueAt;
+        convPatch.followUpState = armed.state;
+      }
+      if (!sameCycle || conversation.followUpState == null) {
+        convPatch.followUpRequestId = undefined;
+        convPatch.followUpProviderMessageId = undefined;
+        convPatch.followUpLastError = undefined;
+      }
+    }
   }
   await ctx.db.patch(conversation._id, convPatch);
   await ctx.db.insert("events", {
@@ -344,8 +408,16 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   // Funnel-exclude markers (shopee / bonus / review / testi / feedback / cod diproses): the lead is
   // post-sale or handled elsewhere → close it in REAL TIME so it drops out of the follow-up funnel
   // immediately (same idea as closing detection above; the daily sweep is the backstop). Reversible.
-  if (conversation.status !== "closed" && messageHasDoneMarker(args.content, args.direction)) {
-    await ctx.db.patch(conversation._id, { status: "closed", updatedAt: createdAt });
+  if (closingRecapId || messageHasDoneMarker(args.content, args.direction)) {
+    await ctx.db.patch(conversation._id, {
+      status: "closed",
+      followUpNextStage: undefined,
+      followUpDueAt: undefined,
+      followUpState: "complete",
+      followUpRequestId: undefined,
+      followUpLastError: undefined,
+      updatedAt: createdAt,
+    });
   }
 
   return {

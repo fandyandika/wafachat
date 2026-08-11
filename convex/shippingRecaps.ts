@@ -30,6 +30,26 @@ const statusValidator = v.union(
 
 const paymentMethodValidator = v.union(v.literal("cod"), v.literal("transfer"), v.literal("unknown"));
 
+async function terminateLinkedConversation(
+  ctx: any,
+  orgId: Id<"organizations">,
+  conversationId: Id<"conversations"> | undefined,
+  at: number,
+) {
+  if (!conversationId) return;
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation || String(conversation.orgId) !== String(orgId)) return;
+  await ctx.db.patch(conversation._id, {
+    status: "closed",
+    followUpNextStage: undefined,
+    followUpDueAt: undefined,
+    followUpState: "complete",
+    followUpRequestId: undefined,
+    followUpLastError: undefined,
+    updatedAt: Math.max(conversation.updatedAt, at),
+  });
+}
+
 export async function cancelRecapByExactOrderCore(ctx: any, args: {
   orgId: Id<"organizations">;
   orderIdBerdu: string;
@@ -68,6 +88,7 @@ export async function cancelRecapByExactOrderCore(ctx: any, args: {
     createdAt: now,
     orgId: args.orgId,
   });
+  await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now);
   return { recapId: row._id, orderIdBerdu, status };
 }
 
@@ -519,6 +540,8 @@ export const upsertFromN8n = internalMutation({
       createdAt: now,
     });
 
+    await terminateLinkedConversation(ctx, orgId, conversation?._id, closedAt);
+
     return { success: true, recapId, status, flags, _action: "upsert_shipping_recap" };
   },
 });
@@ -602,6 +625,8 @@ export const createFromPanelClosing = mutation({
       orgId,
     });
 
+    await terminateLinkedConversation(ctx, orgId, conversation?._id, now);
+
     return { success: true, recapId, status: "needs_review", _action: "create_from_panel_closing" };
   },
 });
@@ -618,6 +643,7 @@ export async function upsertRecapFromMessage(
 ): Promise<{ recapId: Id<"shippingRecaps">; action: "created" | "updated" | "skipped" }> {
   const order = await findOrder(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone }, opts.orgId);
   const conversation = await findConversation(ctx, { orderIdBerdu: message.orderId, customerPhone: message.customerPhone }, opts.orgId);
+  await terminateLinkedConversation(ctx, opts.orgId, conversation?._id, message.createdAt);
   const parsed = applyOrderFallbacks(parseClosingMessage(message.content), order);
   const comparison = compareWithOrder(parsed, order);
   const existing = await findExistingRecap(ctx, {
@@ -941,6 +967,7 @@ export const markCancelled = mutation({
       createdAt: now,
       orgId,
     });
+    await terminateLinkedConversation(ctx, orgId, row.conversationId, now);
     return { success: true, recapId: args.recapId, status };
   },
 });
@@ -1056,6 +1083,7 @@ export const markDelivered = mutation({
         createdAt: now,
         orgId: row.orgId,
       });
+      await terminateLinkedConversation(ctx, orgId, row.conversationId, now);
     }
 
     // Single batch rollup computation for all affected cs+window pairs
@@ -1145,6 +1173,7 @@ export const markCancelledBulk = mutation({
         createdAt: now,
         orgId: row.orgId,
       });
+      await terminateLinkedConversation(ctx, orgId, row.conversationId, now);
     }
 
     // Single batch rollup computation for all affected cs+window pairs
@@ -1199,6 +1228,8 @@ export const markLatestCancelledByPhone = internalMutation({
       createdAt: now,
       orgId: row.orgId,
     });
+
+    await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now);
 
     return { success: true, recapId: row._id, status, phone };
   },

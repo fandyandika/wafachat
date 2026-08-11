@@ -32,8 +32,8 @@ test("1 touch but only 40h old -> null (H+2 needs >=48h)", () => {
   expect(eligibleStage(base({ touchCount: 1, lastTouchAt: 25 * HOUR, now: 40 * HOUR }))).toBeNull();
 });
 
-test("1 touch, 50h old -> stage 2 (age >=48h is enough; no min-gap)", () => {
-  expect(eligibleStage(base({ touchCount: 1, lastTouchAt: 42 * HOUR, now: 50 * HOUR }))).toBe(2);
+test("late H+1 still requires a fresh 24 hours before H+2", () => {
+  expect(eligibleStage(base({ touchCount: 1, lastTouchAt: 42 * HOUR, now: 50 * HOUR }))).toBeNull();
 });
 
 test("2 touches, 80h old, 30h since touch -> stage 3 (H+3, goodbye)", () => {
@@ -42,6 +42,10 @@ test("2 touches, 80h old, 30h since touch -> stage 3 (H+3, goodbye)", () => {
 
 test("2 touches but only 70h old -> null (H+3 needs >=72h)", () => {
   expect(eligibleStage(base({ touchCount: 2, lastTouchAt: 50 * HOUR, now: 70 * HOUR }))).toBeNull();
+});
+
+test("late H+2 still requires a fresh 24 hours before H+3", () => {
+  expect(eligibleStage(base({ touchCount: 2, lastTouchAt: 70 * HOUR, now: 80 * HOUR }))).toBeNull();
 });
 
 test("3 touches -> null (funnel done, all sent)", () => {

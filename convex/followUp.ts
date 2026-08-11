@@ -1,18 +1,550 @@
-import { query, action, mutation, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { requireMember, requireMemberOrg, requireScopedMemberOrg } from "./authz";
+import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
+import { requireScopedMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { csKey, isInternalTestPhone, normalizeCsName, normalizePhone } from "./lib";
-import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
-import { internal } from "./_generated/api";
+import { eligibleStage } from "./followUpMath";
 import { getInternalPhoneSet } from "./orgSettings";
-import { requireDefaultOrgId } from "./orgs";
 import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 import { getBoundedActiveAgentRegistry } from "./agents";
+import { advanceAfterAccepted, FOLLOW_UP_EXPIRY_MS } from "./followUpModel";
+import { internal } from "./_generated/api";
+import { buildTemplatePayload, sendKirimDevMessage } from "../lib/kirimdev";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
 const MAX_FOLLOW_UP_ROWS = 100;
+
+const followUpStageValidator = v.union(v.literal(1), v.literal(2), v.literal(3));
+const dueFollowUpValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  csKey: v.string(),
+  cycleInboundAt: v.number(),
+  stage: followUpStageValidator,
+  dueAt: v.number(),
+});
+
+const attentionFollowUpValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  stage: v.optional(followUpStageValidator),
+  state: v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown")),
+  lastError: v.optional(v.string()),
+  updatedAt: v.number(),
+});
+const attentionStateValidator = v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown"));
+
+export const listDueFollowUps = query({
+  args: {
+    stage: v.optional(followUpStageValidator),
+    csName: v.optional(v.string()),
+    now: v.number(),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(dueFollowUpValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    if (!Number.isFinite(args.now) || args.now < 0) throw new Error("Waktu queue tidak valid.");
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listDueFollowUps",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const lowerDueAt = args.now - FOLLOW_UP_EXPIRY_MS;
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 100)),
+    };
+
+    const result = effectiveCsKey
+      ? args.stage
+        ? await ctx.db
+            .query("conversations")
+            .withIndex("by_org_followUpCsKey_stage_state_dueAt", (q) => q
+              .eq("orgId", orgId)
+              .eq("followUpCsKey", effectiveCsKey)
+              .eq("followUpNextStage", args.stage)
+              .eq("followUpState", "waiting")
+              .gte("followUpDueAt", lowerDueAt)
+              .lte("followUpDueAt", args.now))
+            .paginate(paginationOpts)
+        : await ctx.db
+            .query("conversations")
+            .withIndex("by_org_followUpCsKey_state_dueAt", (q) => q
+              .eq("orgId", orgId)
+              .eq("followUpCsKey", effectiveCsKey)
+              .eq("followUpState", "waiting")
+              .gte("followUpDueAt", lowerDueAt)
+              .lte("followUpDueAt", args.now))
+            .paginate(paginationOpts)
+      : args.stage
+        ? await ctx.db
+            .query("conversations")
+            .withIndex("by_org_followUpStage_state_dueAt", (q) => q
+              .eq("orgId", orgId)
+              .eq("followUpNextStage", args.stage)
+              .eq("followUpState", "waiting")
+              .gte("followUpDueAt", lowerDueAt)
+              .lte("followUpDueAt", args.now))
+            .paginate(paginationOpts)
+        : await ctx.db
+            .query("conversations")
+            .withIndex("by_org_followUpState_dueAt", (q) => q
+              .eq("orgId", orgId)
+              .eq("followUpState", "waiting")
+              .gte("followUpDueAt", lowerDueAt)
+              .lte("followUpDueAt", args.now))
+            .paginate(paginationOpts);
+
+    return {
+      page: result.page
+        .filter((row) => row.followUpCycleInboundAt !== undefined
+          && row.followUpCycleInboundAt >= args.now - FOLLOW_UP_EXPIRY_MS)
+        .map((row) => ({
+        conversationId: row._id,
+        customerName: row.customerName,
+        customerPhone: row.customerPhone,
+        orderId: row.orderId,
+        csName: row.assignedCsName,
+        csKey: row.followUpCsKey!,
+        cycleInboundAt: row.followUpCycleInboundAt!,
+        stage: row.followUpNextStage!,
+        dueAt: row.followUpDueAt!,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+export const listFollowUpAttention = query({
+  args: {
+    csName: v.optional(v.string()),
+    state: attentionStateValidator,
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(attentionFollowUpValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listFollowUpAttention",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 100)),
+    };
+    const result = await (effectiveCsKey
+      ? ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpCsKey_state_dueAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpState", args.state))
+          .order("desc")
+          .paginate(paginationOpts)
+      : ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpState_dueAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpState", args.state))
+          .order("desc")
+          .paginate(paginationOpts));
+
+    return {
+      page: result.page.map((row) => ({
+        conversationId: row._id,
+        customerName: row.customerName,
+        customerPhone: row.customerPhone,
+        orderId: row.orderId,
+        csName: row.assignedCsName,
+        stage: row.followUpNextStage,
+        state: row.followUpState as "sending" | "failed" | "unknown",
+        lastError: row.followUpLastError,
+        updatedAt: row.updatedAt,
+      })).sort((a, b) => b.updatedAt - a.updatedAt),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+const reservationStatusValidator = v.union(
+  v.literal("sending"),
+  v.literal("accepted"),
+  v.literal("failed"),
+  v.literal("unknown"),
+);
+
+const reservationResultValidator = v.union(
+  v.object({ shouldSend: v.literal(false), status: reservationStatusValidator }),
+  v.object({
+    shouldSend: v.literal(true),
+    status: v.literal("sending"),
+    to: v.string(),
+    phoneNumberId: v.string(),
+    templateName: v.string(),
+    language: v.string(),
+    orderedValues: v.array(v.string()),
+    idempotencyKey: v.string(),
+  }),
+);
+
+const REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+type ReservationStatus = "sending" | "accepted" | "failed" | "unknown";
+type ReservationResult =
+  | { shouldSend: false; status: ReservationStatus }
+  | {
+      shouldSend: true;
+      status: "sending";
+      to: string;
+      phoneNumberId: string;
+      templateName: string;
+      language: string;
+      orderedValues: string[];
+      idempotencyKey: string;
+    };
+type SendDueFollowUpResult = {
+  ok: boolean;
+  status: ReservationStatus;
+  providerMessageId?: string;
+  error?: string;
+};
+
+function followUpVariableValue(
+  variable: "customer_name" | "product_name" | "order_id",
+  values: { customerName: string; productName: string; orderId: string },
+): string {
+  if (variable === "customer_name") return values.customerName;
+  if (variable === "product_name") return values.productName;
+  return values.orderId;
+}
+
+export const reserveDueFollowUp = internalMutation({
+  args: {
+    conversationId: v.id("conversations"),
+    stage: followUpStageValidator,
+    requestId: v.string(),
+  },
+  returns: reservationResultValidator,
+  handler: async (ctx, args) => {
+    if (!REQUEST_ID_RE.test(args.requestId)) throw new Error("Request ID Follow-up tidak valid.");
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.reserveDueFollowUp");
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || String(conversation.orgId) !== String(orgId)) {
+      throw new Error("Percakapan tidak ditemukan.");
+    }
+    if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
+
+    if (conversation.followUpRequestId === args.requestId) {
+      const status: ReservationStatus = conversation.followUpProviderMessageId
+        ? "accepted"
+        : conversation.followUpState === "unknown"
+          ? "unknown"
+          : conversation.followUpState === "failed"
+            ? "failed"
+            : "sending";
+      return { shouldSend: false as const, status };
+    }
+    if (conversation.followUpState === "unknown") {
+      throw new Error("Status pengiriman sebelumnya belum diketahui. Periksa riwayat KirimDev sebelum mencoba lagi.");
+    }
+    if (conversation.followUpState === "sending") {
+      throw new Error("Pengiriman Follow-up masih diproses.");
+    }
+
+    const currentTime = Date.now();
+    if (
+      conversation.status === "closed" ||
+      conversation.followUpState !== "waiting" ||
+      conversation.followUpNextStage !== args.stage ||
+      conversation.followUpDueAt === undefined ||
+      conversation.followUpDueAt > currentTime ||
+      conversation.followUpCycleInboundAt === undefined ||
+      conversation.followUpCycleInboundAt < currentTime - FOLLOW_UP_EXPIRY_MS
+    ) {
+      throw new Error("Follow-up ini tidak lagi jatuh tempo.");
+    }
+
+    const recap = await ctx.db
+      .query("shippingRecaps")
+      .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", orgId).eq("orderIdBerdu", conversation.orderId))
+      .first();
+    if (recap) {
+      throw new Error("Order sudah closing atau dibatalkan.");
+    }
+
+    const orders = await ctx.db
+      .query("orders")
+      .withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", conversation.orderId))
+      .take(2);
+    if (orders.length !== 1) throw new Error("Data order Follow-up tidak tersedia atau duplikat.");
+
+    const templates = await ctx.db
+      .query("followUpTemplates")
+      .withIndex("by_org_stage", (q) => q.eq("orgId", orgId).eq("stage", args.stage))
+      .take(2);
+    if (templates.length !== 1 || !templates[0].isActive) {
+      throw new Error(`Template H+${args.stage} belum aktif.`);
+    }
+    const activeTemplates = await ctx.db
+      .query("followUpTemplates")
+      .withIndex("by_org_active_stage", (q) => q.eq("orgId", orgId).eq("isActive", true))
+      .take(4);
+    if (activeTemplates.length !== 3 || new Set(activeTemplates.map((row) => row.stage)).size !== 3) {
+      throw new Error("Lengkapi dan aktifkan template H+1, H+2, dan H+3 sebelum mengirim.");
+    }
+
+    const agentKey = conversation.followUpCsKey ?? csKey(conversation.assignedCsName);
+    let agent = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_org_key", (q) => q.eq("orgId", orgId).eq("key", agentKey))
+      .unique();
+    if (!agent) {
+      agent = await ctx.db
+        .query("csConfigs")
+        .withIndex("by_org_normalizedName", (q) => q
+          .eq("orgId", orgId)
+          .eq("normalizedName", normalizeCsName(conversation.assignedCsName)))
+        .unique();
+    }
+    // A multi-number alias set does not prove which sender owns this conversation.
+    // Only the canonical scalar claim is safe for outbound Follow-up.
+    const phoneNumberId = agent?.providerNumberId;
+    if (!agent?.isActive || !phoneNumberId) throw new Error("Nomor API CS belum dikonfigurasi.");
+
+    const template = templates[0];
+    const order = orders[0];
+    const orderedValues = template.variables.map((variable) => followUpVariableValue(variable, {
+      customerName: conversation.customerName,
+      productName: order.productName,
+      orderId: conversation.orderId,
+    }));
+    const idempotencyKey = `fu-${args.conversationId}-${conversation.followUpCycleInboundAt}-${args.stage}-${args.requestId}`;
+
+    await ctx.db.patch(conversation._id, {
+      followUpState: "sending",
+      followUpRequestId: args.requestId,
+      followUpProviderMessageId: undefined,
+      followUpLastError: undefined,
+      updatedAt: currentTime,
+    });
+    await ctx.scheduler.runAfter(2 * 60_000, internal.followUp.expireSendingReservation, {
+      conversationId: conversation._id,
+      requestId: args.requestId,
+    });
+    return {
+      shouldSend: true as const,
+      status: "sending" as const,
+      to: conversation.customerPhone,
+      phoneNumberId,
+      templateName: template.templateName,
+      language: template.language,
+      orderedValues,
+      idempotencyKey,
+    };
+  },
+});
+
+export const finalizeDueFollowUp = internalMutation({
+  args: {
+    conversationId: v.id("conversations"),
+    requestId: v.string(),
+    outcome: v.union(v.literal("accepted"), v.literal("failed"), v.literal("unknown")),
+    providerMessageId: v.optional(v.string()),
+    error: v.optional(v.string()),
+    acceptedAt: v.optional(v.number()),
+  },
+  returns: v.object({ ok: v.literal(true), status: reservationStatusValidator }),
+  handler: async (ctx, args) => {
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.finalizeDueFollowUp");
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || String(conversation.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
+    if (conversation.followUpRequestId !== args.requestId) throw new Error("Reservasi Follow-up tidak cocok.");
+    if (conversation.followUpProviderMessageId) return { ok: true as const, status: "accepted" as const };
+    if (conversation.followUpState !== "sending") {
+      const status: ReservationStatus = conversation.followUpState === "unknown" ? "unknown" : "failed";
+      return { ok: true as const, status };
+    }
+
+    const finalizedAt = args.acceptedAt ?? Date.now();
+    if (!Number.isFinite(finalizedAt) || Math.abs(Date.now() - finalizedAt) > 60_000) {
+      throw new Error("Waktu finalisasi Follow-up tidak valid.");
+    }
+    if (args.outcome !== "accepted") {
+      await ctx.db.patch(conversation._id, {
+        followUpState: args.outcome,
+        followUpLastError: (args.error ?? "Pengiriman gagal tanpa detail.").slice(0, 500),
+        updatedAt: finalizedAt,
+      });
+      return { ok: true as const, status: args.outcome as ReservationStatus };
+    }
+    if (!args.providerMessageId?.trim()) throw new Error("ID pesan provider wajib untuk pengiriman diterima.");
+    if (!conversation.followUpNextStage) throw new Error("Stage Follow-up tidak tersedia.");
+
+    const duplicateMessage = await ctx.db
+      .query("messages")
+      .withIndex("by_org_externalMessageId", (q) => q.eq("orgId", orgId).eq("externalMessageId", args.providerMessageId))
+      .first();
+    if (!duplicateMessage) {
+      await ctx.db.insert("messages", {
+        orgId,
+        conversationId: conversation._id,
+        orderId: conversation.orderId,
+        customerPhone: conversation.customerPhone,
+        role: "cs",
+        direction: "outbound",
+        content: `[follow-up H+${conversation.followUpNextStage}]`,
+        messageType: "template",
+        source: "panel",
+        externalMessageId: args.providerMessageId,
+        createdAt: finalizedAt,
+      });
+    }
+
+    const sentStage = conversation.followUpNextStage;
+    const next = advanceAfterAccepted(sentStage, finalizedAt);
+    await ctx.db.patch(conversation._id, {
+      followUpStage: sentStage,
+      followUpStageAt: finalizedAt,
+      followUpNextStage: next.nextStage ?? undefined,
+      followUpDueAt: next.dueAt ?? undefined,
+      followUpState: next.state,
+      followUpProviderMessageId: args.providerMessageId,
+      followUpLastError: undefined,
+      lastMessageAt: finalizedAt,
+      updatedAt: finalizedAt,
+    });
+    return { ok: true as const, status: "accepted" as const };
+  },
+});
+
+export const expireSendingReservation = internalMutation({
+  args: {
+    conversationId: v.id("conversations"),
+    requestId: v.string(),
+  },
+  returns: v.object({ expired: v.boolean() }),
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversationId);
+    if (
+      !conversation
+      || conversation.followUpState !== "sending"
+      || conversation.followUpRequestId !== args.requestId
+    ) {
+      return { expired: false };
+    }
+    await ctx.db.patch(conversation._id, {
+      followUpState: "unknown",
+      followUpLastError: "Pengiriman tidak selesai dalam batas waktu. Periksa riwayat KirimDev sebelum mencoba lagi.",
+      updatedAt: Date.now(),
+    });
+    return { expired: true };
+  },
+});
+
+const sendDueFollowUpResultValidator = v.object({
+  ok: v.boolean(),
+  status: reservationStatusValidator,
+  providerMessageId: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
+
+export const sendDueFollowUp = action({
+  args: {
+    conversationId: v.id("conversations"),
+    stage: followUpStageValidator,
+    requestId: v.string(),
+  },
+  returns: sendDueFollowUpResultValidator,
+  handler: async (ctx, args): Promise<SendDueFollowUpResult> => {
+    const reservation: ReservationResult = await ctx.runMutation(internal.followUp.reserveDueFollowUp, args);
+    if (!reservation.shouldSend) {
+      return { ok: reservation.status === "accepted", status: reservation.status };
+    }
+
+    const apiKey = process.env.KIRIMDEV_API_KEY;
+    if (!apiKey) {
+      const error = "KIRIMDEV_API_KEY belum dikonfigurasi.";
+      await ctx.runMutation(internal.followUp.finalizeDueFollowUp, {
+        conversationId: args.conversationId,
+        requestId: args.requestId,
+        outcome: "failed",
+        error,
+      });
+      return { ok: false, status: "failed", error };
+    }
+
+    try {
+      const result = await sendKirimDevMessage({
+        apiKey,
+        baseUrl: process.env.KIRIMDEV_BASE_URL || "https://api.kirimdev.com/v1",
+        phoneNumberId: reservation.phoneNumberId,
+        payload: buildTemplatePayload(
+          reservation.to,
+          reservation.templateName,
+          reservation.language,
+          reservation.orderedValues,
+        ),
+        idempotencyKey: reservation.idempotencyKey,
+      });
+      if (result.ok) {
+        await ctx.runMutation(internal.followUp.finalizeDueFollowUp, {
+          conversationId: args.conversationId,
+          requestId: args.requestId,
+          outcome: "accepted",
+          providerMessageId: result.providerMessageId,
+          acceptedAt: Date.now(),
+        });
+        return {
+          ok: true,
+          status: "accepted",
+          providerMessageId: result.providerMessageId,
+        };
+      }
+
+      const outcome = result.statusUnknown ? "unknown" as const : "failed" as const;
+      await ctx.runMutation(internal.followUp.finalizeDueFollowUp, {
+        conversationId: args.conversationId,
+        requestId: args.requestId,
+        outcome,
+        error: result.error,
+      });
+      return { ok: false, status: outcome, error: result.error };
+    } catch {
+      const error = "Status pengiriman belum diketahui. Periksa riwayat KirimDev sebelum mencoba lagi.";
+      await ctx.runMutation(internal.followUp.finalizeDueFollowUp, {
+        conversationId: args.conversationId,
+        requestId: args.requestId,
+        outcome: "unknown",
+        error,
+      });
+      return { ok: false, status: "unknown", error };
+    }
+  },
+});
 
 // Count follow-up touches (outbound messages after the 24h window closed, relative to lastInbound).
 // Manual-via-WABA follow-ups and API sends both land here, so the funnel can't double-send a lead a
@@ -41,7 +573,7 @@ export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: a
 }
 
 // nowOverride is test-only (Date.now() is unavailable in some runtimes); prod passes nothing.
-// Shared by the guarded panel query AND the identity-less cron sweep (autoFollowUp).
+// Legacy bounded derivation retained only for diagnostics and migration parity.
 async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowOverride?: number; orgId: any }) {
     const internalPhones = await getInternalPhoneSet(ctx, args.orgId);
     const now = args.nowOverride ?? Date.now();
@@ -139,31 +671,67 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
     return { stage1, stage2, stage3 };
 }
 
-export const getFollowUpCandidates = query({
-  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
+export const getFollowUpCandidatesDiagnostic = internalQuery({
+  args: {
+    orgId: v.id("organizations"),
+    csName: v.optional(v.string()),
+    nowOverride: v.optional(v.number()),
+  },
+  handler: followUpCandidatesHandler,
+});
+
+export const archiveFollowUp = mutation({
+  args: { conversationId: v.id("conversations") },
+  returns: v.object({ ok: v.literal(true) }),
   handler: async (ctx, args) => {
-    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getFollowUpCandidates", args.csName);
-    return followUpCandidatesHandler(ctx, { ...args, orgId, csName: effectiveCsName });
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.archiveFollowUp");
+    const c = await ctx.db.get(args.conversationId);
+    if (!c || String(c.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    if (viewer.role === "cs" && (!effectiveCsName || csKey(c.assignedCsName) !== csKey(effectiveCsName))) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
+    const now = Date.now();
+    await ctx.db.patch(args.conversationId, {
+      status: "closed",
+      followUpArchivedAt: now,
+      followUpNextStage: undefined,
+      followUpDueAt: undefined,
+      followUpState: "archived",
+      followUpRequestId: undefined,
+      followUpLastError: undefined,
+      updatedAt: now,
+    });
+    return { ok: true as const };
   },
 });
 
-// Cron/sweep path (autoFollowUp) — server-side, no user identity, not publicly callable.
-export const getFollowUpCandidatesInternal = internalQuery({
-  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()), orgId: v.id("organizations") },
-  handler: async (ctx, args) => followUpCandidatesHandler(ctx, args),
+// Feature #2: undo archive
+export const unarchiveFollowUp = mutation({
+  args: { conversationId: v.id("conversations") },
+  returns: v.object({ ok: v.literal(true) }),
+  handler: async (ctx, args) => {
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.unarchiveFollowUp");
+    const c = await ctx.db.get(args.conversationId);
+    if (!c || String(c.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    if (viewer.role === "cs" && (!effectiveCsName || csKey(c.assignedCsName) !== csKey(effectiveCsName))) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
+    const now = Date.now();
+    await ctx.db.patch(args.conversationId, {
+      status: "active",
+      followUpArchivedAt: undefined,
+      followUpNextStage: undefined,
+      followUpDueAt: undefined,
+      followUpState: undefined,
+      followUpRequestId: undefined,
+      followUpLastError: undefined,
+      updatedAt: now,
+    });
+    return { ok: true as const };
+  },
 });
 
-const KIRIM_ERR: Record<string, string> = {
-  template_paused: "Template lagi dijeda Meta — cek di KirimDev.",
-  template_not_found: "Template belum approved.",
-  template_policy_violation: "Template melanggar kebijakan Meta.",
-  account_rate_limited: "Nomor lagi dibatasi, coba lagi nanti.",
-  app_rate_limited: "Lagi terlalu banyak kirim, coba lagi sebentar.",
-  outside_24h_window: "Window 24 jam — harusnya pakai template (cek konfigurasi).",
-  marketing_blocked_by_user: "Customer memblokir pesan marketing.",
-};
-
-// Re-derive eligibility + resolve the CS WABA number for one conversation (defends the send).
+// Legacy diagnostic used by bounded migration/parity tests. It never sends messages.
 export const candidacyFor = internalQuery({
   args: { conversationId: v.id("conversations"), nowOverride: v.optional(v.number()) },
   handler: async (ctx, args) => {
@@ -176,20 +744,12 @@ export const candidacyFor = internalQuery({
     const order = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", c.orgId).eq("orderId", c.orderId)).first();
     const normName = normalizeCsName(c.assignedCsName);
     let cfg = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", c.orgId).eq("normalizedName", normName)).first();
-    // assignedCsName is inconsistent across the data ("Aisyah" vs "CS Aisyah"), so an exact
-    // normalizedName match can miss the WABA number. Fall back to a csKey match (ignores the
-    // "CS " prefix) so providerNumberId resolves regardless of how the lead was named.
     if (!cfg || !cfg.providerNumberId) {
       const k = csKey(c.assignedCsName);
-      cfg = await ctx.db
-        .query("csConfigs")
-        .withIndex("by_org_key", (q) => q.eq("orgId", c.orgId).eq("key", k))
-        .first() ?? cfg;
+      cfg = await ctx.db.query("csConfigs").withIndex("by_org_key", (q) => q.eq("orgId", c.orgId).eq("key", k)).first() ?? cfg;
       if (!cfg?.providerNumberId) {
         const legacy = await getBoundedActiveAgentRegistry(ctx, c.orgId);
-        if (legacy) {
-          cfg = legacy.find((x) => x.key == null && csKey(x.csName) === k && x.providerNumberId) ?? cfg;
-        }
+        if (legacy) cfg = legacy.find((x) => x.key == null && csKey(x.csName) === k && x.providerNumberId) ?? cfg;
       }
     }
     const touch = await touchInfo(ctx, c._id, lastInbound?.createdAt ?? null);
@@ -197,146 +757,38 @@ export const candidacyFor = internalQuery({
       lastInboundAt: lastInbound?.createdAt ?? null,
       lastMessageOutbound: lastMsg != null && lastMsg.direction === "outbound",
       isClosed: c.status === "closed" || recap != null,
-      touchCount: touch.count, lastTouchAt: touch.lastAt, now,
+      touchCount: touch.count,
+      lastTouchAt: touch.lastAt,
+      now,
     });
-    return { eligible, phoneNumberId: cfg?.providerNumberId ?? null, customerName: c.customerName,
-             customerPhone: c.customerPhone, orderId: c.orderId, productName: order?.productName ?? "—" };
-  },
-});
-
-export const stampFollowUp = internalMutation({
-  args: { conversationId: v.id("conversations"), stage: v.number(), at: v.number(),
-          orderId: v.string(), customerPhone: v.string(), content: v.string() },
-  handler: async (ctx, a) => {
-    // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
-    const orgId = await requireDefaultOrgId(ctx);
-    // Feature #8: clear override after send; auto-staging resumes next check.
-    await ctx.db.patch(a.conversationId, { followUpStage: a.stage, followUpStageAt: a.at, followUpStageOverride: undefined, updatedAt: a.at });
-    await ctx.db.insert("messages", {
-      conversationId: a.conversationId, orderId: a.orderId, customerPhone: a.customerPhone,
-      role: "cs", direction: "outbound", content: a.content, messageType: "template",
-      source: "panel", createdAt: a.at, orgId,
-    });
-  },
-});
-
-export const performFollowUpSend = internalAction({
-  args: { conversationId: v.id("conversations"), stage: v.number(),
-          nowOverride: v.optional(v.number()) },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    const now = args.nowOverride ?? Date.now();
-    const d = await ctx.runQuery(internal.followUp.candidacyFor, { conversationId: args.conversationId, nowOverride: now });
-    if (!d) return { ok: false, error: "Percakapan tidak ditemukan." };
-    if (d.eligible !== args.stage) {
-      return { ok: false, error: "Sudah tidak eligible (mungkin sudah dibalas / closing / sudah di-follow-up)." };
-    }
-    if (!d.phoneNumberId) return { ok: false, error: "Nomor WABA CS belum dikonfigurasi." };
-    if (!process.env.KIRIMDEV_API_KEY) return { ok: false, error: "KIRIMDEV_API_KEY belum dikonfigurasi." };
-    const cfg = FOLLOWUP_STAGES.find((s) => s.stage === args.stage)!;
-    const base = process.env.KIRIMDEV_BASE_URL || "https://api.kirimdev.com/v1";
-    // Positional params — FINALISE order once the real template is known: {{1}}=name, {{2}}=product, {{3}}=orderId.
-    const params = [d.customerName, d.productName, d.orderId];
-    let resp: Response;
-    try {
-      resp = await fetch(`${base}/${d.phoneNumberId}/messages`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.KIRIMDEV_API_KEY}`,
-          "Content-Type": "application/json",
-          "Idempotency-Key": `fu-${args.conversationId}-${args.stage}`,
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp", to: d.customerPhone, type: "template",
-          template: { name: cfg.templateName, language: cfg.language,
-            components: [{ type: "body", parameters: params.map((text) => ({ type: "text", text })) }] },
-        }),
-      });
-    } catch {
-      return { ok: false, error: "Gagal menghubungi KirimDev." };
-    }
-    if (!resp.ok) {
-      const body = (await resp.json().catch(() => ({}))) as { error?: { code?: string } };
-      const code = body?.error?.code;
-      return { ok: false, error: (code && KIRIM_ERR[code]) || `Gagal kirim${code ? ` (${code})` : ""}.` };
-    }
-    await ctx.runMutation(internal.followUp.stampFollowUp, {
-      conversationId: args.conversationId, stage: args.stage, at: now,
-      orderId: d.orderId, customerPhone: d.customerPhone,
-      content: `[follow-up ${cfg.label}] ${cfg.templateName}`,
-    });
-    return { ok: true };
-  },
-});
-
-export const sendFollowUp = action({
-  args: { conversationId: v.id("conversations"), stage: v.number(), authSecret: v.string(),
-          nowOverride: v.optional(v.number()) },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
-    return await ctx.runAction(internal.followUp.performFollowUpSend, {
-      conversationId: args.conversationId, stage: args.stage, nowOverride: args.nowOverride
-    });
-  },
-});
-
-export const archiveFollowUp = mutation({
-  args: { conversationId: v.id("conversations"), authSecret: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
-    const c = await ctx.db.get(args.conversationId);
-    if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
-    const now = Date.now();
-    await ctx.db.patch(args.conversationId, { status: "closed", followUpArchivedAt: now, updatedAt: now });
-    return { ok: true };
-  },
-});
-
-// Feature #8: manual stage override
-export const setFollowUpStage = mutation({
-  args: { conversationId: v.id("conversations"), stage: v.number(), authSecret: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
-    if (![1, 2, 3].includes(args.stage)) {
-      return { ok: false, error: "Stage must be 1, 2, or 3." };
-    }
-    const c = await ctx.db.get(args.conversationId);
-    if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
-    const now = Date.now();
-    await ctx.db.patch(args.conversationId, { followUpStageOverride: args.stage, updatedAt: now });
-    return { ok: true };
-  },
-});
-
-// Feature #2: undo archive
-export const unarchiveFollowUp = mutation({
-  args: { conversationId: v.id("conversations"), authSecret: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
-    const c = await ctx.db.get(args.conversationId);
-    if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
-    const now = Date.now();
-    await ctx.db.patch(args.conversationId, { status: "active", followUpArchivedAt: undefined, updatedAt: now });
-    return { ok: true };
+    return {
+      eligible,
+      phoneNumberId: cfg?.providerNumberId ?? null,
+      customerName: c.customerName,
+      customerPhone: c.customerPhone,
+      orderId: c.orderId,
+      productName: order?.productName ?? "—",
+    };
   },
 });
 
 export const getArchivedFollowUps = query({
   args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()) },
+  returns: v.array(v.object({
+    conversationId: v.id("conversations"),
+    customerName: v.string(),
+    customerPhone: v.string(),
+    orderId: v.string(),
+    csName: v.string(),
+    followUpArchivedAt: v.number(),
+  })),
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "followUp.getArchivedFollowUps");
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getArchivedFollowUps", args.csName);
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
     const since = now - 14 * DAY;
-    const csKeyMemo = args.csName ? csKey(args.csName) : null;
+    const csKeyMemo = effectiveCsName ? csKey(effectiveCsName) : null;
 
     // Manual archive sets status="closed" + followUpArchivedAt, so read only recently-closed
     // conversations via the index (NOT a full-table .filter().collect() scan) then keep the
@@ -373,63 +825,17 @@ export const getArchivedFollowUps = query({
   },
 });
 
-// Feature #5b: auto-send toggle
-export const setAutoFollowUp = mutation({
-  args: { csName: v.string(), enabled: v.boolean(), authSecret: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; enabled?: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
-    const now = Date.now();
-    // B3: default-org BY DESIGN — authSecret-gated, no Convex viewer identity
-    const orgId = await requireDefaultOrgId(ctx);
-    const normalizedName = normalizeCsName(args.csName);
-    const existing = await ctx.db
-      .query("csConfigs")
-      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
-      .unique();
-
-    if (existing) {
-      await ctx.db.patch(existing._id, { autoFollowUpEnabled: args.enabled, updatedAt: now });
-    } else {
-      // Insert minimal config if not found (mirror upsert defaults from csConfigs.ts).
-      await ctx.db.insert("csConfigs", {
-        normalizedName,
-        csName: args.csName,
-        orderAutomationEnabled: false,
-        aiAssistantEnabled: false,
-        reportingEnabled: true,
-        autoFollowUpEnabled: args.enabled,
-        isActive: true,
-        createdAt: now,
-        updatedAt: now,
-        orgId,
-      });
-    }
-    return { ok: true, enabled: args.enabled };
-  },
-});
-
-export const getAutoFollowUp = query({
-  args: { csName: v.string() },
-  handler: async (ctx, args): Promise<{ enabled: boolean }> => {
-    const { orgId } = await requireMemberOrg(ctx, "followUp.getAutoFollowUp");
-    const normalizedName = normalizeCsName(args.csName);
-    const config = await ctx.db
-      .query("csConfigs")
-      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
-      .unique();
-    const enabled = config?.autoFollowUpEnabled ?? false;
-    return { enabled };
-  },
-});
-
 // Feature #10: KPI — follow-up effectiveness
 export const getFollowUpEffectiveness = query({
   args: { startAt: v.number(), endAt: v.number(), csName: v.optional(v.string()) },
+  returns: v.object({
+    totalClosings: v.number(),
+    fromFollowUp: v.number(),
+    byStage: v.object({ h1: v.number(), h2: v.number(), h3: v.number() }),
+  }),
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "followUp.getFollowUpEffectiveness");
-    return computeFollowUpEffectivenessRaw(ctx, orgId, args);
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getFollowUpEffectiveness", args.csName);
+    return computeFollowUpEffectivenessRaw(ctx, orgId, { ...args, csName: effectiveCsName });
   },
 });
 
@@ -471,8 +877,19 @@ export async function computeFollowUpEffectivenessRaw(
 // a lead that closed after ≥1 follow-up touch gets fromFollowUp=true so the funnel's effect is visible.
 export const getClosedFollowUps = query({
   args: { csName: v.optional(v.string()), sinceDays: v.optional(v.number()), nowOverride: v.optional(v.number()) },
+  returns: v.array(v.object({
+    conversationId: v.optional(v.id("conversations")),
+    customerName: v.string(),
+    customerPhone: v.string(),
+    csName: v.string(),
+    orderId: v.string(),
+    closedAt: v.number(),
+    product: v.string(),
+    touches: v.number(),
+    fromFollowUp: v.boolean(),
+  })),
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "followUp.getClosedFollowUps");
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.getClosedFollowUps", args.csName);
     const internalPhones = await getInternalPhoneSet(ctx, orgId);
     const now = args.nowOverride ?? Date.now();
     const DAY = 86_400_000;
@@ -481,7 +898,7 @@ export const getClosedFollowUps = query({
       throw new Error("followUp.getClosedFollowUps: range exceeds 35 days");
     }
     const since = now - sinceDays * DAY;
-    const csKeyMemo = args.csName ? csKey(args.csName) : null;
+    const csKeyMemo = effectiveCsName ? csKey(effectiveCsName) : null;
 
     const recaps = await collectExactBounded(ctx.db
       .query("shippingRecaps")
