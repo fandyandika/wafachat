@@ -2,10 +2,156 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
 
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
 }
+
+const DAY = 24 * 60 * 60 * 1_000;
+
+test("new inbound clears an old due follow-up cycle", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  let conversationId: any;
+  await t.run(async (ctx) => {
+    conversationId = await ctx.db.insert("conversations", {
+      orgId,
+      orderId: "FU-INBOUND",
+      customerPhone: "628801",
+      customerName: "Inbound",
+      assignedCsName: "Aisyah",
+      status: "active",
+      aiEnabled: false,
+      note: "",
+      followUpCsKey: "aisyah",
+      followUpCycleInboundAt: 1_000,
+      followUpNextStage: 2,
+      followUpDueAt: 2_000,
+      followUpState: "waiting",
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+  });
+
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "628801",
+    order_id: "FU-INBOUND",
+    role: "customer",
+    direction: "inbound",
+    content: "Saya balas ya kak",
+    createdAt: 5_000,
+  });
+
+  const conversation = await t.run(async (ctx) => (await ctx.db.get(conversationId)) as Doc<"conversations"> | null);
+  expect(conversation).toMatchObject({ followUpCycleInboundAt: 5_000 });
+  expect(conversation?.followUpNextStage).toBeUndefined();
+  expect(conversation?.followUpDueAt).toBeUndefined();
+  expect(conversation?.followUpState).toBeUndefined();
+});
+
+test("real CS outbound after inbound arms H+1 from the inbound timestamp", async () => {
+  const t = convexTest(schema);
+  await seedOrg(t);
+  const inboundAt = 10_000;
+  const inbound = await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "628802",
+    order_id: "FU-OUTBOUND",
+    customerName: "Outbound",
+    csName: "CS Aisyah",
+    role: "customer",
+    direction: "inbound",
+    content: "Halo",
+    createdAt: inboundAt,
+  });
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "628802",
+    order_id: "FU-OUTBOUND",
+    csName: "CS Aisyah",
+    role: "cs",
+    direction: "outbound",
+    content: "Halo juga",
+    createdAt: inboundAt + 1_000,
+  });
+
+  const conversation = await t.run(async (ctx) => (await ctx.db.get(inbound.conversationId)) as Doc<"conversations"> | null);
+  expect(conversation).toMatchObject({
+    followUpCsKey: "aisyah",
+    followUpCycleInboundAt: inboundAt,
+    followUpNextStage: 1,
+    followUpDueAt: inboundAt + DAY,
+    followUpState: "waiting",
+  });
+});
+
+test("system order-notification outbound never arms manual follow-up", async () => {
+  const t = convexTest(schema);
+  await seedOrg(t);
+  const inbound = await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "628803",
+    order_id: "FU-SYSTEM",
+    customerName: "System",
+    csName: "Aisyah",
+    role: "customer",
+    direction: "inbound",
+    content: "Halo",
+    createdAt: 20_000,
+  });
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "628803",
+    order_id: "FU-SYSTEM",
+    role: "system",
+    direction: "outbound",
+    content: "ORDER BARU",
+    messageType: "template",
+    createdAt: 21_000,
+  });
+
+  const conversation = await t.run(async (ctx) => (await ctx.db.get(inbound.conversationId)) as Doc<"conversations"> | null);
+  expect(conversation?.followUpNextStage).toBeUndefined();
+  expect(conversation?.followUpDueAt).toBeUndefined();
+});
+
+test("manual CS touch after H+1 becomes due advances to H+2 with a fresh day", async () => {
+  const t = convexTest(schema);
+  await seedOrg(t);
+  const inboundAt = 30_000;
+  const inbound = await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "628804",
+    order_id: "FU-MANUAL-TOUCH",
+    csName: "Aisyah",
+    role: "customer",
+    direction: "inbound",
+    content: "Halo",
+    createdAt: inboundAt,
+  });
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "628804",
+    order_id: "FU-MANUAL-TOUCH",
+    csName: "Aisyah",
+    role: "cs",
+    direction: "outbound",
+    content: "Balasan awal",
+    createdAt: inboundAt + 1_000,
+  });
+  const h1At = inboundAt + DAY + 1_000;
+  await t.mutation(internal.messages.appendMessageFromN8n, {
+    phone: "628804",
+    order_id: "FU-MANUAL-TOUCH",
+    csName: "Aisyah",
+    role: "cs",
+    direction: "outbound",
+    content: "Follow-up manual",
+    createdAt: h1At,
+  });
+
+  const conversation = await t.run(async (ctx) => (await ctx.db.get(inbound.conversationId)) as Doc<"conversations"> | null);
+  expect(conversation).toMatchObject({
+    followUpNextStage: 2,
+    followUpDueAt: h1At + DAY,
+    followUpState: "waiting",
+  });
+});
 
 test("appendMessageFromN8n: same externalMessageId twice -> one row", async () => {
   const t = convexTest(schema);
@@ -44,6 +190,9 @@ test("appendMessageFromN8n: outbound closing phrase -> exactly one recap + closi
   const events = await t.run(async (ctx) =>
     (await ctx.db.query("events").collect()).filter((e) => e.type === "closing_detected"));
   expect(events.length).toBeGreaterThanOrEqual(1);
+  const conversation = await t.run(async (ctx) => (await ctx.db.get(r1.conversationId)) as Doc<"conversations"> | null);
+  expect(conversation).toMatchObject({ status: "closed", followUpState: "complete" });
+  expect(conversation?.followUpDueAt).toBeUndefined();
 });
 
 test("appendMessageFromN8n: inbound with phrase -> NO recap", async () => {

@@ -71,12 +71,28 @@ test("scan/apply closes WON (recap) + STALE (>5d), keeps FRESH; counts correct",
   let won: Id<"conversations">, stale: Id<"conversations">, fresh: Id<"conversations">;
   const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    won = await ctx.db.insert("conversations", { orgId, ...conv("O-WON", "62801") });
+    won = await ctx.db.insert("conversations", {
+      orgId,
+      ...conv("O-WON", "62801"),
+      followUpCsKey: "nabila",
+      followUpCycleInboundAt: now - 6 * DAY,
+      followUpNextStage: 2,
+      followUpDueAt: now - DAY,
+      followUpState: "waiting",
+    });
     await ctx.db.insert("orders", { orgId, ...order("O-WON", "62801") });
     await ctx.db.insert("shippingRecaps", { orgId, ...recap("O-WON", "62801") });
     await ctx.db.insert("messages", { orgId, ...inbound(won, "O-WON", "62801", now - 6 * DAY) });
 
-    stale = await ctx.db.insert("conversations", { orgId, ...conv("O-STALE", "62802") });
+    stale = await ctx.db.insert("conversations", {
+      orgId,
+      ...conv("O-STALE", "62802"),
+      followUpCsKey: "nabila",
+      followUpCycleInboundAt: now - 6 * DAY,
+      followUpNextStage: 3,
+      followUpDueAt: now - DAY,
+      followUpState: "waiting",
+    });
     await ctx.db.insert("orders", { orgId, ...order("O-STALE", "62802") });
     await ctx.db.insert("messages", { orgId, ...inbound(stale, "O-STALE", "62802", now - 6 * DAY) }); // last inbound 6d ago
 
@@ -91,6 +107,10 @@ test("scan/apply closes WON (recap) + STALE (>5d), keeps FRESH; counts correct",
     expect((await ctx.db.get(won))!.status).toBe("closed");
     expect((await ctx.db.get(stale))!.status).toBe("closed");
     expect((await ctx.db.get(fresh))!.status).toBe("active");
+    expect(await ctx.db.get(won)).toMatchObject({ followUpState: "complete" });
+    expect(await ctx.db.get(stale)).toMatchObject({ followUpState: "archived" });
+    expect((await ctx.db.get(won))?.followUpDueAt).toBeUndefined();
+    expect((await ctx.db.get(stale))?.followUpDueAt).toBeUndefined();
   });
 });
 

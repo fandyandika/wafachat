@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
 import { parseClosingMessage, canonicalizeProduct } from "./shippingRecaps";
 
 const t0 = 1_750_000_000_000;
@@ -195,4 +196,59 @@ test("importBerduVerifiedRows: canonicalizes raw csName through the registry (al
   expect(recaps.length).toBe(1);
   expect(recaps[0].csName).toBe("Aisyah");  // canonical form
   expect(recaps[0].csKey).toBe("aisyah");   // immutable key
+});
+
+test("cancelling a recap clears any actionable follow-up state", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "cancel-admin", role: "admin", name: "Cancel Admin", email: "cancel@wafachat.test" });
+  const orgId = await seedOrg(t);
+  let conversationId: any;
+  let recapId: any;
+  await t.run(async (ctx) => {
+    conversationId = await ctx.db.insert("conversations", {
+      orgId,
+      orderId: "CANCEL-FU",
+      customerPhone: "628899",
+      customerName: "Cancel",
+      assignedCsName: "Aisyah",
+      status: "active",
+      aiEnabled: false,
+      note: "",
+      followUpCsKey: "aisyah",
+      followUpCycleInboundAt: t0 - 2 * 86_400_000,
+      followUpNextStage: 2,
+      followUpDueAt: t0 - 1_000,
+      followUpState: "waiting",
+      createdAt: t0 - 2 * 86_400_000,
+      updatedAt: t0,
+    });
+    recapId = await ctx.db.insert("shippingRecaps", {
+      orgId,
+      conversationId,
+      orderIdBerdu: "CANCEL-FU",
+      customerPhone: "628899",
+      customerName: "Cancel",
+      csName: "Aisyah",
+      closedAt: t0,
+      recipientName: "Cancel",
+      recipientPhone: "628899",
+      recipientAddress: "",
+      recipientDistrict: "",
+      recipientCity: "",
+      packageContent: "Quran",
+      paymentMethod: "cod",
+      status: "ready",
+      flags: [],
+      sourceMessageText: "",
+      version: 1,
+      createdAt: t0,
+      updatedAt: t0,
+    });
+  });
+
+  await asAdmin.mutation(api.shippingRecaps.markCancelled, { recapId, reason: "Customer batal" });
+  const conversation = await t.run(async (ctx) => (await ctx.db.get(conversationId)) as Doc<"conversations"> | null);
+  expect(conversation).toMatchObject({ status: "closed", followUpState: "complete" });
+  expect(conversation?.followUpNextStage).toBeUndefined();
+  expect(conversation?.followUpDueAt).toBeUndefined();
 });
