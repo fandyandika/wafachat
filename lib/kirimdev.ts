@@ -48,6 +48,10 @@ export function buildTextPayload(to: string, text: string): KirimDevPayload {
 function providerMessageId(body: unknown): string | undefined {
   if (!body || typeof body !== "object") return undefined;
   const value = body as Record<string, unknown>;
+  const data = value.data;
+  if (data && typeof data === "object" && typeof (data as Record<string, unknown>).id === "string") {
+    return (data as Record<string, unknown>).id as string;
+  }
   const messages = Array.isArray(value.messages) ? value.messages : [];
   const first = messages[0];
   if (first && typeof first === "object" && typeof (first as Record<string, unknown>).id === "string") {

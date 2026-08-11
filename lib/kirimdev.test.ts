@@ -44,6 +44,24 @@ describe("KirimDev admin inbox payloads", () => {
     }));
   });
 
+  test("returns the provider message id from KirimDev's data envelope", async () => {
+    const request = vi.fn(async () => new Response(JSON.stringify({
+      data: { id: "wamid.out.enveloped" },
+      request_id: "req-1",
+    }), { status: 200 }));
+
+    const result = await sendKirimDevMessage({
+      apiKey: "secret",
+      baseUrl: "https://api.test/v1",
+      phoneNumberId: "pn_admin",
+      payload: buildTextPayload("6285715682110", "Halo"),
+      idempotencyKey: "admin-text-enveloped",
+      request,
+    });
+
+    expect(result).toEqual({ ok: true, providerMessageId: "wamid.out.enveloped" });
+  });
+
   test("maps provider rejection and treats transport failure as unknown", async () => {
     const rejected = await sendKirimDevMessage({
       apiKey: "secret",
