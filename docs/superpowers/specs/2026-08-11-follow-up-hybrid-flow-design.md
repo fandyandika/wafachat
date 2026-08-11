@@ -1,7 +1,7 @@
 # WafaChat Hybrid Follow-up Flow Design
 
 **Date:** 2026-08-11  
-**Status:** Approved design, awaiting written-spec review  
+**Status:** Approved written specification  
 **Scope:** Repair and simplify the Follow-up module for daily CS operations.
 
 ## 1. Goal
@@ -219,4 +219,3 @@ This scope does not include:
 - AI-written follow-up messages.
 
 These can be designed separately after the manual hybrid flow is stable.
-
