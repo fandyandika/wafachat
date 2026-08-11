@@ -1,4 +1,5 @@
 import { query, action, mutation, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { requireMember, requireMemberOrg, requireScopedMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
@@ -9,10 +10,108 @@ import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
 import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 import { getBoundedActiveAgentRegistry } from "./agents";
+import { FOLLOW_UP_EXPIRY_MS } from "./followUpModel";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
 const MAX_FOLLOW_UP_ROWS = 100;
+
+const followUpStageValidator = v.union(v.literal(1), v.literal(2), v.literal(3));
+const dueFollowUpValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  csKey: v.string(),
+  cycleInboundAt: v.number(),
+  stage: followUpStageValidator,
+  dueAt: v.number(),
+});
+
+export const listDueFollowUps = query({
+  args: {
+    stage: v.optional(followUpStageValidator),
+    csName: v.optional(v.string()),
+    now: v.number(),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(dueFollowUpValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    if (!Number.isFinite(args.now) || args.now < 0) throw new Error("Waktu queue tidak valid.");
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listDueFollowUps",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const lowerDueAt = args.now - FOLLOW_UP_EXPIRY_MS;
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 100)),
+    };
+
+    const result = effectiveCsKey
+      ? args.stage
+        ? await ctx.db
+            .query("conversations")
+            .withIndex("by_org_followUpCsKey_stage_state_dueAt", (q) => q
+              .eq("orgId", orgId)
+              .eq("followUpCsKey", effectiveCsKey)
+              .eq("followUpNextStage", args.stage)
+              .eq("followUpState", "waiting")
+              .gte("followUpDueAt", lowerDueAt)
+              .lte("followUpDueAt", args.now))
+            .paginate(paginationOpts)
+        : await ctx.db
+            .query("conversations")
+            .withIndex("by_org_followUpCsKey_state_dueAt", (q) => q
+              .eq("orgId", orgId)
+              .eq("followUpCsKey", effectiveCsKey)
+              .eq("followUpState", "waiting")
+              .gte("followUpDueAt", lowerDueAt)
+              .lte("followUpDueAt", args.now))
+            .paginate(paginationOpts)
+      : args.stage
+        ? await ctx.db
+            .query("conversations")
+            .withIndex("by_org_followUpStage_state_dueAt", (q) => q
+              .eq("orgId", orgId)
+              .eq("followUpNextStage", args.stage)
+              .eq("followUpState", "waiting")
+              .gte("followUpDueAt", lowerDueAt)
+              .lte("followUpDueAt", args.now))
+            .paginate(paginationOpts)
+        : await ctx.db
+            .query("conversations")
+            .withIndex("by_org_followUpState_dueAt", (q) => q
+              .eq("orgId", orgId)
+              .eq("followUpState", "waiting")
+              .gte("followUpDueAt", lowerDueAt)
+              .lte("followUpDueAt", args.now))
+            .paginate(paginationOpts);
+
+    return {
+      page: result.page.map((row) => ({
+        conversationId: row._id,
+        customerName: row.customerName,
+        customerPhone: row.customerPhone,
+        orderId: row.orderId,
+        csName: row.assignedCsName,
+        csKey: row.followUpCsKey!,
+        cycleInboundAt: row.followUpCycleInboundAt!,
+        stage: row.followUpNextStage!,
+        dueAt: row.followUpDueAt!,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
 
 // Count follow-up touches (outbound messages after the 24h window closed, relative to lastInbound).
 // Manual-via-WABA follow-ups and API sends both land here, so the funnel can't double-send a lead a

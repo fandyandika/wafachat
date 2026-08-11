@@ -28,6 +28,158 @@ const msg = (conversationId: any, orderId: string, phone: string, direction: "in
   ({ conversationId, orderId, customerPhone: phone, role: direction === "inbound" ? "customer" as const : "cs" as const,
      direction, content: "x", messageType: "text" as const, source: "n8n" as const, createdAt });
 
+test("listDueFollowUps paginates 150 due conversations without a read-limit failure", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "queue-admin", role: "admin", name: "Queue Admin", email: "queue@wafachat.test" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 150; i++) {
+      await ctx.db.insert("conversations", {
+        orgId,
+        ...convBase,
+        orderId: `QUEUE-${i}`,
+        customerPhone: `6289000${String(i).padStart(4, "0")}`,
+        followUpCsKey: "nabila",
+        followUpCycleInboundAt: now - 30 * HOUR,
+        followUpNextStage: 1,
+        followUpDueAt: now - HOUR + i,
+        followUpState: "waiting",
+      });
+    }
+  });
+
+  const first = await asAdmin.query(api.followUp.listDueFollowUps, {
+    now,
+    paginationOpts: { numItems: 100, cursor: null },
+  });
+  const second = await asAdmin.query(api.followUp.listDueFollowUps, {
+    now,
+    paginationOpts: { numItems: 100, cursor: first.continueCursor },
+  });
+  expect(first.page).toHaveLength(100);
+  expect(second.page).toHaveLength(50);
+  expect(new Set([...first.page, ...second.page].map((row) => String(row.conversationId))).size).toBe(150);
+});
+
+test("recent follow-up backfill materializes at most 25 conversations per page", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 30; i++) {
+      const orderId = `BACKFILL-${i}`;
+      const phone = `6289100${String(i).padStart(4, "0")}`;
+      const conversationId = await ctx.db.insert("conversations", {
+        orgId,
+        ...convBase,
+        orderId,
+        customerPhone: phone,
+        updatedAt: now - i,
+      });
+      await ctx.db.insert("messages", {
+        orgId,
+        ...msg(conversationId, orderId, phone, "inbound", now - 30 * HOUR),
+      });
+      await ctx.db.insert("messages", {
+        orgId,
+        ...msg(conversationId, orderId, phone, "outbound", now - 29 * HOUR),
+      });
+    }
+  });
+
+  const first = await t.mutation(internal.followUpMigration.backfillPage, {
+    orgId,
+    status: "active",
+    now,
+    scheduleNext: false,
+  });
+  expect(first.processed).toBe(25);
+  expect(first.done).toBe(false);
+  expect(await t.run(async (ctx) => (await ctx.db
+    .query("conversations")
+    .withIndex("by_org_followUpState_dueAt", (q) => q.eq("orgId", orgId).eq("followUpState", "waiting"))
+    .collect()).length)).toBe(25);
+
+  const second = await t.mutation(internal.followUpMigration.backfillPage, {
+    orgId,
+    status: "active",
+    now,
+    cursor: first.continueCursor,
+    scheduleNext: false,
+  });
+  expect(second.processed).toBe(5);
+  expect(second.done).toBe(true);
+  expect(await t.run(async (ctx) => (await ctx.db
+    .query("conversations")
+    .withIndex("by_org_followUpState_dueAt", (q) => q.eq("orgId", orgId).eq("followUpState", "waiting"))
+    .collect()).length)).toBe(30);
+});
+
+test("listDueFollowUps enforces tenant, CS, and stage scope before pagination", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", {
+    slug: "other-follow-up",
+    name: "Other Follow-up",
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  const csUserId = await t.run((ctx) => ctx.db.insert("users", {
+    orgId,
+    email: "queue-aisyah@wafachat.test",
+    name: "Aisyah",
+    passwordHash: "test",
+    role: "cs",
+    csName: "Aisyah",
+    isActive: true,
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+  await t.run(async (ctx) => {
+    for (const [targetOrgId, orderId, csName, key, stage] of [
+      [orgId, "SCOPE-AISYAH", "Aisyah", "aisyah", 1],
+      [orgId, "SCOPE-LILA", "Lila", "lila", 1],
+      [orgId, "SCOPE-AISYAH-H2", "Aisyah", "aisyah", 2],
+      [otherOrgId, "SCOPE-OTHER", "Aisyah", "aisyah", 1],
+    ] as const) {
+      await ctx.db.insert("conversations", {
+        orgId: targetOrgId,
+        ...convBase,
+        orderId,
+        customerPhone: `62892${orderId}`,
+        assignedCsName: csName,
+        followUpCsKey: key,
+        followUpCycleInboundAt: now - 48 * HOUR,
+        followUpNextStage: stage,
+        followUpDueAt: now - HOUR,
+        followUpState: "waiting",
+      });
+    }
+  });
+
+  const asCs = t.withIdentity({
+    subject: String(csUserId),
+    role: "cs",
+    name: "Aisyah",
+    email: "queue-aisyah@wafachat.test",
+    csName: "Aisyah",
+  });
+  const csPage = await asCs.query(api.followUp.listDueFollowUps, {
+    csName: "Lila",
+    stage: 1,
+    now,
+    paginationOpts: { numItems: 20, cursor: null },
+  });
+  expect(csPage.page.map((row) => row.orderId)).toEqual(["SCOPE-AISYAH"]);
+
+  const asAdmin = t.withIdentity({ subject: "scope-admin", role: "admin", name: "Scope Admin", email: "scope-admin@wafachat.test" });
+  const adminPage = await asAdmin.query(api.followUp.listDueFollowUps, {
+    stage: 2,
+    now,
+    paginationOpts: { numItems: 20, cursor: null },
+  });
+  expect(adminPage.page.map((row) => row.orderId)).toEqual(["SCOPE-AISYAH-H2"]);
+});
+
 test("getFollowUpCandidates: stale conversation (updated >6d ago) excluded by recency bound", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });

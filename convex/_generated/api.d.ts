@@ -25,6 +25,7 @@ import type * as csConfigs from "../csConfigs.js";
 import type * as events from "../events.js";
 import type * as followUp from "../followUp.js";
 import type * as followUpMath from "../followUpMath.js";
+import type * as followUpMigration from "../followUpMigration.js";
 import type * as followUpModel from "../followUpModel.js";
 import type * as followUpTemplates from "../followUpTemplates.js";
 import type * as http from "../http.js";
@@ -79,6 +80,7 @@ declare const fullApi: ApiFromModules<{
   events: typeof events;
   followUp: typeof followUp;
   followUpMath: typeof followUpMath;
+  followUpMigration: typeof followUpMigration;
   followUpModel: typeof followUpModel;
   followUpTemplates: typeof followUpTemplates;
   http: typeof http;
