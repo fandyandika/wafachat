@@ -25,6 +25,8 @@ import type * as csConfigs from "../csConfigs.js";
 import type * as events from "../events.js";
 import type * as followUp from "../followUp.js";
 import type * as followUpMath from "../followUpMath.js";
+import type * as followUpModel from "../followUpModel.js";
+import type * as followUpTemplates from "../followUpTemplates.js";
 import type * as http from "../http.js";
 import type * as ingest_berduAdapter from "../ingest/berduAdapter.js";
 import type * as ingest_core from "../ingest/core.js";
@@ -77,6 +79,8 @@ declare const fullApi: ApiFromModules<{
   events: typeof events;
   followUp: typeof followUp;
   followUpMath: typeof followUpMath;
+  followUpModel: typeof followUpModel;
+  followUpTemplates: typeof followUpTemplates;
   http: typeof http;
   "ingest/berduAdapter": typeof ingest_berduAdapter;
   "ingest/core": typeof ingest_core;

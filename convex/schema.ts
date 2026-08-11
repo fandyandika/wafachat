@@ -74,6 +74,21 @@ export default defineSchema({
     followUpStageAt: v.optional(v.number()),
     followUpStageOverride: v.optional(v.number()), // manual override: 1, 2, or 3; cleared on reply/send
     followUpArchivedAt: v.optional(v.number()),     // timestamp when manually archived
+    followUpCsKey: v.optional(v.string()),
+    followUpCycleInboundAt: v.optional(v.number()),
+    followUpNextStage: v.optional(v.union(v.literal(1), v.literal(2), v.literal(3))),
+    followUpDueAt: v.optional(v.number()),
+    followUpState: v.optional(v.union(
+      v.literal("waiting"),
+      v.literal("sending"),
+      v.literal("unknown"),
+      v.literal("failed"),
+      v.literal("complete"),
+      v.literal("archived"),
+    )),
+    followUpRequestId: v.optional(v.string()),
+    followUpProviderMessageId: v.optional(v.string()),
+    followUpLastError: v.optional(v.string()),
     rtPendingInboundAt: v.optional(v.number()), // response-time pairing state (first inbound of current streak)
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -82,7 +97,29 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_status_updatedAt", ["orgId", "status", "updatedAt"])
     .index("by_org_customerPhone_updatedAt", ["orgId", "customerPhone", "updatedAt"])
-    .index("by_org_assignedCsName_status", ["orgId", "assignedCsName", "status"]),
+    .index("by_org_assignedCsName_status", ["orgId", "assignedCsName", "status"])
+    .index("by_org_followUpState_dueAt", ["orgId", "followUpState", "followUpDueAt"])
+    .index("by_org_followUpStage_state_dueAt", ["orgId", "followUpNextStage", "followUpState", "followUpDueAt"])
+    .index("by_org_followUpCsKey_state_dueAt", ["orgId", "followUpCsKey", "followUpState", "followUpDueAt"])
+    .index("by_org_followUpCsKey_stage_state_dueAt", ["orgId", "followUpCsKey", "followUpNextStage", "followUpState", "followUpDueAt"]),
+
+  followUpTemplates: defineTable({
+    orgId: v.id("organizations"),
+    stage: v.union(v.literal(1), v.literal(2), v.literal(3)),
+    label: v.string(),
+    templateName: v.string(),
+    language: v.string(),
+    variables: v.array(v.union(
+      v.literal("customer_name"),
+      v.literal("product_name"),
+      v.literal("order_id"),
+    )),
+    isActive: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_stage", ["orgId", "stage"])
+    .index("by_org_active_stage", ["orgId", "isActive", "stage"]),
 
   lifecycleSweepStates: defineTable({
     orgId: v.id("organizations"),
