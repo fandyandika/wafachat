@@ -26,6 +26,16 @@ export async function POST(req: NextRequest) {
   if (values.length !== body.values.length) {
     return NextResponse.json({ ok: false, error: "Nilai template tidak valid." }, { status: 400 });
   }
+  if (Object.prototype.hasOwnProperty.call(body, "customerName") && typeof body.customerName !== "string") {
+    return NextResponse.json({ ok: false, error: "Nama customer tidak valid." }, { status: 400 });
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "productName") && typeof body.productName !== "string") {
+    return NextResponse.json({ ok: false, error: "Nama produk tidak valid." }, { status: 400 });
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "totalAmount") &&
+      (typeof body.totalAmount !== "number" || !Number.isSafeInteger(body.totalAmount) || body.totalAmount < 0)) {
+    return NextResponse.json({ ok: false, error: "Harga total harus berupa rupiah bulat yang tidak negatif." }, { status: 400 });
+  }
 
   try {
     const result = await convex.action(api.adminInbox.sendTemplate, {
@@ -36,7 +46,8 @@ export async function POST(req: NextRequest) {
       channelId: body.channelId as never,
       customerPhone: body.customerPhone,
       customerName: typeof body.customerName === "string" ? body.customerName : undefined,
-      orderId: typeof body.orderId === "string" ? body.orderId : undefined,
+      productName: typeof body.productName === "string" ? body.productName : undefined,
+      totalAmount: typeof body.totalAmount === "number" ? body.totalAmount : undefined,
       templateId: body.templateId as never,
       values,
       clientRequestId: body.clientRequestId,
