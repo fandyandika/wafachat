@@ -1,6 +1,7 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test, vi } from "vitest";
+import { readFileSync } from "node:fs";
 
 (globalThis as any).React = React;
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams() }));
@@ -78,4 +79,13 @@ test("mobile follow-up controls and row selection keep 44px targets", () => {
   expect(html).toMatch(/title="Filter per CS"[^>]+min-h-11[^>]+md:min-h-9/);
   expect(html.match(/role="tab"[^>]+min-h-11[^>]+md:min-h-9/g)).toHaveLength(6);
   expect(check).toMatch(/h-11 w-11[^>]+md:h-9 md:w-9/);
+});
+
+test("manual workspace has no automatic or stage-override controls and includes final H+3", () => {
+  const source = readFileSync(new URL("./follow-up-dashboard.tsx", import.meta.url), "utf8");
+  expect(source).not.toContain("Auto-send");
+  expect(source).not.toContain("Pindah:");
+  expect(source).not.toContain("/api/follow-up/set-stage");
+  expect(source).toContain("H+3 · Follow-up terakhir");
+  expect(source).toContain("crypto.randomUUID()");
 });
