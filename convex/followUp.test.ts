@@ -959,6 +959,44 @@ test("getClosedFollowUps: lists recent closings, flags via-follow-up, filters ca
   expect(all.map((r) => r.orderId)).toContain("C-3"); // unscoped sees other CS
 });
 
+test("getClosedFollowUps stays bounded above 900 recent closings", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "closing-volume-admin", role: "admin", name: "Admin", email: "closing-volume@w" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 901; index++) {
+      const closedAt = now - index;
+      await ctx.db.insert("shippingRecaps", {
+        orgId,
+        orderIdBerdu: `C-VOLUME-${index}`,
+        customerPhone: `62877${String(index).padStart(7, "0")}`,
+        customerName: `Customer ${index}`,
+        csName: "Nabila",
+        csKey: "nabila",
+        closedAt,
+        recipientName: `Customer ${index}`,
+        recipientPhone: `62877${String(index).padStart(7, "0")}`,
+        recipientAddress: "",
+        recipientDistrict: "",
+        recipientCity: "",
+        packageContent: "Quran",
+        paymentMethod: "cod" as const,
+        status: "ready" as const,
+        flags: [],
+        sourceMessageText: "",
+        version: 1,
+        createdAt: closedAt,
+        updatedAt: closedAt,
+      });
+    }
+  });
+
+  const rows = await asAdmin.query(api.followUp.getClosedFollowUps, { sinceDays: 7, nowOverride: now + 1 });
+  expect(rows).toHaveLength(300);
+  expect(rows[0].orderId).toBe("C-VOLUME-0");
+  expect(rows[299].orderId).toBe("C-VOLUME-299");
+});
+
 // WABA number resolution must tolerate the "CS " prefix mismatch in assignedCsName.
 test("candidacyFor: resolves providerNumberId by csKey even when assignedCsName lacks 'CS ' prefix", async () => {
   const t = convexTest(schema);

@@ -956,10 +956,14 @@ export const getClosedFollowUps = query({
     const since = now - sinceDays * DAY;
     const csKeyMemo = effectiveCsName ? csKey(effectiveCsName) : null;
 
-    const recaps = await collectExactBounded(ctx.db
+    // This tab is an operational preview, not an export. Read newest-first and
+    // cap at a small multiple of the visible 300 rows so high-volume tenants do
+    // not crash the whole client before cancelled/internal rows are removed.
+    const recaps = await ctx.db
       .query("shippingRecaps")
-      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", since).lt("closedAt", now)),
-      "followUp.getClosedFollowUps recaps");
+      .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId).gte("closedAt", since).lt("closedAt", now))
+      .order("desc")
+      .take(600);
 
     const filtered = recaps
       .filter((r) => r.status !== "cancelled" && r.status !== "cancelled_after_export")
@@ -992,7 +996,6 @@ export const getClosedFollowUps = query({
       };
     });
 
-    rows.sort((a, b) => b.closedAt - a.closedAt);
     return rows.slice(0, 300);
   },
 });
