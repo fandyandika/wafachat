@@ -487,6 +487,136 @@ test("sendFollowUp: missing KIRIMDEV_API_KEY -> not ok, fetch not called", async
   vi.unstubAllGlobals();
 });
 
+async function seedDueManualFollowUp(t: any, orgId: any, suffix: string, stage: 1 | 2 | 3 = 1) {
+  return await t.run(async (ctx: any) => {
+    const conversationId = await ctx.db.insert("conversations", {
+      orgId,
+      ...convBase,
+      orderId: `MANUAL-${suffix}`,
+      customerPhone: `628777${suffix}`,
+      followUpCsKey: "nabila",
+      followUpCycleInboundAt: now - 30 * HOUR,
+      followUpNextStage: stage,
+      followUpDueAt: Date.now() - HOUR,
+      followUpState: "waiting",
+    });
+    await ctx.db.insert("orders", {
+      orgId,
+      ...orderBase,
+      orderId: `MANUAL-${suffix}`,
+      customerPhone: `628777${suffix}`,
+    });
+    const existingCs = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "nabila"))
+      .first();
+    if (!existingCs) await ctx.db.insert("csConfigs", { orgId, ...csCfg("Nabila") });
+    const existingTemplate = await ctx.db
+      .query("followUpTemplates")
+      .withIndex("by_org_stage", (q: any) => q.eq("orgId", orgId).eq("stage", stage))
+      .first();
+    if (!existingTemplate) {
+      await ctx.db.insert("followUpTemplates", {
+        orgId,
+        stage,
+        label: `H+${stage}`,
+        templateName: `follow_up_h${stage}`,
+        language: "id",
+        variables: ["customer_name", "product_name", "order_id"],
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    return conversationId;
+  });
+}
+
+test("reserveDueFollowUp atomically reserves once and returns immutable provider payload", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "manual-admin", role: "admin", name: "Manual Admin", email: "manual@wafachat" });
+  const orgId = await seedOrg(t);
+  const conversationId = await seedDueManualFollowUp(t, orgId, "01");
+
+  const first = await asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+    conversationId,
+    stage: 1,
+    requestId: "11111111-1111-4111-8111-111111111111",
+  });
+  const duplicate = await asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+    conversationId,
+    stage: 1,
+    requestId: "11111111-1111-4111-8111-111111111111",
+  });
+
+  expect(first).toMatchObject({
+    shouldSend: true,
+    status: "sending",
+    to: "62877701",
+    phoneNumberId: "PHONE123",
+    templateName: "follow_up_h1",
+    language: "id",
+    orderedValues: ["Budi", "Quran Mapping", "MANUAL-01"],
+  });
+  expect(first.idempotencyKey).toContain("-1-11111111-1111-4111-8111-111111111111");
+  expect(duplicate).toEqual({ shouldSend: false, status: "sending" });
+});
+
+test("unknown finalization blocks a new request and accepted H+1 advances exactly one day", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "manual-admin", role: "admin", name: "Manual Admin", email: "manual@wafachat" });
+  const orgId = await seedOrg(t);
+  const unknownConversationId = await seedDueManualFollowUp(t, orgId, "02");
+  const acceptedConversationId = await seedDueManualFollowUp(t, orgId, "03");
+
+  await asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+    conversationId: unknownConversationId,
+    stage: 1,
+    requestId: "22222222-2222-4222-8222-222222222222",
+  });
+  await asAdmin.mutation(api.followUp.finalizeDueFollowUp, {
+    conversationId: unknownConversationId,
+    requestId: "22222222-2222-4222-8222-222222222222",
+    outcome: "unknown",
+    error: "Timeout provider",
+  });
+  await expect(asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+    conversationId: unknownConversationId,
+    stage: 1,
+    requestId: "33333333-3333-4333-8333-333333333333",
+  })).rejects.toThrow(/belum diketahui/i);
+
+  await asAdmin.mutation(api.followUp.reserveDueFollowUp, {
+    conversationId: acceptedConversationId,
+    stage: 1,
+    requestId: "44444444-4444-4444-8444-444444444444",
+  });
+  const acceptedAt = Date.now();
+  await asAdmin.mutation(api.followUp.finalizeDueFollowUp, {
+    conversationId: acceptedConversationId,
+    requestId: "44444444-4444-4444-8444-444444444444",
+    outcome: "accepted",
+    providerMessageId: "wamid.manual.1",
+    acceptedAt,
+  });
+
+  await t.run(async (ctx) => {
+    const conversation = (await ctx.db.get(acceptedConversationId)) as Doc<"conversations">;
+    expect(conversation.followUpState).toBe("waiting");
+    expect(conversation.followUpNextStage).toBe(2);
+    expect(conversation.followUpDueAt).toBe(acceptedAt + 24 * HOUR);
+    const messages = await ctx.db
+      .query("messages")
+      .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", acceptedConversationId))
+      .collect();
+    expect(messages).toContainEqual(expect.objectContaining({
+      messageType: "template",
+      externalMessageId: "wamid.manual.1",
+      source: "panel",
+    }));
+  });
+});
+
 test("archiveFollowUp: anonymous caller is rejected and status is unchanged", async () => {
   const t = convexTest(schema);
   let convId: any;
