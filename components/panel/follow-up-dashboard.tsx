@@ -9,7 +9,7 @@ import { usePanelFilters } from '@/components/panel/use-panel-filters';
 import { fetchHistory, fetchQueue, searchCustomers } from './follow-up/follow-up-client';
 import type { FollowUpHistoryRow, FollowUpHistoryView, FollowUpQueueRow, FollowUpSearchRow, FollowUpStage } from './follow-up/follow-up-types';
 import { FollowUpList } from './follow-up/follow-up-list';
-import { FollowUpDetail } from './follow-up/follow-up-detail';
+import { FollowUpDetail, FollowUpReadOnlyDetail } from './follow-up/follow-up-detail';
 import { TemplateSendDialog } from './follow-up/template-send-dialog';
 
 export type FollowUpView = 'action' | 'search' | 'sent' | 'review' | 'completed';
@@ -144,7 +144,11 @@ export function FollowUpDashboard() {
         {!loading && !pagination.isDone && <div className="p-3"><Button variant="outline" className="min-h-11 w-full" onClick={() => view === 'action' ? loadQueue(pagination.continueCursor, true) : view !== 'search' && loadHistory(view, pagination.continueCursor, true)}>Muat berikutnya</Button></div>}
       </section>
       <main className={`${mobileDetail ? 'block' : 'hidden md:block'} min-w-0 flex-1`}>
-        <FollowUpDetail candidate={queueSelection} onBack={() => setMobileDetail(false)} onChanged={() => { setSelected(null); setMobileDetail(false); void loadQueue(); }} onSendTemplate={setTemplateCandidate} />
+        {queueSelection
+          ? <FollowUpDetail candidate={queueSelection} onBack={() => setMobileDetail(false)} onChanged={() => { setSelected(null); setMobileDetail(false); void loadQueue(); }} onSendTemplate={setTemplateCandidate} />
+          : selected
+            ? <FollowUpReadOnlyDetail row={selected as FollowUpSearchRow | FollowUpHistoryRow} onBack={() => setMobileDetail(false)} />
+            : <FollowUpDetail candidate={null} />}
       </main>
     </div>
     <TemplateSendDialog

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { expect, test, vi } from 'vitest';
 (globalThis as any).React = React;
 vi.mock('convex/react', () => ({ useQuery: () => [] }));
-import { FollowUpDetail } from './follow-up-detail';
+import { FollowUpDetail, FollowUpReadOnlyDetail } from './follow-up-detail';
 
 const candidate = {
   conversationId: 'c1', customerName: 'Hasna', customerPhone: '6281287497002', orderId: 'O1', csName: 'Aisyah', csKey: 'aisyah',
@@ -18,4 +18,12 @@ test('detail offers safe manual actions with mobile-size targets', () => {
   expect(html).toContain('Tandai sudah dihubungi');
   expect(html).toContain('https://wa.me/6281287497002');
   expect(html).toContain('min-h-11');
+});
+
+test('search and history rows open a useful read-only customer detail', () => {
+  const html = renderToStaticMarkup(<FollowUpReadOnlyDetail row={{ conversationId: 'c1', customerName: 'Hasna', customerPhone: '62812', orderId: 'O1', csName: 'Aisyah', updatedAt: 1 }} onBack={vi.fn()} />);
+  expect(html).toContain('O1');
+  expect(html).toContain('Aisyah');
+  expect(html).toContain('Buka WhatsApp');
+  expect(html).toContain('hanya untuk pemeriksaan');
 });
