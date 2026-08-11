@@ -10,6 +10,7 @@ const REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{
 type SendBody = {
   conversationId?: string;
   stage?: number;
+  templateId?: string;
   requestId?: string;
 };
 
@@ -23,9 +24,9 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ ok: false, error: "Payload tidak valid." }, { status: 400 });
   }
-  const { conversationId, stage, requestId } = body;
-  if (!conversationId || (stage !== 1 && stage !== 2 && stage !== 3) || !requestId || !REQUEST_ID_RE.test(requestId)) {
-    return NextResponse.json({ ok: false, error: "Percakapan, tahap, atau request ID tidak valid." }, { status: 400 });
+  const { conversationId, stage, templateId, requestId } = body;
+  if (!conversationId || (stage !== 1 && stage !== 2 && stage !== 3) || !templateId || !requestId || !REQUEST_ID_RE.test(requestId)) {
+    return NextResponse.json({ ok: false, error: "Percakapan, tahap, template, atau request ID tidak valid." }, { status: 400 });
   }
 
   const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
@@ -35,6 +36,7 @@ export async function POST(req: NextRequest) {
     const result = await convex.action(api.followUp.sendDueFollowUp, {
       conversationId: conversationId as Id<"conversations">,
       stage,
+      templateId: templateId as Id<"followUpTemplates">,
       requestId,
     });
     const statusCode = result.ok ? 200 : result.status === "sending" ? 202 : 502;

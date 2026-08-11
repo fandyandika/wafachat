@@ -147,6 +147,7 @@ export default defineSchema({
     providerMessageId: v.optional(v.string()),
     lastError: v.optional(v.string()),
     actorUserId: v.optional(v.id("users")),
+    actorSubject: v.optional(v.string()),
     actorName: v.optional(v.string()),
     acceptedAt: v.optional(v.number()),
     createdAt: v.number(),

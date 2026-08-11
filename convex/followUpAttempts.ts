@@ -26,6 +26,7 @@ export type AcceptedAttemptInput = {
   language?: string;
   providerMessageId?: string;
   actorUserId?: Id<"users">;
+  actorSubject?: string;
   actorName?: string;
   acceptedAt: number;
 };
@@ -73,12 +74,70 @@ export async function recordAcceptedAttempt(
     language: input.language,
     providerMessageId: input.providerMessageId,
     actorUserId: input.actorUserId,
+    actorSubject: input.actorSubject,
     actorName: input.actorName,
     acceptedAt: input.acceptedAt,
     createdAt: input.acceptedAt,
     updatedAt: input.acceptedAt,
   });
   return { attemptId, duplicate: false };
+}
+
+export type AttemptStatus = "sending" | "accepted" | "failed" | "unknown";
+
+export async function reserveAttempt(
+  ctx: Pick<MutationCtx, "db">,
+  input: Omit<AcceptedAttemptInput, "acceptedAt"> & { createdAt: number },
+): Promise<{ attemptId: Id<"followUpAttempts">; duplicate: boolean; status: AttemptStatus }> {
+  const key = attemptKey(String(input.conversationId), input.cycleInboundAt, input.stage, input.method, input.nonce);
+  const existing = await ctx.db.query("followUpAttempts")
+    .withIndex("by_org_attemptKey", (q) => q.eq("orgId", input.orgId).eq("attemptKey", key))
+    .unique();
+  if (existing) return { attemptId: existing._id, duplicate: true, status: existing.status };
+  const attemptId = await ctx.db.insert("followUpAttempts", {
+    orgId: input.orgId,
+    conversationId: input.conversationId,
+    csKey: input.csKey,
+    cycleInboundAt: input.cycleInboundAt,
+    stage: input.stage,
+    method: input.method,
+    status: "sending",
+    bucket: "review",
+    attemptKey: key,
+    requestId: input.requestId,
+    templateId: input.templateId,
+    templateName: input.templateName,
+    language: input.language,
+    providerMessageId: input.providerMessageId,
+    actorUserId: input.actorUserId,
+    actorSubject: input.actorSubject,
+    actorName: input.actorName,
+    createdAt: input.createdAt,
+    updatedAt: input.createdAt,
+  });
+  return { attemptId, duplicate: false, status: "sending" };
+}
+
+export async function finalizeAttempt(
+  ctx: Pick<MutationCtx, "db">,
+  input: {
+    attemptId: Id<"followUpAttempts">;
+    status: Exclude<AttemptStatus, "sending">;
+    at: number;
+    providerMessageId?: string;
+    error?: string;
+  },
+): Promise<void> {
+  const attempt = await ctx.db.get(input.attemptId);
+  if (!attempt) throw new Error("Attempt Follow-up tidak ditemukan.");
+  await ctx.db.patch(input.attemptId, {
+    status: input.status,
+    bucket: input.status === "accepted" ? "sent" : "review",
+    providerMessageId: input.providerMessageId,
+    lastError: input.error?.slice(0, 500),
+    acceptedAt: input.status === "accepted" ? input.at : undefined,
+    updatedAt: input.at,
+  });
 }
 
 const historyViewValidator = v.union(v.literal("sent"), v.literal("review"), v.literal("completed"));

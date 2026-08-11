@@ -562,7 +562,8 @@ test("reserveDueFollowUp atomically reserves once and returns immutable provider
     language: "id",
     orderedValues: ["Budi", "Quran Mapping", "MANUAL-01"],
   });
-  expect(first.idempotencyKey).toContain("-1-11111111-1111-4111-8111-111111111111");
+  expect(first.idempotencyKey).toContain("-1-");
+  expect(first.idempotencyKey).toMatch(/-1-.*-11111111-1111-4111-8111-111111111111$/);
   expect(duplicate).toEqual({ shouldSend: false, status: "sending" });
 });
 
@@ -582,6 +583,8 @@ test("sendDueFollowUp owns provider acceptance and advances the queue", async ()
   const result = await asAdmin.action(api.followUp.sendDueFollowUp, {
     conversationId,
     stage: 1,
+    templateId: await t.run(async (ctx) => (await ctx.db.query("followUpTemplates")
+      .withIndex("by_org_stage", (q) => q.eq("orgId", orgId).eq("stage", 1)).unique())!._id),
     requestId: "66666666-6666-4666-8666-666666666666",
   });
 
@@ -590,11 +593,55 @@ test("sendDueFollowUp owns provider acceptance and advances the queue", async ()
   await t.run(async (ctx) => {
     const conversation = await ctx.db.get(conversationId);
     expect(conversation).toMatchObject({ followUpState: "waiting", followUpNextStage: 2 });
+    const attempts = await ctx.db.query("followUpAttempts")
+      .withIndex("by_org_conversation_createdAt", (q) => q.eq("orgId", orgId).eq("conversationId", conversationId))
+      .collect();
+    expect(attempts).toContainEqual(expect.objectContaining({
+      method: "provider_template",
+      status: "accepted",
+      bucket: "sent",
+      templateName: "follow_up_h1",
+      providerMessageId: "wamid.action.1",
+    }));
   });
   vi.unstubAllGlobals();
 });
 
-test("reservation requires all H+1, H+2, and H+3 templates", async () => {
+test("confirmManualContact advances once and deduplicates the same request", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "confirm-admin", role: "admin", name: "Confirm Admin", email: "confirm@wafachat" });
+  const orgId = await seedOrg(t);
+  const conversationId = await seedDueManualFollowUp(t, orgId, "08");
+  const args = {
+    conversationId,
+    stage: 1 as const,
+    requestId: "99999999-9999-4999-8999-999999999999",
+  };
+
+  expect(await asAdmin.mutation(api.followUp.confirmManualContact, args))
+    .toEqual({ ok: true, duplicate: false });
+  expect(await asAdmin.mutation(api.followUp.confirmManualContact, args))
+    .toEqual({ ok: true, duplicate: true });
+
+  await t.run(async (ctx) => {
+    expect(await ctx.db.get(conversationId)).toMatchObject({
+      followUpStage: 1,
+      followUpNextStage: 2,
+      followUpState: "waiting",
+    });
+    const attempts = await ctx.db.query("followUpAttempts")
+      .withIndex("by_org_conversation_createdAt", (q) => q.eq("orgId", orgId).eq("conversationId", conversationId))
+      .collect();
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      method: "manual_confirmation",
+      status: "accepted",
+      actorName: "Confirm Admin",
+    });
+  });
+});
+
+test("reservation accepts one explicitly selected active template without requiring every stage", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "template-admin", role: "admin", name: "Admin", email: "template@wafachat" });
   const orgId = await seedOrg(t);
@@ -607,11 +654,17 @@ test("reservation requires all H+1, H+2, and H+3 templates", async () => {
     await ctx.db.delete(template!._id);
   });
 
+  const selectedTemplateId = await t.run(async (ctx) => (await ctx.db
+    .query("followUpTemplates")
+    .withIndex("by_org_stage", (q) => q.eq("orgId", orgId).eq("stage", 1))
+    .unique())!._id);
+
   await expect(asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
     conversationId,
     stage: 1,
+    templateId: selectedTemplateId,
     requestId: "77777777-7777-4777-8777-777777777777",
-  })).rejects.toThrow(/H\+1, H\+2, dan H\+3/);
+  })).resolves.toMatchObject({ shouldSend: true, templateName: "follow_up_h1" });
 });
 
 test("expired sending lease becomes operator-visible unknown status", async () => {
