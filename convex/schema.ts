@@ -121,6 +121,62 @@ export default defineSchema({
     .index("by_org_stage", ["orgId", "stage"])
     .index("by_org_active_stage", ["orgId", "isActive", "stage"]),
 
+  followUpAttempts: defineTable({
+    orgId: v.id("organizations"),
+    conversationId: v.id("conversations"),
+    csKey: v.string(),
+    cycleInboundAt: v.number(),
+    stage: v.union(v.literal(1), v.literal(2), v.literal(3)),
+    method: v.union(
+      v.literal("provider_template"),
+      v.literal("provider_webhook"),
+      v.literal("manual_confirmation"),
+    ),
+    status: v.union(
+      v.literal("sending"),
+      v.literal("accepted"),
+      v.literal("failed"),
+      v.literal("unknown"),
+    ),
+    bucket: v.union(v.literal("sent"), v.literal("review")),
+    attemptKey: v.string(),
+    requestId: v.optional(v.string()),
+    templateId: v.optional(v.id("followUpTemplates")),
+    templateName: v.optional(v.string()),
+    language: v.optional(v.string()),
+    providerMessageId: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+    actorUserId: v.optional(v.id("users")),
+    actorSubject: v.optional(v.string()),
+    actorName: v.optional(v.string()),
+    acceptedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_attemptKey", ["orgId", "attemptKey"])
+    .index("by_org_status_createdAt", ["orgId", "status", "createdAt"])
+    .index("by_org_csKey_status_createdAt", ["orgId", "csKey", "status", "createdAt"])
+    .index("by_org_bucket_createdAt", ["orgId", "bucket", "createdAt"])
+    .index("by_org_csKey_bucket_createdAt", ["orgId", "csKey", "bucket", "createdAt"])
+    .index("by_org_conversation_createdAt", ["orgId", "conversationId", "createdAt"])
+    .index("by_org_providerMessageId", ["orgId", "providerMessageId"]),
+
+  followUpPreparationRuns: defineTable({
+    orgId: v.id("organizations"),
+    mode: v.union(v.literal("dry_run"), v.literal("apply")),
+    status: v.union(v.literal("running"), v.literal("complete"), v.literal("failed")),
+    cursor: v.optional(v.string()),
+    nextConversationStatus: v.union(v.literal("active"), v.literal("handover")),
+    scanned: v.number(),
+    eligible: v.number(),
+    updated: v.number(),
+    skipped: v.number(),
+    failed: v.number(),
+    startedAt: v.number(),
+    updatedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  }).index("by_org_startedAt", ["orgId", "startedAt"]),
+
   lifecycleSweepStates: defineTable({
     orgId: v.id("organizations"),
     activeCursor: v.optional(v.string()),

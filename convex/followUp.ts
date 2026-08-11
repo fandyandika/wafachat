@@ -12,6 +12,7 @@ import { advanceAfterAccepted, FOLLOW_UP_EXPIRY_MS } from "./followUpModel";
 import { internal } from "./_generated/api";
 import { buildTemplatePayload, sendKirimDevMessage } from "../lib/kirimdev";
 import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
+import { attemptKey, finalizeAttempt, recordAcceptedAttempt, reserveAttempt } from "./followUpAttempts";
 
 const HOUR = 3_600_000;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
@@ -28,6 +29,10 @@ const dueFollowUpValidator = v.object({
   cycleInboundAt: v.number(),
   stage: followUpStageValidator,
   dueAt: v.number(),
+  productName: v.string(),
+  lastMessagePreview: v.string(),
+  lastMessageAt: v.number(),
+  reason: v.string(),
 });
 
 const attentionFollowUpValidator = v.object({
@@ -66,7 +71,7 @@ export const listDueFollowUps = query({
     const lowerDueAt = args.now - FOLLOW_UP_EXPIRY_MS;
     const paginationOpts = {
       cursor: args.paginationOpts.cursor,
-      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 100)),
+      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 30)),
     };
 
     const result = effectiveCsKey
@@ -109,11 +114,16 @@ export const listDueFollowUps = query({
               .lte("followUpDueAt", args.now))
             .paginate(paginationOpts);
 
-    return {
-      page: result.page
-        .filter((row) => row.followUpCycleInboundAt !== undefined
-          && row.followUpCycleInboundAt >= args.now - FOLLOW_UP_EXPIRY_MS)
-        .map((row) => ({
+    const dueRows = result.page.filter((row) => row.followUpCycleInboundAt !== undefined
+      && row.followUpCycleInboundAt >= args.now - FOLLOW_UP_EXPIRY_MS);
+    const page = await Promise.all(dueRows.map(async (row) => {
+      const [order, lastMessage] = await Promise.all([
+        ctx.db.query("orders").withIndex("by_org_orderId", (q) => q
+          .eq("orgId", orgId).eq("orderId", row.orderId)).first(),
+        ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q
+          .eq("conversationId", row._id)).order("desc").first(),
+      ]);
+      return {
         conversationId: row._id,
         customerName: row.customerName,
         customerPhone: row.customerPhone,
@@ -123,10 +133,83 @@ export const listDueFollowUps = query({
         cycleInboundAt: row.followUpCycleInboundAt!,
         stage: row.followUpNextStage!,
         dueAt: row.followUpDueAt!,
-      })),
+        productName: order?.productName ?? "Produk tidak tersedia",
+        lastMessagePreview: (lastMessage?.content ?? "").slice(0, 180),
+        lastMessageAt: lastMessage?.createdAt ?? row.followUpCycleInboundAt!,
+        reason: "CS terakhir membalas, customer belum merespons",
+      };
+    }));
+    return {
+      page,
       isDone: result.isDone,
       continueCursor: result.continueCursor,
     };
+  },
+});
+
+const searchFollowUpCustomerValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  stage: v.optional(followUpStageValidator),
+  state: v.optional(v.union(
+    v.literal("waiting"), v.literal("sending"), v.literal("unknown"),
+    v.literal("failed"), v.literal("complete"), v.literal("archived"),
+  )),
+  updatedAt: v.number(),
+});
+
+export const searchFollowUpCustomers = query({
+  args: { query: v.string(), csName: v.optional(v.string()), limit: v.optional(v.number()) },
+  returns: v.array(searchFollowUpCustomerValidator),
+  handler: async (ctx, args) => {
+    const term = args.query.trim();
+    if (term.length < 3) throw new Error("Pencarian minimal tiga karakter.");
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.searchFollowUpCustomers",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 20), 20));
+    const digitsOnly = /^\+?[\d\s()-]+$/.test(term);
+    let candidates: any[];
+    if (digitsOnly) {
+      const phone = normalizePhone(term);
+      candidates = await ctx.db.query("conversations")
+        .withIndex("by_org_customerPhone_updatedAt", (q) => q
+          .eq("orgId", orgId).eq("customerPhone", phone))
+        .order("desc")
+        .take(limit);
+    } else {
+      const since = Date.now() - 90 * 24 * HOUR;
+      candidates = (await Promise.all((["active", "handover"] as const).map((status) => ctx.db
+        .query("conversations")
+        .withIndex("by_org_status_updatedAt", (q) => q
+          .eq("orgId", orgId).eq("status", status).gte("updatedAt", since))
+        .order("desc")
+        .take(100)))).flat();
+      const lower = term.toLocaleLowerCase("id-ID");
+      candidates = candidates.filter((row) => row.customerName.toLocaleLowerCase("id-ID").includes(lower));
+    }
+    const byPhone = new Map<string, any>();
+    for (const row of candidates) {
+      if (effectiveCsKey && csKey(row.assignedCsName) !== effectiveCsKey) continue;
+      if (!byPhone.has(row.customerPhone)) byPhone.set(row.customerPhone, row);
+      if (byPhone.size >= limit) break;
+    }
+    return [...byPhone.values()].map((row) => ({
+      conversationId: row._id,
+      customerName: row.customerName,
+      customerPhone: row.customerPhone,
+      orderId: row.orderId,
+      csName: row.assignedCsName,
+      stage: row.followUpNextStage,
+      state: row.followUpState,
+      updatedAt: row.updatedAt,
+    }));
   },
 });
 
@@ -242,6 +325,7 @@ export const reserveDueFollowUp = internalMutation({
   args: {
     conversationId: v.id("conversations"),
     stage: followUpStageValidator,
+    templateId: v.optional(v.id("followUpTemplates")),
     requestId: v.string(),
   },
   returns: reservationResultValidator,
@@ -300,19 +384,13 @@ export const reserveDueFollowUp = internalMutation({
       .take(2);
     if (orders.length !== 1) throw new Error("Data order Follow-up tidak tersedia atau duplikat.");
 
-    const templates = await ctx.db
-      .query("followUpTemplates")
-      .withIndex("by_org_stage", (q) => q.eq("orgId", orgId).eq("stage", args.stage))
-      .take(2);
-    if (templates.length !== 1 || !templates[0].isActive) {
-      throw new Error(`Template H+${args.stage} belum aktif.`);
-    }
-    const activeTemplates = await ctx.db
-      .query("followUpTemplates")
-      .withIndex("by_org_active_stage", (q) => q.eq("orgId", orgId).eq("isActive", true))
-      .take(4);
-    if (activeTemplates.length !== 3 || new Set(activeTemplates.map((row) => row.stage)).size !== 3) {
-      throw new Error("Lengkapi dan aktifkan template H+1, H+2, dan H+3 sebelum mengirim.");
+    const template = args.templateId
+      ? await ctx.db.get(args.templateId)
+      : await ctx.db.query("followUpTemplates")
+          .withIndex("by_org_stage", (q) => q.eq("orgId", orgId).eq("stage", args.stage))
+          .unique();
+    if (!template || String(template.orgId) !== String(orgId) || !template.isActive) {
+      throw new Error("Template Follow-up tidak aktif atau tidak tersedia.");
     }
 
     const agentKey = conversation.followUpCsKey ?? csKey(conversation.assignedCsName);
@@ -333,14 +411,30 @@ export const reserveDueFollowUp = internalMutation({
     const phoneNumberId = agent?.providerNumberId;
     if (!agent?.isActive || !phoneNumberId) throw new Error("Nomor API CS belum dikonfigurasi.");
 
-    const template = templates[0];
     const order = orders[0];
     const orderedValues = template.variables.map((variable) => followUpVariableValue(variable, {
       customerName: conversation.customerName,
       productName: order.productName,
       orderId: conversation.orderId,
     }));
-    const idempotencyKey = `fu-${args.conversationId}-${conversation.followUpCycleInboundAt}-${args.stage}-${args.requestId}`;
+    const idempotencyKey = `fu-${args.conversationId}-${conversation.followUpCycleInboundAt}-${args.stage}-${template._id}-${args.requestId}`;
+    const attempt = await reserveAttempt(ctx, {
+      orgId,
+      conversationId: conversation._id,
+      csKey: agentKey,
+      cycleInboundAt: conversation.followUpCycleInboundAt,
+      stage: args.stage,
+      method: "provider_template",
+      nonce: args.requestId,
+      requestId: args.requestId,
+      templateId: template._id,
+      templateName: template.templateName,
+      language: template.language,
+      actorSubject: viewer.subject,
+      actorName: viewer.name,
+      createdAt: currentTime,
+    });
+    if (attempt.duplicate) return { shouldSend: false as const, status: attempt.status };
 
     await ctx.db.patch(conversation._id, {
       followUpState: "sending",
@@ -390,11 +484,32 @@ export const finalizeDueFollowUp = internalMutation({
       return { ok: true as const, status };
     }
 
+    if (!conversation.followUpCycleInboundAt || !conversation.followUpNextStage) {
+      throw new Error("Stage Follow-up tidak tersedia.");
+    }
+    const key = attemptKey(
+      String(conversation._id),
+      conversation.followUpCycleInboundAt,
+      conversation.followUpNextStage,
+      "provider_template",
+      args.requestId,
+    );
+    const attempt = await ctx.db.query("followUpAttempts")
+      .withIndex("by_org_attemptKey", (q) => q.eq("orgId", orgId).eq("attemptKey", key))
+      .unique();
+    if (!attempt) throw new Error("Attempt Follow-up tidak ditemukan.");
+
     const finalizedAt = args.acceptedAt ?? Date.now();
     if (!Number.isFinite(finalizedAt) || Math.abs(Date.now() - finalizedAt) > 60_000) {
       throw new Error("Waktu finalisasi Follow-up tidak valid.");
     }
     if (args.outcome !== "accepted") {
+      await finalizeAttempt(ctx, {
+        attemptId: attempt._id,
+        status: args.outcome,
+        at: finalizedAt,
+        error: args.error ?? "Pengiriman gagal tanpa detail.",
+      });
       await ctx.db.patch(conversation._id, {
         followUpState: args.outcome,
         followUpLastError: (args.error ?? "Pengiriman gagal tanpa detail.").slice(0, 500),
@@ -403,7 +518,6 @@ export const finalizeDueFollowUp = internalMutation({
       return { ok: true as const, status: args.outcome as ReservationStatus };
     }
     if (!args.providerMessageId?.trim()) throw new Error("ID pesan provider wajib untuk pengiriman diterima.");
-    if (!conversation.followUpNextStage) throw new Error("Stage Follow-up tidak tersedia.");
 
     const duplicateMessage = await ctx.db
       .query("messages")
@@ -427,6 +541,12 @@ export const finalizeDueFollowUp = internalMutation({
 
     const sentStage = conversation.followUpNextStage;
     const next = advanceAfterAccepted(sentStage, finalizedAt);
+    await finalizeAttempt(ctx, {
+      attemptId: attempt._id,
+      status: "accepted",
+      at: finalizedAt,
+      providerMessageId: args.providerMessageId,
+    });
     await ctx.db.patch(conversation._id, {
       followUpStage: sentStage,
       followUpStageAt: finalizedAt,
@@ -457,6 +577,24 @@ export const expireSendingReservation = internalMutation({
     ) {
       return { expired: false };
     }
+    if (conversation.followUpCycleInboundAt && conversation.followUpNextStage) {
+      const key = attemptKey(
+        String(conversation._id),
+        conversation.followUpCycleInboundAt,
+        conversation.followUpNextStage,
+        "provider_template",
+        args.requestId,
+      );
+      const attempt = await ctx.db.query("followUpAttempts")
+        .withIndex("by_org_attemptKey", (q) => q.eq("orgId", conversation.orgId).eq("attemptKey", key))
+        .unique();
+      if (attempt) await finalizeAttempt(ctx, {
+        attemptId: attempt._id,
+        status: "unknown",
+        at: Date.now(),
+        error: "Pengiriman tidak selesai dalam batas waktu. Periksa riwayat KirimDev sebelum mencoba lagi.",
+      });
+    }
     await ctx.db.patch(conversation._id, {
       followUpState: "unknown",
       followUpLastError: "Pengiriman tidak selesai dalam batas waktu. Periksa riwayat KirimDev sebelum mencoba lagi.",
@@ -477,6 +615,7 @@ export const sendDueFollowUp = action({
   args: {
     conversationId: v.id("conversations"),
     stage: followUpStageValidator,
+    templateId: v.optional(v.id("followUpTemplates")),
     requestId: v.string(),
   },
   returns: sendDueFollowUpResultValidator,
@@ -544,6 +683,74 @@ export const sendDueFollowUp = action({
       });
       return { ok: false, status: "unknown", error };
     }
+  },
+});
+
+export const confirmManualContact = mutation({
+  args: {
+    conversationId: v.id("conversations"),
+    stage: followUpStageValidator,
+    requestId: v.string(),
+  },
+  returns: v.object({ ok: v.literal(true), duplicate: v.boolean() }),
+  handler: async (ctx, args) => {
+    if (!REQUEST_ID_RE.test(args.requestId)) throw new Error("Request ID Follow-up tidak valid.");
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.confirmManualContact",
+    );
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || String(conversation.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
+    if (!conversation.followUpCycleInboundAt) throw new Error("Follow-up ini tidak lagi jatuh tempo.");
+    const key = attemptKey(String(conversation._id), conversation.followUpCycleInboundAt, args.stage, "manual_confirmation", args.requestId);
+    const existing = await ctx.db.query("followUpAttempts")
+      .withIndex("by_org_attemptKey", (q) => q.eq("orgId", orgId).eq("attemptKey", key))
+      .unique();
+    if (existing?.status === "accepted") return { ok: true as const, duplicate: true };
+
+    const confirmedAt = Date.now();
+    if (conversation.status === "closed"
+      || conversation.followUpState !== "waiting"
+      || conversation.followUpNextStage !== args.stage
+      || conversation.followUpDueAt === undefined
+      || conversation.followUpDueAt > confirmedAt
+      || conversation.followUpCycleInboundAt < confirmedAt - FOLLOW_UP_EXPIRY_MS) {
+      throw new Error("Follow-up ini tidak lagi jatuh tempo.");
+    }
+    const recap = await ctx.db.query("shippingRecaps")
+      .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", orgId).eq("orderIdBerdu", conversation.orderId))
+      .first();
+    if (recap) throw new Error("Order sudah closing atau dibatalkan.");
+    const accepted = await recordAcceptedAttempt(ctx, {
+      orgId,
+      conversationId: conversation._id,
+      csKey: conversation.followUpCsKey ?? csKey(conversation.assignedCsName),
+      cycleInboundAt: conversation.followUpCycleInboundAt,
+      stage: args.stage,
+      method: "manual_confirmation",
+      nonce: args.requestId,
+      requestId: args.requestId,
+      actorSubject: viewer.subject,
+      actorName: viewer.name,
+      acceptedAt: confirmedAt,
+    });
+    if (accepted.duplicate) return { ok: true as const, duplicate: true };
+    const next = advanceAfterAccepted(args.stage, confirmedAt);
+    await ctx.db.patch(conversation._id, {
+      followUpStage: args.stage,
+      followUpStageAt: confirmedAt,
+      followUpNextStage: next.nextStage ?? undefined,
+      followUpDueAt: next.dueAt ?? undefined,
+      followUpState: next.state,
+      followUpRequestId: args.requestId,
+      followUpProviderMessageId: undefined,
+      followUpLastError: undefined,
+      updatedAt: confirmedAt,
+    });
+    return { ok: true as const, duplicate: false };
   },
 });
 

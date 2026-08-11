@@ -1,76 +1,73 @@
 # Manual Follow-up Runbook
 
-## Scope
+## Scope and invariants
 
-WafaChat sends Follow-up manually from the owner/CS workspace. H+1 and H+2 schedule the next stage exactly 24 hours after KirimDev accepts the message. H+3 is the final stage. There is no automatic Follow-up cron.
+WafaChat is a manual-first operational assistant. It never sends Follow-up on a cron. n8n remains responsible only for the existing order-notification flow and must not be changed for this release.
 
-The n8n order-notification workflow is separate and must not be edited, disabled, or used to test this feature.
+- H+1 is due 24 hours after the CS reply that arms the cycle.
+- H+2 and H+3 are due 24 hours after the preceding confirmed contact.
+- H+3 is final. A new customer inbound starts a new cycle.
+- Only actionable cycles from the last seven days appear in the queue.
+- Opening WhatsApp does not advance a stage.
+- A template accepted by KirimDev, a genuine due outbound webhook, or an explicit manual-contact confirmation advances exactly one stage.
+- A provider timeout is `unknown` and must never be retried blindly.
 
 ## Required setup
 
 1. In **Settings → Konfigurasi CS**, ensure each active CS has the correct KirimDev `providerNumberId`.
-2. In **Settings → Template Follow-up**, configure all three approved KirimDev templates:
-   - H+1 — first Follow-up.
-   - H+2 — reminder.
-   - H+3 — final Follow-up.
-3. For each template, copy the exact approved template name and language code from KirimDev.
-4. Set the positional variables in the same order as the approved template. Supported values are customer name, product name, and order ID.
-5. Activate all three templates. Manual sending remains disabled until the setup reports **Siap digunakan**.
+2. In **Settings → Template Follow-up**, configure approved KirimDev templates. Each active template must use the exact provider name, language, and positional-variable order.
+3. Supported variables are customer name, product name, and order ID.
+4. Keep `KIRIMDEV_API_KEY` only in the Convex production environment. Never place it in a form, browser variable, log, or support message.
 
-Never store or display the KirimDev API key or App Secret in these form fields.
+The selected stage needs one active template and a configured sender. The other stages may be completed later without blocking a valid current-stage send.
 
-## Queue behavior
+## Workspace and I/O behavior
 
-- A real customer inbound clears the previous cycle.
-- A real CS outbound reply arms H+1 for 24 hours after that inbound.
-- Outbound chat biasa tidak memajukan H+1/H+2/H+3. Hanya template yang diterima provider melalui tombol kirim WafaChat yang memajukan tahap.
-- A closing, cancellation, done marker, archive, or stale lifecycle transition removes the lead from the actionable queue.
-- The workspace reads one indexed, paginated snapshot on load/refresh. Pages after the first 100 are loaded explicitly with **Muat antrean berikutnya**; it is not a continuous heavy Convex query.
-- The stage shown on a card comes from the server and cannot be manually changed.
+- **Perlu tindakan** loads one indexed page of at most 30 eligible conversations.
+- **Cari customer** stays idle until a user submits at least three characters and returns at most 20 results.
+- **Terkirim**, **Perlu dicek**, and **Selesai** stay idle until opened and load at most 50 rows per page.
+- All additional pages require an explicit **Muat berikutnya** action. There is no live full-table subscription or recurring Follow-up query.
+- CS accounts are forced to their verified CS scope; owner filters cannot override that scope.
 
-## Safe UAT
+## Duplicate and uncertain outcomes
 
-Use test number `6285715682110` and a non-production test order.
+Every contact creates an append-only `followUpAttempts` audit record.
 
-1. Create an inbound customer message, then a real CS outbound reply.
-2. Confirm the conversation materializes as `waiting`, H+1, with the correct CS key and due time.
-3. For UAT only, use a controlled due test record or wait until due. Do not edit a real customer's clock/state.
-4. Open **Follow-up**, select the card, confirm its chat history, CS, order ID, and exact due stage.
-5. Click send once. Confirm KirimDev returns a provider message ID and WafaChat stores one outbound template message.
-6. Confirm H+1 advances to H+2 at accepted time +24 hours; H+2 advances to H+3; H+3 becomes complete.
-7. Send a customer reply and confirm the pending stage disappears.
-8. Complete an order and confirm it does not remain actionable.
+- Repeating the same request UUID returns the existing attempt and never starts a second send.
+- A definite provider rejection is `failed` and can be retried only by an explicit user action with a new request UUID.
+- A timeout or ambiguous provider response is `unknown`; the UI disables resend and instructs the operator to inspect KirimDev first.
+- A `sending` reservation not finalized within two minutes becomes `unknown`.
+- A provider outbound webhook is deduplicated by its external message ID.
 
-## Duplicate and unknown outcomes
+## Safe release sequence
 
-Every click uses a request UUID and the provider key:
+Do not prepare production data until both deployments are healthy.
 
-`fu-{conversationId}-{cycleInboundAt}-{stage}-{requestId}`
+1. Deploy the Convex schema and functions.
+2. Deploy the Vercel application.
+3. Open Follow-up and confirm only **Perlu tindakan** requests data; other views stay idle until opened.
+4. From an authenticated owner maintenance session, call `followUpMigration.startRecentFollowUpPreparation` with `{ "mode": "dry_run" }`.
+5. Poll `followUpMigration.getFollowUpPreparationRun` with the returned `runId` until `status = "complete"`.
+6. Record `scanned`, `eligible`, `updated`, `skipped`, and `failed`. For dry-run, `updated` must be `0`; investigate any `failed > 0` before continuing.
+7. Start the same preparation with `{ "mode": "apply" }` and wait for completion. It processes 25 conversations per scheduled page and never sends messages or changes closing state.
+8. Sample at least one H+1 candidate against the KirimDev message history.
+9. Send one approved template to controlled test number `6285715682110`.
+10. Verify one accepted attempt, one lifecycle advancement, and no duplicate after a repeated click.
+11. Send one controlled phone outbound after a due time and verify its webhook advances one stage exactly once.
+12. Observe Convex logs and Database I/O for 30 minutes while confirming n8n order notifications continue normally.
 
-- Repeating the same request never starts a second provider send.
-- A definite provider rejection is recorded as `failed`.
-- A timeout or accepted response without a provider message ID is recorded as `unknown` and blocks further sends.
-- A `sending` reservation that is not finalized within two minutes is changed to `unknown`, so it cannot remain hidden or be retried silently.
-- Status `sending`, `failed`, and `unknown` are visible in the **Perlu dicek** tab.
-- For `unknown`, inspect KirimDev message history using the customer, time, template, and idempotency key. Do not retry with a new request until the provider outcome is reconciled by an operator/developer.
+## Smoke checklist
 
-## Recent backfill
-
-Run `followUpMigration.startRecentFollowUpBackfill` once using an authenticated admin context after backend deployment. It processes at most 25 conversations per scheduled page. Observe completion and then read only the first due page/counts; do not export customer PII for verification.
+- Queue card shows the correct customer, product, CS, last-message preview, reason, stage, and due age.
+- **Buka WhatsApp** opens `wa.me` and changes no server state.
+- **Tandai sudah dihubungi** shows a confirmation and records the authenticated actor.
+- Template confirmation shows recipient, configured sender/phone-number ID, selected template, and resolved variables.
+- Accepted contacts move to **Terkirim**. Failed/unknown contacts appear in **Perlu dicek**. Closing records appear in **Selesai**.
+- Customer inbound removes the old actionable cycle; closing/cancellation remains unchanged.
 
 ## Rollback
 
-1. Deactivate one or more Follow-up templates to block manual sending immediately.
-2. If needed, roll back the WafaChat frontend/backend release together.
-3. Do not touch the n8n order-notification workflow.
-4. Keep `unknown` reservations blocked until provider history is reconciled.
-
-## Production observation
-
-For the first 24 hours, observe:
-
-- provider acceptance/error/timeout rate;
-- duplicate outbound template messages by external message ID;
-- waiting/sending/unknown/failed queue state counts;
-- Convex I/O for `listDueFollowUps`, `listFollowUpAttention`, and `sendDueFollowUp`;
-- continued normal operation of n8n order notifications.
+1. Deactivate the affected Follow-up template(s) to block template sending immediately.
+2. Roll back the WafaChat frontend and Convex functions together if required.
+3. Do not touch n8n order notifications.
+4. Preserve all attempt rows and keep `unknown` attempts blocked until reconciled against KirimDev.

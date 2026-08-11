@@ -39,16 +39,11 @@ test('snapshot rejects an anonymous request', async () => {
 
 test('snapshot ignores a client CS override and passes signed identity with explicit now', async () => {
   state.session = { role: 'cs', name: 'Aisyah', email: 'aisyah@test', csName: 'Aisyah' };
-  state.query
-    .mockResolvedValueOnce({
-      page: [{ stage: 1, orderId: 'A' }, { stage: 3, orderId: 'B' }],
-      isDone: true,
-      continueCursor: 'done',
-    })
-    .mockResolvedValueOnce({ totalClosings: 0, fromFollowUp: 0, byStage: { h1: 0, h2: 0, h3: 0 } })
-    .mockResolvedValueOnce({ page: [], isDone: true, continueCursor: 'sending-done' })
-    .mockResolvedValueOnce({ page: [], isDone: true, continueCursor: 'failed-done' })
-    .mockResolvedValueOnce({ page: [], isDone: true, continueCursor: 'unknown-done' });
+  state.query.mockResolvedValueOnce({
+    page: [{ stage: 1, orderId: 'A' }, { stage: 3, orderId: 'B' }],
+    isDone: true,
+    continueCursor: 'done',
+  });
 
   const response = await POST(request({ csName: 'Lila' }));
 
@@ -56,23 +51,27 @@ test('snapshot ignores a client CS override and passes signed identity with expl
   expect(state.setAuth).toHaveBeenCalledWith('signed-token');
   expect(state.query.mock.calls[0][1]).toEqual({
     csName: 'Aisyah',
+    stage: undefined,
     now: 200_000,
-    paginationOpts: { numItems: 100, cursor: null },
+    paginationOpts: { numItems: 30, cursor: null },
   });
-  expect(state.query.mock.calls[1][1]).toEqual({
-    startAt: 200_000 - 30 * 24 * 60 * 60 * 1000,
-    endAt: 200_000,
-    csName: 'Aisyah',
+  expect(state.query).toHaveBeenCalledTimes(1);
+  expect(await response.json()).toMatchObject({
+    ok: true,
+    page: [{ stage: 1, orderId: 'A' }, { stage: 3, orderId: 'B' }],
+    pagination: { isDone: true, continueCursor: 'done' },
   });
-  expect(state.query.mock.calls[2][1]).toEqual({
-    csName: 'Aisyah', state: 'sending', paginationOpts: { numItems: 50, cursor: null },
+});
+
+test('snapshot forwards a valid cursor without adding eager reads', async () => {
+  state.session = { role: 'owner', name: 'Owner', email: 'owner@test' };
+  state.query.mockResolvedValueOnce({ page: [], isDone: false, continueCursor: 'next' });
+
+  await POST(request({ csName: 'Lila', cursor: 'cursor-1' }));
+
+  expect(state.query.mock.calls[0][1]).toMatchObject({
+    csName: 'Lila',
+    paginationOpts: { numItems: 30, cursor: 'cursor-1' },
   });
-  expect(state.query.mock.calls[4][1]).toEqual({
-    csName: 'Aisyah', state: 'unknown', paginationOpts: { numItems: 50, cursor: null },
-  });
-  expect((await response.json()).candidates).toMatchObject({
-    stage1: [{ stage: 1, orderId: 'A' }],
-    stage2: [],
-    stage3: [{ stage: 3, orderId: 'B' }],
-  });
+  expect(state.query).toHaveBeenCalledTimes(1);
 });

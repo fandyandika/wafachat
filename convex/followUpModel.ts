@@ -8,8 +8,22 @@ export type FollowUpState =
   | "complete"
   | "archived";
 
+type DueOutboundCandidate = {
+  status: "active" | "handover" | "closed";
+  followUpState?: FollowUpState;
+  nextStage?: FollowUpStage;
+  dueAt?: number;
+  cycleInboundAt?: number;
+  createdAt: number;
+  role: "customer" | "ai" | "cs" | "system";
+  direction: "inbound" | "outbound";
+  source?: string;
+  externalMessageId?: string;
+  isInternal: boolean;
+};
+
 export const FOLLOW_UP_DAY_MS = 24 * 60 * 60 * 1_000;
-export const FOLLOW_UP_EXPIRY_MS = 5 * FOLLOW_UP_DAY_MS;
+export const FOLLOW_UP_EXPIRY_MS = 7 * FOLLOW_UP_DAY_MS;
 
 export function resetForInbound(cycleInboundAt: number) {
   return {
@@ -20,13 +34,27 @@ export function resetForInbound(cycleInboundAt: number) {
   } as const;
 }
 
-export function armH1AfterOutbound(cycleInboundAt: number, csKey: string) {
+export function armH1AfterOutbound(cycleInboundAt: number, csKey: string, outboundAt: number) {
   return {
     csKey,
     nextStage: 1,
-    dueAt: cycleInboundAt + FOLLOW_UP_DAY_MS,
+    dueAt: outboundAt + FOLLOW_UP_DAY_MS,
     state: "waiting",
   } as const;
+}
+
+export function shouldAdvanceDueOutbound(candidate: DueOutboundCandidate): boolean {
+  return candidate.status !== "closed"
+    && candidate.followUpState === "waiting"
+    && candidate.nextStage !== undefined
+    && candidate.dueAt !== undefined
+    && candidate.cycleInboundAt !== undefined
+    && candidate.createdAt >= candidate.dueAt
+    && candidate.role === "cs"
+    && candidate.direction === "outbound"
+    && candidate.source === "ingest"
+    && Boolean(candidate.externalMessageId?.trim())
+    && !candidate.isInternal;
 }
 
 export function advanceAfterAccepted(stage: FollowUpStage, acceptedAt: number) {

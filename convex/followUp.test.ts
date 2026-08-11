@@ -29,12 +29,12 @@ const msg = (conversationId: any, orderId: string, phone: string, direction: "in
   ({ conversationId, orderId, customerPhone: phone, role: direction === "inbound" ? "customer" as const : "cs" as const,
      direction, content: "x", messageType: "text" as const, source: "n8n" as const, createdAt });
 
-test("listDueFollowUps paginates 150 due conversations without a read-limit failure", async () => {
+test("listDueFollowUps caps high-volume pages at 30 rows", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "queue-admin", role: "admin", name: "Queue Admin", email: "queue@wafachat.test" });
   const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < 901; i++) {
       await ctx.db.insert("conversations", {
         orgId,
         ...convBase,
@@ -57,12 +57,80 @@ test("listDueFollowUps paginates 150 due conversations without a read-limit fail
     now,
     paginationOpts: { numItems: 100, cursor: first.continueCursor },
   });
-  expect(first.page).toHaveLength(100);
-  expect(second.page).toHaveLength(50);
-  expect(new Set([...first.page, ...second.page].map((row) => String(row.conversationId))).size).toBe(150);
+  expect(first.page).toHaveLength(30);
+  expect(second.page).toHaveLength(30);
+  expect(first.isDone).toBe(false);
+  expect(new Set([...first.page, ...second.page].map((row) => String(row.conversationId))).size).toBe(60);
 });
 
-test("listDueFollowUps excludes a stale inbound cycle even when dueAt is recent", async () => {
+test("listDueFollowUps enriches only the selected page with decision context", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "context-admin", role: "admin", name: "Admin", email: "context@wafachat.test" });
+  const orgId = await seedOrg(t);
+  const conversationId = await t.run(async (ctx) => {
+    const conversationId = await ctx.db.insert("conversations", {
+      orgId,
+      ...convBase,
+      orderId: "CONTEXT-1",
+      customerPhone: "62890001111",
+      followUpCsKey: "nabila",
+      followUpCycleInboundAt: now - 30 * HOUR,
+      followUpNextStage: 1,
+      followUpDueAt: now - HOUR,
+      followUpState: "waiting",
+    });
+    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "CONTEXT-1", customerPhone: "62890001111" });
+    await ctx.db.insert("messages", {
+      orgId,
+      ...msg(conversationId, "CONTEXT-1", "62890001111", "outbound", now - 25 * HOUR),
+      content: "Baik kak, kami tunggu kabarnya.",
+    });
+    return conversationId;
+  });
+
+  const result = await asAdmin.query(api.followUp.listDueFollowUps, {
+    now,
+    paginationOpts: { numItems: 30, cursor: null },
+  });
+  expect(result.page[0]).toMatchObject({
+    conversationId,
+    productName: "Quran Mapping",
+    lastMessagePreview: "Baik kak, kami tunggu kabarnya.",
+    lastMessageAt: now - 25 * HOUR,
+    reason: "CS terakhir membalas, customer belum merespons",
+  });
+});
+
+test("searchFollowUpCustomers is on-demand, scoped, and capped", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "search-admin", role: "admin", name: "Admin", email: "search@wafachat.test" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 25; i++) {
+      await ctx.db.insert("conversations", {
+        orgId,
+        ...convBase,
+        orderId: `SEARCH-${i}`,
+        customerPhone: `628571568${String(i).padStart(2, "0")}`,
+        customerName: `Hasna Customer ${i}`,
+        updatedAt: now - i,
+      });
+    }
+  });
+
+  await expect(asAdmin.query(api.followUp.searchFollowUpCustomers, {
+    query: "ha",
+    limit: 20,
+  })).rejects.toThrow(/minimal tiga/i);
+  const result = await asAdmin.query(api.followUp.searchFollowUpCustomers, {
+    query: "Hasna",
+    limit: 50,
+  });
+  expect(result).toHaveLength(20);
+  expect(result.every((row) => row.customerName.startsWith("Hasna"))).toBe(true);
+});
+
+test("listDueFollowUps excludes an inbound cycle older than seven days even when dueAt is recent", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "expiry-admin", role: "admin", name: "Admin", email: "expiry@wafachat.test" });
   const orgId = await seedOrg(t);
@@ -72,7 +140,7 @@ test("listDueFollowUps excludes a stale inbound cycle even when dueAt is recent"
     orderId: "STALE-CYCLE",
     customerPhone: "62890009999",
     followUpCsKey: "nabila",
-    followUpCycleInboundAt: now - 6 * 24 * HOUR,
+    followUpCycleInboundAt: now - 8 * 24 * HOUR,
     followUpNextStage: 1,
     followUpDueAt: now - HOUR,
     followUpState: "waiting",
@@ -494,7 +562,8 @@ test("reserveDueFollowUp atomically reserves once and returns immutable provider
     language: "id",
     orderedValues: ["Budi", "Quran Mapping", "MANUAL-01"],
   });
-  expect(first.idempotencyKey).toContain("-1-11111111-1111-4111-8111-111111111111");
+  expect(first.idempotencyKey).toContain("-1-");
+  expect(first.idempotencyKey).toMatch(/-1-.*-11111111-1111-4111-8111-111111111111$/);
   expect(duplicate).toEqual({ shouldSend: false, status: "sending" });
 });
 
@@ -514,6 +583,8 @@ test("sendDueFollowUp owns provider acceptance and advances the queue", async ()
   const result = await asAdmin.action(api.followUp.sendDueFollowUp, {
     conversationId,
     stage: 1,
+    templateId: await t.run(async (ctx) => (await ctx.db.query("followUpTemplates")
+      .withIndex("by_org_stage", (q) => q.eq("orgId", orgId).eq("stage", 1)).unique())!._id),
     requestId: "66666666-6666-4666-8666-666666666666",
   });
 
@@ -522,11 +593,55 @@ test("sendDueFollowUp owns provider acceptance and advances the queue", async ()
   await t.run(async (ctx) => {
     const conversation = await ctx.db.get(conversationId);
     expect(conversation).toMatchObject({ followUpState: "waiting", followUpNextStage: 2 });
+    const attempts = await ctx.db.query("followUpAttempts")
+      .withIndex("by_org_conversation_createdAt", (q) => q.eq("orgId", orgId).eq("conversationId", conversationId))
+      .collect();
+    expect(attempts).toContainEqual(expect.objectContaining({
+      method: "provider_template",
+      status: "accepted",
+      bucket: "sent",
+      templateName: "follow_up_h1",
+      providerMessageId: "wamid.action.1",
+    }));
   });
   vi.unstubAllGlobals();
 });
 
-test("reservation requires all H+1, H+2, and H+3 templates", async () => {
+test("confirmManualContact advances once and deduplicates the same request", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "confirm-admin", role: "admin", name: "Confirm Admin", email: "confirm@wafachat" });
+  const orgId = await seedOrg(t);
+  const conversationId = await seedDueManualFollowUp(t, orgId, "08");
+  const args = {
+    conversationId,
+    stage: 1 as const,
+    requestId: "99999999-9999-4999-8999-999999999999",
+  };
+
+  expect(await asAdmin.mutation(api.followUp.confirmManualContact, args))
+    .toEqual({ ok: true, duplicate: false });
+  expect(await asAdmin.mutation(api.followUp.confirmManualContact, args))
+    .toEqual({ ok: true, duplicate: true });
+
+  await t.run(async (ctx) => {
+    expect(await ctx.db.get(conversationId)).toMatchObject({
+      followUpStage: 1,
+      followUpNextStage: 2,
+      followUpState: "waiting",
+    });
+    const attempts = await ctx.db.query("followUpAttempts")
+      .withIndex("by_org_conversation_createdAt", (q) => q.eq("orgId", orgId).eq("conversationId", conversationId))
+      .collect();
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({
+      method: "manual_confirmation",
+      status: "accepted",
+      actorName: "Confirm Admin",
+    });
+  });
+});
+
+test("reservation accepts one explicitly selected active template without requiring every stage", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "template-admin", role: "admin", name: "Admin", email: "template@wafachat" });
   const orgId = await seedOrg(t);
@@ -539,11 +654,17 @@ test("reservation requires all H+1, H+2, and H+3 templates", async () => {
     await ctx.db.delete(template!._id);
   });
 
+  const selectedTemplateId = await t.run(async (ctx) => (await ctx.db
+    .query("followUpTemplates")
+    .withIndex("by_org_stage", (q) => q.eq("orgId", orgId).eq("stage", 1))
+    .unique())!._id);
+
   await expect(asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
     conversationId,
     stage: 1,
+    templateId: selectedTemplateId,
     requestId: "77777777-7777-4777-8777-777777777777",
-  })).rejects.toThrow(/H\+1, H\+2, dan H\+3/);
+  })).resolves.toMatchObject({ shouldSend: true, templateName: "follow_up_h1" });
 });
 
 test("expired sending lease becomes operator-visible unknown status", async () => {

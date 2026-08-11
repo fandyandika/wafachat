@@ -19,6 +19,7 @@ vi.mock("convex/browser", () => ({
 import { POST } from "./route";
 
 const requestId = "11111111-1111-4111-8111-111111111111";
+const templateId = "template1";
 
 function request(body: Record<string, unknown> = {}) {
   return new NextRequest("http://localhost/api/follow-up/send", {
@@ -42,12 +43,12 @@ test("manual send delegates the complete provider workflow to the signed Convex 
   state.session = { userId: "admin", role: "admin", name: "Admin", email: "admin@test" };
   state.action.mockResolvedValue({ ok: true, status: "accepted", providerMessageId: "wamid.1" });
 
-  const response = await POST(request({ conversationId: "conv1", stage: 1, requestId }));
+  const response = await POST(request({ conversationId: "conv1", stage: 1, templateId, requestId }));
 
   expect(response.status).toBe(200);
   expect(state.setAuth).toHaveBeenCalledWith("signed-token");
   expect(state.action).toHaveBeenCalledOnce();
-  expect(state.action.mock.calls[0][1]).toEqual({ conversationId: "conv1", stage: 1, requestId });
+  expect(state.action.mock.calls[0][1]).toEqual({ conversationId: "conv1", stage: 1, templateId, requestId });
   expect(await response.json()).toMatchObject({ ok: true, status: "accepted" });
 });
 
@@ -55,7 +56,7 @@ test("manual send reports an in-progress duplicate reservation", async () => {
   state.session = { userId: "admin", role: "admin", name: "Admin", email: "admin@test" };
   state.action.mockResolvedValueOnce({ ok: false, status: "sending" });
 
-  const response = await POST(request({ conversationId: "conv1", stage: 1, requestId }));
+  const response = await POST(request({ conversationId: "conv1", stage: 1, templateId, requestId }));
 
   expect(response.status).toBe(202);
   expect(state.action).toHaveBeenCalledOnce();
@@ -65,8 +66,14 @@ test("manual send exposes provider uncertainty without silently retrying", async
   state.session = { userId: "admin", role: "admin", name: "Admin", email: "admin@test" };
   state.action.mockResolvedValueOnce({ ok: false, status: "unknown", error: "Timeout" });
 
-  const response = await POST(request({ conversationId: "conv1", stage: 1, requestId }));
+  const response = await POST(request({ conversationId: "conv1", stage: 1, templateId, requestId }));
 
   expect(response.status).toBe(502);
   expect(await response.json()).toMatchObject({ ok: false, status: "unknown", error: "Timeout" });
+});
+
+test("manual send requires an explicit allowlisted template", async () => {
+  state.session = { userId: "admin", role: "admin", name: "Admin", email: "admin@test" };
+  expect((await POST(request({ conversationId: "conv1", stage: 1, requestId }))).status).toBe(400);
+  expect(state.action).not.toHaveBeenCalled();
 });
