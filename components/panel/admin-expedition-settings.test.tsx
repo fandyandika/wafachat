@@ -33,5 +33,8 @@ test("shows exact readiness gaps and configuration controls", () => {
   expect(html).toContain('for="admin-provider-number-id"');
   expect(html).toContain('for="admin-template-name"');
   expect(html).toContain("Tambah variabel");
+  expect(html).toContain("Template tanpa variabel");
+  expect(html).toContain("Tambahkan hanya jika template approved di Meta memang memiliki variabel.");
+  expect(html).not.toContain("admin-variable-key-0");
   expect(html).toContain("Simpan channel");
 });

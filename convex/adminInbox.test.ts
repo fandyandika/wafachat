@@ -80,6 +80,12 @@ test("setup reports exact missing requirements without exposing secrets", async 
   const setup = await asAdmin.query(api.adminInbox.getSetup, {});
   expect(setup.ready).toBe(false);
   expect(setup.missing).toEqual(["Nomor API KirimDev", "KIRIMDEV_API_KEY"]);
+  expect(setup.templates).toMatchObject([{
+    templateName: "expedition_status_v1",
+    language: "id",
+    variables: [],
+    isActive: true,
+  }]);
   expect(JSON.stringify(setup)).not.toContain("kdv_");
 });
 
