@@ -4,6 +4,7 @@ import {
   adminWindowExpiresAt,
   isAdminWindowOpen,
   normalizeAdminRecipient,
+  normalizeOptionalAdminTotal,
   validateTemplateValues,
 } from "./adminInboxModel";
 
@@ -18,6 +19,15 @@ describe("admin inbox rules", () => {
       .toThrow("Nomor WhatsApp tidak valid.");
     expect(() => normalizeAdminRecipient("1234567890123456"))
       .toThrow("Nomor WhatsApp tidak valid.");
+  });
+
+  test("normalizes an optional non-negative integer rupiah total", () => {
+    expect(normalizeOptionalAdminTotal(undefined)).toBeUndefined();
+    expect(normalizeOptionalAdminTotal(null)).toBeUndefined();
+    expect(normalizeOptionalAdminTotal(189_000)).toBe(189_000);
+    expect(() => normalizeOptionalAdminTotal(-1)).toThrow("Harga total");
+    expect(() => normalizeOptionalAdminTotal(189_000.5)).toThrow("Harga total");
+    expect(() => normalizeOptionalAdminTotal(Number.NaN)).toThrow("Harga total");
   });
 
   test("closes the free-form window at exactly 24 hours", () => {

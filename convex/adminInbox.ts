@@ -3,7 +3,13 @@ import { paginationOptsValidator } from "convex/server";
 import { action, internalMutation, mutation, query } from "./_generated/server";
 import { api } from "./_generated/api";
 import { requireAdminOrg } from "./authz";
-import { adminWindowExpiresAt, isAdminWindowOpen, normalizeAdminRecipient, validateTemplateValues } from "./adminInboxModel";
+import {
+  adminWindowExpiresAt,
+  isAdminWindowOpen,
+  normalizeAdminRecipient,
+  normalizeOptionalAdminTotal,
+  validateTemplateValues,
+} from "./adminInboxModel";
 import { cancelRecapByExactOrderCore, undoExactOrderCancellationCore } from "./shippingRecaps";
 import { buildTemplatePayload, buildTextPayload, sendKirimDevMessage } from "../lib/kirimdev";
 import type { Id } from "./_generated/dataModel";
@@ -49,6 +55,8 @@ const threadResultValidator = v.object({
   channelId: v.id("adminChannels"),
   customerPhone: v.string(),
   customerName: v.optional(v.string()),
+  productName: v.optional(v.string()),
+  totalAmount: v.optional(v.number()),
   orderId: v.optional(v.string()),
   lastInboundAt: v.optional(v.number()),
   lastOutboundAt: v.optional(v.number()),
@@ -355,6 +363,8 @@ export const listThreads = query({
         channelId: row.channelId,
         customerPhone: row.customerPhone,
         customerName: row.customerName,
+        productName: row.productName,
+        totalAmount: row.totalAmount,
         orderId: row.orderId,
         lastInboundAt: row.lastInboundAt,
         lastOutboundAt: row.lastOutboundAt,
@@ -482,6 +492,8 @@ export const prepareTemplateSend = mutation({
     channelId: v.id("adminChannels"),
     customerPhone: v.string(),
     customerName: v.optional(v.string()),
+    productName: v.optional(v.string()),
+    totalAmount: v.optional(v.number()),
     orderId: v.optional(v.string()),
     templateId: v.id("adminTemplates"),
     values: v.array(v.object({ key: v.string(), value: v.string() })),
@@ -537,6 +549,9 @@ export const prepareTemplateSend = mutation({
     const validated = validateTemplateValues(template.variables, valueMap);
     if (!validated.ok) throw new Error(validated.error);
     const customerPhone = normalizeAdminRecipient(args.customerPhone);
+    const customerName = cleanOptional(args.customerName);
+    const productName = cleanOptional(args.productName);
+    const totalAmount = normalizeOptionalAdminTotal(args.totalAmount);
     const now = Date.now();
     let thread = await ctx.db
       .query("adminThreads")
@@ -547,7 +562,9 @@ export const prepareTemplateSend = mutation({
         orgId: args.orgId,
         channelId: channel._id,
         customerPhone,
-        customerName: cleanOptional(args.customerName),
+        customerName,
+        productName,
+        totalAmount,
         orderId: cleanOptional(args.orderId),
         lastOutboundAt: now,
         archived: false,
@@ -557,7 +574,9 @@ export const prepareTemplateSend = mutation({
       thread = await ctx.db.get(threadId);
     } else {
       await ctx.db.patch(thread._id, {
-        customerName: cleanOptional(args.customerName) ?? thread.customerName,
+        customerName: customerName ?? thread.customerName,
+        productName: productName ?? thread.productName,
+        totalAmount: totalAmount ?? thread.totalAmount,
         orderId: cleanOptional(args.orderId) ?? thread.orderId,
         lastOutboundAt: now,
         archived: false,
@@ -696,6 +715,8 @@ export const sendTemplate = action({
     channelId: v.id("adminChannels"),
     customerPhone: v.string(),
     customerName: v.optional(v.string()),
+    productName: v.optional(v.string()),
+    totalAmount: v.optional(v.number()),
     orderId: v.optional(v.string()),
     templateId: v.id("adminTemplates"),
     values: v.array(v.object({ key: v.string(), value: v.string() })),
