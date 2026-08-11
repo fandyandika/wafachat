@@ -16,7 +16,6 @@ import type * as analytics from "../analytics.js";
 import type * as analyticsBounds from "../analyticsBounds.js";
 import type * as auth from "../auth.js";
 import type * as authz from "../authz.js";
-import type * as autoFollowUp from "../autoFollowUp.js";
 import type * as closingRules from "../closingRules.js";
 import type * as conversationLifecycle from "../conversationLifecycle.js";
 import type * as crons from "../crons.js";
@@ -71,7 +70,6 @@ declare const fullApi: ApiFromModules<{
   analyticsBounds: typeof analyticsBounds;
   auth: typeof auth;
   authz: typeof authz;
-  autoFollowUp: typeof autoFollowUp;
   closingRules: typeof closingRules;
   conversationLifecycle: typeof conversationLifecycle;
   crons: typeof crons;

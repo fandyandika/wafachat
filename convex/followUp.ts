@@ -1,13 +1,11 @@
-import { query, action, mutation, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { query, mutation, internalQuery } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
-import { requireMember, requireMemberOrg, requireScopedMemberOrg } from "./authz";
+import { requireScopedMemberOrg } from "./authz";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { csKey, isInternalTestPhone, normalizeCsName, normalizePhone } from "./lib";
-import { eligibleStage, FOLLOWUP_STAGES } from "./followUpMath";
-import { internal } from "./_generated/api";
+import { eligibleStage } from "./followUpMath";
 import { getInternalPhoneSet } from "./orgSettings";
-import { requireDefaultOrgId } from "./orgs";
 import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 import { getBoundedActiveAgentRegistry } from "./agents";
 import { advanceAfterAccepted, FOLLOW_UP_EXPIRY_MS } from "./followUpModel";
@@ -364,7 +362,7 @@ export async function countFollowUpTouchesBeforeTime(ctx: any, conversationId: a
 }
 
 // nowOverride is test-only (Date.now() is unavailable in some runtimes); prod passes nothing.
-// Shared by the guarded panel query AND the identity-less cron sweep (autoFollowUp).
+// Legacy bounded derivation retained only for diagnostics and migration parity.
 async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowOverride?: number; orgId: any }) {
     const internalPhones = await getInternalPhoneSet(ctx, args.orgId);
     const now = args.nowOverride ?? Date.now();
@@ -470,140 +468,6 @@ export const getFollowUpCandidates = query({
   },
 });
 
-// Cron/sweep path (autoFollowUp) — server-side, no user identity, not publicly callable.
-export const getFollowUpCandidatesInternal = internalQuery({
-  args: { csName: v.optional(v.string()), nowOverride: v.optional(v.number()), orgId: v.id("organizations") },
-  handler: async (ctx, args) => followUpCandidatesHandler(ctx, args),
-});
-
-const KIRIM_ERR: Record<string, string> = {
-  template_paused: "Template lagi dijeda Meta — cek di KirimDev.",
-  template_not_found: "Template belum approved.",
-  template_policy_violation: "Template melanggar kebijakan Meta.",
-  account_rate_limited: "Nomor lagi dibatasi, coba lagi nanti.",
-  app_rate_limited: "Lagi terlalu banyak kirim, coba lagi sebentar.",
-  outside_24h_window: "Window 24 jam — harusnya pakai template (cek konfigurasi).",
-  marketing_blocked_by_user: "Customer memblokir pesan marketing.",
-};
-
-// Re-derive eligibility + resolve the CS WABA number for one conversation (defends the send).
-export const candidacyFor = internalQuery({
-  args: { conversationId: v.id("conversations"), nowOverride: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const c = await ctx.db.get(args.conversationId);
-    if (!c) return null;
-    const now = args.nowOverride ?? Date.now();
-    const recap = await ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", c.orgId).eq("orderIdBerdu", c.orderId)).first();
-    const lastMsg = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first();
-    const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_direction_createdAt", (q) => q.eq("conversationId", c._id).eq("direction", "inbound")).order("desc").first();
-    const order = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", c.orgId).eq("orderId", c.orderId)).first();
-    const normName = normalizeCsName(c.assignedCsName);
-    let cfg = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", c.orgId).eq("normalizedName", normName)).first();
-    // assignedCsName is inconsistent across the data ("Aisyah" vs "CS Aisyah"), so an exact
-    // normalizedName match can miss the WABA number. Fall back to a csKey match (ignores the
-    // "CS " prefix) so providerNumberId resolves regardless of how the lead was named.
-    if (!cfg || !cfg.providerNumberId) {
-      const k = csKey(c.assignedCsName);
-      cfg = await ctx.db
-        .query("csConfigs")
-        .withIndex("by_org_key", (q) => q.eq("orgId", c.orgId).eq("key", k))
-        .first() ?? cfg;
-      if (!cfg?.providerNumberId) {
-        const legacy = await getBoundedActiveAgentRegistry(ctx, c.orgId);
-        if (legacy) {
-          cfg = legacy.find((x) => x.key == null && csKey(x.csName) === k && x.providerNumberId) ?? cfg;
-        }
-      }
-    }
-    const touch = await touchInfo(ctx, c._id, lastInbound?.createdAt ?? null);
-    const eligible = eligibleStage({
-      lastInboundAt: lastInbound?.createdAt ?? null,
-      lastMessageOutbound: lastMsg != null && lastMsg.direction === "outbound",
-      isClosed: c.status === "closed" || recap != null,
-      touchCount: touch.count, lastTouchAt: touch.lastAt, now,
-    });
-    return { eligible, phoneNumberId: cfg?.providerNumberId ?? null, customerName: c.customerName,
-             customerPhone: c.customerPhone, orderId: c.orderId, productName: order?.productName ?? "—" };
-  },
-});
-
-export const stampFollowUp = internalMutation({
-  args: { conversationId: v.id("conversations"), stage: v.number(), at: v.number(),
-          orderId: v.string(), customerPhone: v.string(), content: v.string() },
-  handler: async (ctx, a) => {
-    // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
-    const orgId = await requireDefaultOrgId(ctx);
-    // Feature #8: clear override after send; auto-staging resumes next check.
-    await ctx.db.patch(a.conversationId, { followUpStage: a.stage, followUpStageAt: a.at, followUpStageOverride: undefined, updatedAt: a.at });
-    await ctx.db.insert("messages", {
-      conversationId: a.conversationId, orderId: a.orderId, customerPhone: a.customerPhone,
-      role: "cs", direction: "outbound", content: a.content, messageType: "template",
-      source: "panel", createdAt: a.at, orgId,
-    });
-  },
-});
-
-export const performFollowUpSend = internalAction({
-  args: { conversationId: v.id("conversations"), stage: v.number(),
-          nowOverride: v.optional(v.number()) },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    const now = args.nowOverride ?? Date.now();
-    const d = await ctx.runQuery(internal.followUp.candidacyFor, { conversationId: args.conversationId, nowOverride: now });
-    if (!d) return { ok: false, error: "Percakapan tidak ditemukan." };
-    if (d.eligible !== args.stage) {
-      return { ok: false, error: "Sudah tidak eligible (mungkin sudah dibalas / closing / sudah di-follow-up)." };
-    }
-    if (!d.phoneNumberId) return { ok: false, error: "Nomor WABA CS belum dikonfigurasi." };
-    if (!process.env.KIRIMDEV_API_KEY) return { ok: false, error: "KIRIMDEV_API_KEY belum dikonfigurasi." };
-    const cfg = FOLLOWUP_STAGES.find((s) => s.stage === args.stage)!;
-    const base = process.env.KIRIMDEV_BASE_URL || "https://api.kirimdev.com/v1";
-    // Positional params — FINALISE order once the real template is known: {{1}}=name, {{2}}=product, {{3}}=orderId.
-    const params = [d.customerName, d.productName, d.orderId];
-    let resp: Response;
-    try {
-      resp = await fetch(`${base}/${d.phoneNumberId}/messages`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${process.env.KIRIMDEV_API_KEY}`,
-          "Content-Type": "application/json",
-          "Idempotency-Key": `fu-${args.conversationId}-${args.stage}`,
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp", to: d.customerPhone, type: "template",
-          template: { name: cfg.templateName, language: cfg.language,
-            components: [{ type: "body", parameters: params.map((text) => ({ type: "text", text })) }] },
-        }),
-      });
-    } catch {
-      return { ok: false, error: "Gagal menghubungi KirimDev." };
-    }
-    if (!resp.ok) {
-      const body = (await resp.json().catch(() => ({}))) as { error?: { code?: string } };
-      const code = body?.error?.code;
-      return { ok: false, error: (code && KIRIM_ERR[code]) || `Gagal kirim${code ? ` (${code})` : ""}.` };
-    }
-    await ctx.runMutation(internal.followUp.stampFollowUp, {
-      conversationId: args.conversationId, stage: args.stage, at: now,
-      orderId: d.orderId, customerPhone: d.customerPhone,
-      content: `[follow-up ${cfg.label}] ${cfg.templateName}`,
-    });
-    return { ok: true };
-  },
-});
-
-export const sendFollowUp = action({
-  args: { conversationId: v.id("conversations"), stage: v.number(), authSecret: v.string(),
-          nowOverride: v.optional(v.number()) },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
-    return await ctx.runAction(internal.followUp.performFollowUpSend, {
-      conversationId: args.conversationId, stage: args.stage, nowOverride: args.nowOverride
-    });
-  },
-});
-
 export const archiveFollowUp = mutation({
   args: { conversationId: v.id("conversations") },
   returns: v.object({ ok: v.literal(true) }),
@@ -626,24 +490,6 @@ export const archiveFollowUp = mutation({
       updatedAt: now,
     });
     return { ok: true as const };
-  },
-});
-
-// Feature #8: manual stage override
-export const setFollowUpStage = mutation({
-  args: { conversationId: v.id("conversations"), stage: v.number(), authSecret: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
-    if (![1, 2, 3].includes(args.stage)) {
-      return { ok: false, error: "Stage must be 1, 2, or 3." };
-    }
-    const c = await ctx.db.get(args.conversationId);
-    if (!c) return { ok: false, error: "Percakapan tidak ditemukan." };
-    const now = Date.now();
-    await ctx.db.patch(args.conversationId, { followUpStageOverride: args.stage, updatedAt: now });
-    return { ok: true };
   },
 });
 
@@ -670,6 +516,47 @@ export const unarchiveFollowUp = mutation({
       updatedAt: now,
     });
     return { ok: true as const };
+  },
+});
+
+// Legacy diagnostic used by bounded migration/parity tests. It never sends messages.
+export const candidacyFor = internalQuery({
+  args: { conversationId: v.id("conversations"), nowOverride: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const c = await ctx.db.get(args.conversationId);
+    if (!c) return null;
+    const now = args.nowOverride ?? Date.now();
+    const recap = await ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", c.orgId).eq("orderIdBerdu", c.orderId)).first();
+    const lastMsg = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first();
+    const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_direction_createdAt", (q) => q.eq("conversationId", c._id).eq("direction", "inbound")).order("desc").first();
+    const order = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", c.orgId).eq("orderId", c.orderId)).first();
+    const normName = normalizeCsName(c.assignedCsName);
+    let cfg = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", c.orgId).eq("normalizedName", normName)).first();
+    if (!cfg || !cfg.providerNumberId) {
+      const k = csKey(c.assignedCsName);
+      cfg = await ctx.db.query("csConfigs").withIndex("by_org_key", (q) => q.eq("orgId", c.orgId).eq("key", k)).first() ?? cfg;
+      if (!cfg?.providerNumberId) {
+        const legacy = await getBoundedActiveAgentRegistry(ctx, c.orgId);
+        if (legacy) cfg = legacy.find((x) => x.key == null && csKey(x.csName) === k && x.providerNumberId) ?? cfg;
+      }
+    }
+    const touch = await touchInfo(ctx, c._id, lastInbound?.createdAt ?? null);
+    const eligible = eligibleStage({
+      lastInboundAt: lastInbound?.createdAt ?? null,
+      lastMessageOutbound: lastMsg != null && lastMsg.direction === "outbound",
+      isClosed: c.status === "closed" || recap != null,
+      touchCount: touch.count,
+      lastTouchAt: touch.lastAt,
+      now,
+    });
+    return {
+      eligible,
+      phoneNumberId: cfg?.providerNumberId ?? null,
+      customerName: c.customerName,
+      customerPhone: c.customerPhone,
+      orderId: c.orderId,
+      productName: order?.productName ?? "—",
+    };
   },
 });
 
@@ -723,57 +610,6 @@ export const getArchivedFollowUps = query({
 
     result.sort((a, b) => b.followUpArchivedAt - a.followUpArchivedAt);
     return result;
-  },
-});
-
-// Feature #5b: auto-send toggle
-export const setAutoFollowUp = mutation({
-  args: { csName: v.string(), enabled: v.boolean(), authSecret: v.string() },
-  handler: async (ctx, args): Promise<{ ok: boolean; enabled?: boolean; error?: string }> => {
-    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
-      return { ok: false, error: "unauthorized" };
-    }
-    const now = Date.now();
-    // B3: default-org BY DESIGN — authSecret-gated, no Convex viewer identity
-    const orgId = await requireDefaultOrgId(ctx);
-    const normalizedName = normalizeCsName(args.csName);
-    const existing = await ctx.db
-      .query("csConfigs")
-      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
-      .unique();
-
-    if (existing) {
-      await ctx.db.patch(existing._id, { autoFollowUpEnabled: args.enabled, updatedAt: now });
-    } else {
-      // Insert minimal config if not found (mirror upsert defaults from csConfigs.ts).
-      await ctx.db.insert("csConfigs", {
-        normalizedName,
-        csName: args.csName,
-        orderAutomationEnabled: false,
-        aiAssistantEnabled: false,
-        reportingEnabled: true,
-        autoFollowUpEnabled: args.enabled,
-        isActive: true,
-        createdAt: now,
-        updatedAt: now,
-        orgId,
-      });
-    }
-    return { ok: true, enabled: args.enabled };
-  },
-});
-
-export const getAutoFollowUp = query({
-  args: { csName: v.string() },
-  handler: async (ctx, args): Promise<{ enabled: boolean }> => {
-    const { orgId } = await requireMemberOrg(ctx, "followUp.getAutoFollowUp");
-    const normalizedName = normalizeCsName(args.csName);
-    const config = await ctx.db
-      .query("csConfigs")
-      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
-      .unique();
-    const enabled = config?.autoFollowUpEnabled ?? false;
-    return { enabled };
   },
 });
 

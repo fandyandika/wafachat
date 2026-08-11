@@ -54,7 +54,6 @@ type CsRow = {
   orderAutomationEnabled: boolean;
   aiAssistantEnabled: boolean;
   reportingEnabled: boolean;
-  autoFollowUpEnabled?: boolean;
   isActive: boolean;
   berduStaffIds?: string[];
   registryKey?: string;
@@ -70,18 +69,12 @@ const CS_TOGGLES: Array<{
     | "orderAutomationEnabled"
     | "aiAssistantEnabled"
     | "reportingEnabled"
-    | "autoFollowUpEnabled"
     | "isActive"
   >;
 }> = [
   { icon: Zap, label: "Otomasi Order", field: "orderAutomationEnabled" },
   { icon: MessageSquare, label: "AI Assistant", field: "aiAssistantEnabled" },
   { icon: TrendingUp, label: "Reporting", field: "reportingEnabled" },
-  {
-    icon: MessageSquare,
-    label: "Auto Follow-up",
-    field: "autoFollowUpEnabled",
-  },
   { icon: Power, label: "Aktif", field: "isActive" },
 ];
 
@@ -813,7 +806,6 @@ export function SettingsDashboard() {
         orderAutomationEnabled: cs.orderAutomationEnabled,
         aiAssistantEnabled: cs.aiAssistantEnabled,
         reportingEnabled: cs.reportingEnabled,
-        autoFollowUpEnabled: cs.autoFollowUpEnabled ?? undefined,
         isActive: cs.isActive,
         [field]: value,
       });

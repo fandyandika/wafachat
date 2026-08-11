@@ -12,14 +12,6 @@ crons.daily(
   {},
 );
 
-// Hourly: auto-send follow-ups for enabled CS during business hours (08:00–14:00 WIB).
-crons.hourly(
-  "auto follow-up sweep",
-  { minuteUTC: 0 },
-  internal.autoFollowUp.autoFollowUpSweep,
-  {},
-);
-
 crons.interval(
   "ingest silence detector",
   { minutes: 15 }, // 15m cadence vs a 45m silence threshold — still detects in time; ~12->4 MB/day

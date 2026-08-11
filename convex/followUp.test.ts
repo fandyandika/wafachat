@@ -390,101 +390,10 @@ test("getFollowUpCandidates: dedupe — one customer with two ghosted orders yie
   expect(forPhone[0].orderId).toBe("O-7a"); // keeps the most recently active order (30h > 40h ago)
 });
 
-import { vi } from "vitest";
-
 const csCfg = (csName: string) => ({
   normalizedName: csName.toLowerCase().replace(/[^a-z]/g, ""), csName, providerNumberId: "PHONE123",
   orderAutomationEnabled: true, aiAssistantEnabled: false, reportingEnabled: true,
   isActive: true, createdAt: now, updatedAt: now,
-});
-
-test("sendFollowUp: success stamps stage + inserts template message", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  let convId: any;
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-9", customerPhone: "62899" });
-    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "O-9", customerPhone: "62899" });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-9", "62899", "inbound", now - 30 * HOUR) });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-9", "62899", "outbound", now - 29 * HOUR) });
-    await ctx.db.insert("csConfigs", { orgId, ...csCfg("Nabila") });
-  });
-  process.env.PANEL_AUTH_SECRET = "s3cret"; process.env.KIRIMDEV_API_KEY = "k_test";
-  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ id: "wamid.1" }), { status: 200 }));
-  vi.stubGlobal("fetch", fetchMock);
-
-  const res = await asAdmin.action(api.followUp.sendFollowUp, { conversationId: convId, stage: 1, authSecret: "s3cret", nowOverride: now });
-  expect(res.ok).toBe(true);
-  expect(fetchMock).toHaveBeenCalledOnce();
-  await t.run(async (ctx) => {
-    const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
-    expect(c!.followUpStage).toBe(1);
-    const msgs = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", convId)).collect();
-    expect(msgs.some((m) => m.messageType === "template" && m.direction === "outbound")).toBe(true);
-  });
-  vi.unstubAllGlobals();
-});
-
-test("sendFollowUp: wrong secret -> not ok, no send", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  let convId: any;
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => { convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-10", customerPhone: "62810" }); });
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-  const fetchMock = vi.fn();
-  vi.stubGlobal("fetch", fetchMock);
-  const res = await asAdmin.action(api.followUp.sendFollowUp, { conversationId: convId, stage: 1, authSecret: "WRONG", nowOverride: now });
-  expect(res.ok).toBe(false);
-  expect(fetchMock).not.toHaveBeenCalled();
-  vi.unstubAllGlobals();
-});
-
-test("sendFollowUp: KirimDev error code -> not ok, not stamped", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  let convId: any;
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-11", customerPhone: "62811b" });
-    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "O-11", customerPhone: "62811b" });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-11", "62811b", "inbound", now - 30 * HOUR) });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-11", "62811b", "outbound", now - 29 * HOUR) });
-    await ctx.db.insert("csConfigs", { orgId, ...csCfg("Nabila") });
-  });
-  process.env.PANEL_AUTH_SECRET = "s3cret"; process.env.KIRIMDEV_API_KEY = "k_test";
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "template_paused" } }), { status: 400 })));
-  const res = await asAdmin.action(api.followUp.sendFollowUp, { conversationId: convId, stage: 1, authSecret: "s3cret", nowOverride: now });
-  expect(res.ok).toBe(false);
-  await t.run(async (ctx) => {
-    expect(((await ctx.db.get(convId)) as Doc<"conversations"> | undefined)!.followUpStage).toBeUndefined();
-    const msgs = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", convId)).collect();
-    expect(msgs.filter((m) => m.messageType === "template").length).toBe(0);
-  });
-  vi.unstubAllGlobals();
-});
-
-test("sendFollowUp: missing KIRIMDEV_API_KEY -> not ok, fetch not called", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  let convId: any;
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-12", customerPhone: "62812b" });
-    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "O-12", customerPhone: "62812b" });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-12", "62812b", "inbound", now - 30 * HOUR) });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-12", "62812b", "outbound", now - 29 * HOUR) });
-    await ctx.db.insert("csConfigs", { orgId, ...csCfg("Nabila") });
-  });
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-  delete process.env.KIRIMDEV_API_KEY;
-  const fetchMock = vi.fn();
-  vi.stubGlobal("fetch", fetchMock);
-  const res = await asAdmin.action(api.followUp.sendFollowUp, { conversationId: convId, stage: 1, authSecret: "s3cret", nowOverride: now });
-  expect(res.ok).toBe(false);
-  expect(fetchMock).not.toHaveBeenCalled();
-  vi.unstubAllGlobals();
 });
 
 async function seedDueManualFollowUp(t: any, orgId: any, suffix: string, stage: 1 | 2 | 3 = 1) {
@@ -682,89 +591,6 @@ test("archiveFollowUp: CS cannot archive another CS conversation", async () => {
     .rejects.toThrow(/conversation scope/);
 });
 
-// Feature #8: manual stage override
-test("setFollowUpStage: valid stage -> override set, appears in getFollowUpCandidates", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  let convId: any;
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-15", customerPhone: "62815" });
-    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "O-15", customerPhone: "62815" });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-15", "62815", "inbound", now - 30 * HOUR) });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-15", "62815", "outbound", now - 29 * HOUR) });
-  });
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-  const res = await asAdmin.mutation(api.followUp.setFollowUpStage, { conversationId: convId, stage: 2, authSecret: "s3cret" });
-  expect(res.ok).toBe(true);
-  const candidates = await asAdmin.query(api.followUp.getFollowUpCandidates, { nowOverride: now });
-  expect(candidates.stage2.find((c) => c.orderId === "O-15")).toBeDefined();
-  expect(candidates.stage1.find((c) => c.orderId === "O-15")).toBeUndefined();
-});
-
-test("setFollowUpStage: invalid stage -> rejected", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  let convId: any;
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-16", customerPhone: "62816" });
-  });
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-  const res = await asAdmin.mutation(api.followUp.setFollowUpStage, { conversationId: convId, stage: 5, authSecret: "s3cret" });
-  expect(res.ok).toBe(false);
-});
-
-test("setFollowUpStage: cleared on customer reply (inbound)", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  let convId: any;
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-17", customerPhone: "62817" });
-    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "O-17", customerPhone: "62817" });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-17", "62817", "inbound", now - 30 * HOUR) });
-    await ctx.db.insert("messages", { orgId, ...msg(convId, "O-17", "62817", "outbound", now - 29 * HOUR) });
-  });
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-  await asAdmin.mutation(api.followUp.setFollowUpStage, { conversationId: convId, stage: 2, authSecret: "s3cret" });
-
-  // Simulate inbound customer reply
-  await t.mutation(internal.messages.appendMessageFromN8n, {
-    phone: "62817", order_id: "O-17", direction: "inbound", role: "customer",
-    content: "Terima kasih", createdAt: now - 1 * HOUR
-  });
-
-  await t.run(async (ctx) => {
-    const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
-    expect(c!.followUpStageOverride).toBeUndefined();
-  });
-});
-
-test("setFollowUpStage: cleared on send (stampFollowUp)", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  let convId: any;
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-17b", customerPhone: "62817b" });
-    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "O-17b", customerPhone: "62817b" });
-  });
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-  await asAdmin.mutation(api.followUp.setFollowUpStage, { conversationId: convId, stage: 2, authSecret: "s3cret" });
-
-  // Simulate stampFollowUp call (internal mutation)
-  await t.run(async (ctx) => {
-    await ctx.db.patch(convId, { followUpStage: 1, followUpStageAt: now, followUpStageOverride: undefined, updatedAt: now });
-  });
-
-  await t.run(async (ctx) => {
-    const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
-    expect(c!.followUpStageOverride).toBeUndefined();
-    expect(c!.followUpStage).toBe(1);
-  });
-});
-
 // Feature #2: archive/undo
 test("unarchiveFollowUp: restores to active + clears timestamp", async () => {
   const t = convexTest(schema);
@@ -851,52 +677,6 @@ test("CS archived list ignores a client request for another CS", async () => {
     nowOverride: now,
   });
   expect(rows.map((row) => row.orderId)).toEqual(["ARCHIVED-AISYAH"]);
-});
-
-// Feature #5b: auto-send toggle
-test("setAutoFollowUp: inserts if not exists, patches if exists", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
-  process.env.PANEL_AUTH_SECRET = "s3cret";
-
-  // First toggle (insert path)
-  const res1 = await asAdmin.mutation(api.followUp.setAutoFollowUp, { csName: "CS New", enabled: true, authSecret: "s3cret" });
-  expect(res1.ok).toBe(true);
-  expect(res1.enabled).toBe(true);
-
-  // Check inserted
-  await t.run(async (ctx) => {
-    const cfg = await ctx.db
-      .query("csConfigs")
-      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "csnew"))
-      .unique();
-    expect(cfg?.autoFollowUpEnabled).toBe(true);
-  });
-
-  // Second toggle (update path)
-  const res2 = await asAdmin.mutation(api.followUp.setAutoFollowUp, { csName: "CS New", enabled: false, authSecret: "s3cret" });
-  expect(res2.ok).toBe(true);
-  expect(res2.enabled).toBe(false);
-
-  await t.run(async (ctx) => {
-    const cfg = await ctx.db
-      .query("csConfigs")
-      .withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "csnew"))
-      .unique();
-    expect(cfg?.autoFollowUpEnabled).toBe(false);
-  });
-});
-
-test("getAutoFollowUp: returns enabled status", async () => {
-  const t = convexTest(schema);
-  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    await ctx.db.insert("csConfigs", { orgId, ...csCfg("TestCS") });
-  });
-  const res = await asAdmin.query(api.followUp.getAutoFollowUp, { csName: "TestCS" });
-  expect(res.enabled).toBe(false); // csCfg default
 });
 
 // Feature #10: KPI

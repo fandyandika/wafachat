@@ -7,7 +7,7 @@ import { DEFAULT_CONFIGS } from "./csConfigs";
 type CsRow = {
   csName: string; normalizedName: string; key: string; avatarUrl: string | null;
   isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
-  reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string; berduStaffIds?: string[];
+  reportingEnabled: boolean; csPhone?: string; berduStaffIds?: string[];
   registryKey?: string; nameAliases?: string[];
 };
 
@@ -24,7 +24,7 @@ export const listCs = query({
 
     type Entry = {
       csName: string; isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
-      reportingEnabled: boolean; autoFollowUpEnabled?: boolean; csPhone?: string; berduStaffIds?: string[]; avatarStorageId?: typeof stored[number]["avatarStorageId"];
+      reportingEnabled: boolean; csPhone?: string; berduStaffIds?: string[]; avatarStorageId?: typeof stored[number]["avatarStorageId"];
       registryKey?: string; nameAliases?: string[];
     };
     const byKey = new Map<string, Entry>();
@@ -34,8 +34,7 @@ export const listCs = query({
       if (!k || k === "unknown") continue;
       byKey.set(k, {
         csName: d.csName, isActive: d.isActive, orderAutomationEnabled: d.orderAutomationEnabled,
-        aiAssistantEnabled: d.aiAssistantEnabled, reportingEnabled: d.reportingEnabled,
-        autoFollowUpEnabled: d.autoFollowUpEnabled, csPhone: d.csPhone,
+        aiAssistantEnabled: d.aiAssistantEnabled, reportingEnabled: d.reportingEnabled, csPhone: d.csPhone,
       });
     }
     // …then stored configs override (org-filtered).
@@ -45,7 +44,7 @@ export const listCs = query({
       byKey.set(k, {
         csName: c.csName, isActive: c.isActive, orderAutomationEnabled: c.orderAutomationEnabled,
         aiAssistantEnabled: c.aiAssistantEnabled, reportingEnabled: c.reportingEnabled,
-        autoFollowUpEnabled: c.autoFollowUpEnabled, csPhone: c.csPhone, berduStaffIds: c.berduStaffIds, avatarStorageId: c.avatarStorageId,
+        csPhone: c.csPhone, berduStaffIds: c.berduStaffIds, avatarStorageId: c.avatarStorageId,
         registryKey: c.key, nameAliases: c.nameAliases,
       });
     }
@@ -59,7 +58,6 @@ export const listCs = query({
         orderAutomationEnabled: e.orderAutomationEnabled,
         aiAssistantEnabled: e.aiAssistantEnabled,
         reportingEnabled: e.reportingEnabled,
-        autoFollowUpEnabled: e.autoFollowUpEnabled,
         csPhone: e.csPhone,
         berduStaffIds: e.berduStaffIds,
         registryKey: e.registryKey,
