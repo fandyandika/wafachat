@@ -1,128 +1,26 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import React from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
-import type { Id } from '@/convex/_generated/dataModel';
 import { Button } from '@/components/ui/button';
-import { Skeleton } from '@/components/ui/skeleton';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { PanelState } from '@/components/panel/panel-state';
 import { usePanelFilters } from '@/components/panel/use-panel-filters';
+import { fetchHistory, fetchQueue, searchCustomers } from './follow-up/follow-up-client';
+import type { FollowUpHistoryRow, FollowUpHistoryView, FollowUpQueueRow, FollowUpSearchRow, FollowUpStage } from './follow-up/follow-up-types';
+import { FollowUpList } from './follow-up/follow-up-list';
+import { FollowUpDetail } from './follow-up/follow-up-detail';
 
-type Candidate = {
-  conversationId: string;
-  customerName: string;
-  customerPhone: string;
-  orderId: string;
-  csName: string;
-  csKey: string;
-  cycleInboundAt: number;
-  stage: 1 | 2 | 3;
-  dueAt: number;
-};
-type Staged = Candidate & { stage: 1 | 2 | 3 };
-type CandidatesData = { stage1: Candidate[]; stage2: Candidate[]; stage3: Candidate[] };
-type KpiData = { totalClosings: number; fromFollowUp: number; byStage: { h1: number; h2: number; h3: number } };
-type AttentionRow = {
-  conversationId: string;
-  customerName: string;
-  customerPhone: string;
-  orderId: string;
-  csName: string;
-  stage?: 1 | 2 | 3;
-  state: 'sending' | 'failed' | 'unknown';
-  lastError?: string;
-  updatedAt: number;
-};
-type AttentionState = AttentionRow['state'];
-type AttentionPagination = Record<AttentionState, { isDone: boolean; continueCursor: string }>;
-type SnapshotData = {
-  candidates: CandidatesData;
-  kpi: KpiData;
-  attention: AttentionRow[];
-  attentionPagination: AttentionPagination;
-  pagination: { isDone: boolean; continueCursor: string };
-};
+export type FollowUpView = 'action' | 'search' | 'sent' | 'review' | 'completed';
+type ListRow = FollowUpQueueRow | FollowUpSearchRow | FollowUpHistoryRow;
 
-type Tab = 'all' | 'stage1' | 'stage2' | 'stage3' | 'attention' | 'closing' | 'archived';
-
-type ArchivedRow = {
-  conversationId: string;
-  customerName: string;
-  customerPhone: string;
-  orderId: string;
-  csName: string;
-  followUpArchivedAt: number;
-};
-
-type ClosedRow = {
-  conversationId?: string;
-  customerName: string;
-  customerPhone: string;
-  csName: string;
-  orderId: string;
-  closedAt: number;
-  product: string;
-  touches: number;
-  fromFollowUp: boolean;
-};
-
-const STAGE_LABEL: Record<1 | 2 | 3, string> = { 1: 'H+1', 2: 'H+2', 3: 'H+3' };
-const STAGE_TEMPLATE_LABELS: Record<1 | 2 | 3, string> = {
-  1: 'H+1 · Tindak lanjut pertama',
-  2: 'H+2 · Pengingat',
-  3: 'H+3 · Follow-up terakhir',
-};
-
-export async function fetchFollowUpSnapshot(
-  csName: string | undefined,
-  request: typeof fetch = fetch,
-  cursor?: string,
-): Promise<SnapshotData> {
-  const response = await request('/api/follow-up/snapshot', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ csName, cursor }),
-  });
-  const result = await response.json();
-  if (!response.ok || !result.ok) throw new Error(result.error || 'Gagal memuat antrean follow-up.');
-  return {
-    candidates: result.candidates,
-    kpi: result.kpi,
-    attention: result.attention ?? [],
-    attentionPagination: result.attentionPagination ?? {
-      sending: { isDone: true, continueCursor: '' },
-      failed: { isDone: true, continueCursor: '' },
-      unknown: { isDone: true, continueCursor: '' },
-    },
-    pagination: result.pagination ?? { isDone: true, continueCursor: '' },
-  };
-}
-
-async function fetchFollowUpAttention(
-  csName: string | undefined,
-  state: AttentionState,
-  cursor: string,
-): Promise<{ page: AttentionRow[]; isDone: boolean; continueCursor: string }> {
-  const response = await fetch('/api/follow-up/attention', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ csName, state, cursor }),
-  });
-  const result = await response.json();
-  if (!response.ok || !result.ok) throw new Error(result.error || 'Gagal memuat status Follow-up.');
-  return result;
-}
+const VIEWS: Array<{ key: FollowUpView; label: string; description: string }> = [
+  { key: 'action', label: 'Perlu tindakan', description: 'Customer yang sudah waktunya dihubungi' },
+  { key: 'search', label: 'Cari customer', description: 'Cari nama atau nomor tertentu' },
+  { key: 'sent', label: 'Terkirim', description: 'Kontak yang sudah dilakukan' },
+  { key: 'review', label: 'Perlu dicek', description: 'Pengiriman gagal atau belum pasti' },
+  { key: 'completed', label: 'Selesai', description: 'Customer yang sudah closing' },
+];
 
 export function getNextFollowUpTabIndex(key: string, currentIndex: number, tabCount: number): number | null {
   if (key === 'ArrowRight') return (currentIndex + 1) % tabCount;
@@ -132,1000 +30,116 @@ export function getNextFollowUpTabIndex(key: string, currentIndex: number, tabCo
   return null;
 }
 
-const formatRelativeTime = (ms: number): string => {
-  const now = Date.now();
-  const diffH = Math.round((now - ms) / 3.6e6);
-  if (diffH < 1) return 'baru';
-  if (diffH < 24) return `${diffH} jam`;
-  return `${Math.round(diffH / 24)} hari`;
-};
+function rowId(row: ListRow) { return row.conversationId ?? ('id' in row ? row.id : ''); }
 
-function Avatar({ name }: { name: string }) {
-  const initial = name?.trim()?.[0]?.toUpperCase() ?? 'U';
-  return (
-    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">
-      {initial}
-    </div>
-  );
-}
-
-export function RowCheck({ checked, onToggle }: { checked: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        onToggle();
-      }}
-      aria-pressed={checked}
-      aria-label={checked ? 'Batalkan pilih' : 'Pilih'}
-      className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md md:h-9 md:w-9"
-    >
-      <span
-        aria-hidden
-        className={`flex h-5 w-5 items-center justify-center rounded border text-[11px] font-bold leading-none transition-colors ${
-          checked ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-input bg-background text-transparent hover:border-emerald-500'
-        }`}
-      >
-        ✓
-      </span>
-    </button>
-  );
-}
-
-export function FollowUpSnapshotError({ message, retrying, onRetry }: { message: string; retrying: boolean; onRetry: () => void }) {
-  return (
-    <PanelState
-      kind="error"
-      title="Antrean follow-up gagal dimuat"
-      description={message}
-      action={<Button onClick={onRetry} disabled={retrying}>{retrying ? 'Memuat…' : 'Coba lagi'}</Button>}
-    />
-  );
-}
-
-function ChatListItem({
-  candidate,
-  isSelected,
-  selectable,
-  isChecked,
-  onToggleCheck,
-  onClick,
-}: {
-  candidate: Staged;
-  isSelected: boolean;
-  selectable: boolean;
-  isChecked: boolean;
-  onToggleCheck: () => void;
-  onClick: () => void;
-}) {
-  return (
-    <div
-      onClick={onClick}
-      className={`flex cursor-pointer items-center gap-2.5 border-b border-border px-3 py-3 transition-colors hover:bg-accent ${
-        isSelected ? 'bg-emerald-50 dark:bg-emerald-950/40' : ''
-      }`}
-    >
-      {selectable && <RowCheck checked={isChecked} onToggle={onToggleCheck} />}
-      <Avatar name={candidate.customerName} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="truncate font-semibold text-foreground">{candidate.customerName || candidate.customerPhone || 'Unknown'}</h3>
-          <span className="whitespace-nowrap text-xs font-medium text-destructive">
-            Jatuh tempo {formatRelativeTime(candidate.dueAt)}
-          </span>
-        </div>
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800 dark:bg-sky-900 dark:text-sky-100">
-              Tahap {STAGE_LABEL[candidate.stage]}
-            </span>
-            <span className="truncate text-[11px] text-muted-foreground" title={`CS: ${candidate.csName}`}>
-              {candidate.csName?.replace(/^CS\s+/i, '') || '—'}
-            </span>
-          </div>
-          <span className="truncate text-[11px] text-muted-foreground">{candidate.orderId}</span>
-        </div>
-        <p className="mt-1 text-xs font-medium text-primary">Tindakan berikutnya: kirim {STAGE_LABEL[candidate.stage]}</p>
-      </div>
-    </div>
-  );
-}
-
-// Archived row (manual archive) — info + restore. Not navigable (no chat view).
-function ArchivedListItem({
-  archived,
-  onRestore,
-  isRestoring,
-}: {
-  archived: ArchivedRow;
-  onRestore: () => Promise<void>;
-  isRestoring: boolean;
-}) {
-  return (
-    <div className="flex items-center gap-3 border-b border-border px-3 py-3">
-      <Avatar name={archived.customerName} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="truncate font-semibold text-foreground">{archived.customerName || archived.customerPhone || 'Unknown'}</h3>
-          <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelativeTime(archived.followUpArchivedAt)}</span>
-        </div>
-        <div className="mt-1 flex items-center justify-between gap-2">
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">Diarsipkan</span>
-          <span className="truncate text-xs text-muted-foreground">{archived.orderId}</span>
-        </div>
-      </div>
-      <Button onClick={onRestore} disabled={isRestoring} variant="ghost" size="sm" className="shrink-0">
-        {isRestoring ? 'Pulih…' : 'Pulihkan'}
-      </Button>
-    </div>
-  );
-}
-
-function AttentionListItem({ row }: { row: AttentionRow }) {
-  const stateLabel = row.state === 'sending' ? 'Sedang diproses' : row.state === 'unknown' ? 'Status belum diketahui' : 'Pengiriman gagal';
-  return (
-    <div className="flex items-start gap-3 border-b border-border px-3 py-3">
-      <Avatar name={row.customerName} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="truncate font-semibold text-foreground">{row.customerName || row.customerPhone}</h3>
-          <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelativeTime(row.updatedAt)}</span>
-        </div>
-        <p className="mt-1 text-xs font-semibold text-amber-700">{stateLabel}{row.stage ? ` · ${STAGE_LABEL[row.stage]}` : ''}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{row.lastError || 'Tunggu pembaruan status sebelum mengambil tindakan.'}</p>
-        <p className="mt-1 truncate text-[11px] text-muted-foreground">{row.orderId} · {row.csName}</p>
-      </div>
-    </div>
-  );
-}
-
-// Closing row — where a lead WENT after dropping out of the funnel. Clickable to view chat history.
-function ClosingListItem({ row, isSelected, onClick }: { row: ClosedRow; isSelected: boolean; onClick?: () => void }) {
-  const clickable = !!onClick;
-  return (
-    <div
-      onClick={onClick}
-      className={`flex items-center gap-3 border-b border-border px-3 py-2.5 ${clickable ? 'cursor-pointer transition-colors hover:bg-accent' : ''} ${isSelected ? 'bg-emerald-50 dark:bg-emerald-950/40' : ''}`}
-    >
-      <Avatar name={row.customerName} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="truncate font-semibold text-foreground">{row.customerName || row.customerPhone || '—'}</h3>
-          <span className="whitespace-nowrap text-xs text-muted-foreground">{formatRelativeTime(row.closedAt)}</span>
-        </div>
-        <div className="mt-1 flex items-center justify-between gap-2">
-          {row.fromFollowUp ? (
-            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100">
-              ✓ via follow-up{row.touches > 1 ? ` (${row.touches}×)` : ''}
-            </span>
-          ) : (
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">closing langsung</span>
-          )}
-          <span className="max-w-[45%] truncate text-xs text-muted-foreground">{row.product || row.orderId}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// WhatsApp-style message bubble
-function MessageBubble({ message }: { message: any }) {
-  const isOutbound = message.direction === 'outbound';
-  const timeStr = new Date(message.createdAt).toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit' });
-  return (
-    <div className={`mb-1.5 flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
-      <div
-        className={`max-w-[82%] rounded-xl px-2.5 py-1.5 shadow-sm ${
-          isOutbound ? 'bg-[#dcf8c6] text-[#111b21]' : 'bg-white text-foreground dark:bg-muted'
-        }`}
-      >
-        <p className="whitespace-pre-wrap break-words text-[13px] leading-snug">{message.content || `[${message.messageType}]`}</p>
-        <p className="mt-0.5 text-right text-[10px] opacity-60">{timeStr}</p>
-      </div>
-    </div>
-  );
-}
-
-// Conversation pane (single lead)
-function ConversationPane({ candidate, onBack, onChanged }: { candidate: Staged | null; onBack?: () => void; onChanged?: () => void }) {
-  const [sending, setSending] = useState(false);
-  const [archiving, setArchiving] = useState(false);
-  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
-  const [status, setStatus] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const requestIdRef = useRef<string | null>(null);
-  const templateSetup = useQuery(api.followUpTemplates.getFollowUpTemplateSetup, {});
-
-  const messages = useQuery(
-    api.messages.listMessages,
-    candidate ? { conversationId: candidate.conversationId as Id<'conversations'>, limit: 50 } : 'skip',
-  );
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  useEffect(() => {
-    requestIdRef.current = null;
-    setStatus(null);
-  }, [candidate?.conversationId]);
-
-  if (!candidate) {
-    return (
-      <div className="hidden h-full flex-col items-center justify-center bg-muted/30 md:flex">
-        <p className="text-sm text-muted-foreground">Pilih chat di kiri untuk lihat &amp; follow-up</p>
-      </div>
-    );
-  }
-
-  const busy = sending || archiving;
-  const templateReady = templateSetup?.ready === true;
-
-  async function handleSend() {
-    if (!candidate) return;
-    setSending(true);
-    setStatus(null);
-    const requestId = requestIdRef.current ?? crypto.randomUUID();
-    requestIdRef.current = requestId;
-    try {
-      const response = await fetch('/api/follow-up/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: candidate.conversationId, stage: candidate.stage, requestId }),
-      });
-      const r = await response.json();
-      if (r.ok) {
-        requestIdRef.current = null;
-        setStatus({ type: 'ok', message: `Follow-up ${STAGE_LABEL[candidate.stage]} diterima KirimDev.` });
-        onChanged?.();
-        setTimeout(() => setStatus(null), 2000);
-      } else {
-        if (r.status !== 'unknown') requestIdRef.current = null;
-        setStatus({ type: 'error', message: r.error || 'Gagal mengirim' });
-        onChanged?.();
-      }
-    } catch {
-      setStatus({ type: 'error', message: 'Gagal menghubungi server' });
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function handleArchive() {
-    if (!candidate) return;
-    setArchiving(true);
-    setStatus(null);
-    try {
-      const r = await fetch('/api/follow-up/archive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: candidate.conversationId }),
-      }).then((x) => x.json());
-      if (r.ok) {
-        setStatus({ type: 'ok', message: 'Chat diarsipkan!' });
-        onChanged?.();
-        setTimeout(() => onBack?.(), 800);
-      } else {
-        setStatus({ type: 'error', message: r.error || 'Gagal mengarsipkan' });
-      }
-    } catch {
-      setStatus({ type: 'error', message: 'Gagal menghubungi server' });
-    } finally {
-      setArchiving(false);
-    }
-  }
-
-  return (
-    <div className="flex h-full flex-col bg-background">
-      {/* Header — compact (WhatsApp-like) */}
-      <div className="shrink-0 space-y-1.5 border-b border-border bg-card p-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-1 items-center gap-2">
-            {onBack && (
-              <button onClick={onBack} className="text-xl leading-none text-muted-foreground hover:text-foreground" aria-label="Kembali">
-                ←
-              </button>
-            )}
-            <Avatar name={candidate.customerName} />
-            <div className="min-w-0">
-              <h2 className="truncate text-sm font-semibold text-foreground">{candidate.customerName || candidate.customerPhone}</h2>
-              <p className="truncate text-xs text-muted-foreground">{candidate.customerPhone}</p>
-            </div>
-          </div>
-          <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-800">{STAGE_LABEL[candidate.stage]}</span>
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto bg-muted/20 p-2.5">
-        {messages === undefined ? (
-          <div className="space-y-3 p-2">
-            <Skeleton className="h-12 w-3/4" />
-            <Skeleton className="ml-auto h-16 w-2/3" />
-            <Skeleton className="h-10 w-1/2" />
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-muted-foreground">Belum ada pesan</p>
-          </div>
-        ) : (
-          <>
-            {messages.map((msg) => (
-              <MessageBubble key={msg._id} message={msg} />
-            ))}
-            <div ref={messagesEndRef} />
-          </>
-        )}
-      </div>
-
-      {/* Status */}
-      {status && (
-        <div
-          role={status.type === 'error' ? 'alert' : 'status'}
-          aria-live={status.type === 'error' ? undefined : 'polite'}
-          className={`shrink-0 px-4 py-2 text-sm font-medium ${
-            status.type === 'ok'
-              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100'
-              : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100'
-          }`}
-        >
-          {status.message}
-        </div>
-      )}
-
-      {/* Composer */}
-      <div className="shrink-0 space-y-1.5 border-t border-border bg-card p-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
-        <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/50 px-3 py-2 text-sm">
-          <span className="font-medium">{STAGE_TEMPLATE_LABELS[candidate.stage]}</span>
-          <span className="text-xs text-muted-foreground">Tahap ditentukan sistem</span>
-        </div>
-        {!templateReady && (
-          <p className="text-xs text-amber-700">Lengkapi tiga template di <a className="font-semibold underline" href="/panel/settings?section=follow-up">Settings</a> sebelum mengirim.</p>
-        )}
-        <div className="flex items-center gap-2">
-          <Button
-            onClick={handleSend}
-            disabled={busy || !templateReady}
-            className="h-10 flex-1 bg-emerald-600 font-semibold text-white shadow-sm hover:bg-emerald-700"
-          >
-            {sending ? 'Mengirim…' : `Kirim ${STAGE_LABEL[candidate.stage]}`}
-          </Button>
-          <Button onClick={() => setArchiveConfirmOpen(true)} disabled={busy} variant="outline" className="h-10 px-4">
-            {archiving ? '…' : 'Arsip'}
-          </Button>
-        </div>
-      </div>
-      <AlertDialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Arsipkan chat?</AlertDialogTitle>
-            <AlertDialogDescription>Chat ini keluar dari daftar follow-up dan dapat dipulihkan dari Arsip.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Batal</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                setArchiveConfirmOpen(false);
-                handleArchive();
-              }}
-            >
-              Arsipkan
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  );
-}
-
-// Read-only chat history for a CLOSED lead (Closing tab) — no composer/stage controls.
-function ReadOnlyConversation({ row, onBack }: { row: ClosedRow; onBack?: () => void }) {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messages = useQuery(
-    api.messages.listMessages,
-    row.conversationId ? { conversationId: row.conversationId as Id<'conversations'>, limit: 50 } : 'skip',
-  );
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  return (
-    <div className="flex h-full flex-col bg-background">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border bg-card p-2.5">
-        {onBack && (
-          <button onClick={onBack} className="text-xl leading-none text-muted-foreground hover:text-foreground" aria-label="Kembali">
-            ←
-          </button>
-        )}
-        <Avatar name={row.customerName} />
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-sm font-semibold text-foreground">{row.customerName || row.customerPhone}</h2>
-          <p className="truncate text-xs text-muted-foreground">{row.customerPhone}</p>
-        </div>
-        <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-900 dark:text-emerald-100">
-          ✓ Closing
-        </span>
-      </div>
-      <div className="flex-1 overflow-y-auto bg-muted/20 p-2.5">
-        {messages === undefined ? (
-          <div className="space-y-3 p-2">
-            <Skeleton className="h-12 w-3/4" />
-            <Skeleton className="ml-auto h-16 w-2/3" />
-            <Skeleton className="h-10 w-1/2" />
-          </div>
-        ) : messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-muted-foreground">Belum ada pesan</p>
-          </div>
-        ) : (
-          <>
-            {messages.map((msg) => (
-              <MessageBubble key={msg._id} message={msg} />
-            ))}
-            <div ref={messagesEndRef} />
-          </>
-        )}
-      </div>
-      <div className="shrink-0 border-t border-border bg-card p-2.5 text-center text-xs text-muted-foreground">
-        Sudah closing — riwayat hanya bisa dilihat.
-      </div>
-    </div>
-  );
-}
-
-// Main dashboard
 export function FollowUpDashboard() {
   const [me, setMe] = useState<{ name: string; role: 'admin' | 'cs'; csName?: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showConvOnMobile, setShowConvOnMobile] = useState(false);
-  const [sortBy, setSortBy] = useState<'oldest' | 'newest'>('oldest');
-  const [restoringId, setRestoringId] = useState<string | null>(null);
-  // Bulk select
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [bulkBusy, setBulkBusy] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; action: string } | null>(null);
-  const [bulkStatus, setBulkStatus] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
-  const [bulkConfirmation, setBulkConfirmation] = useState<'arsip' | null>(null);
-  const [feedback, setFeedback] = useState<{ type: 'ok' | 'error'; message: string } | null>(null);
-
-  useEffect(() => {
-    fetch('/api/me')
-      .then((r) => (r.ok ? r.json() : null))
-      .then(setMe)
-      .catch(() => setMe(null));
-  }, []);
-
-  // CS filter lives INSIDE the dashboard (local state) so changing it always re-runs the queries —
-  // the shared header's URL-based filter wasn't reaching this page reliably. Seeded from ?cs= once.
   const { cs } = usePanelFilters();
   const csList = useQuery(api.cs.listCs, {}) ?? [];
-  const isCs = me?.role === 'cs';
-  const [csFilter, setCsFilter] = useState<string>(cs && cs !== 'all' ? cs : 'all');
-  // Scoped CS: force to their assigned CS (csName), not the display name. Fallback to name for
-  // legacy accounts where csName wasn't set yet.
-  const csName = isCs ? (me!.csName || me!.name) : csFilter !== 'all' ? csFilter : undefined;
-
-  // Candidates + KPI are the always-on heavy queries. Fetch them ON DEMAND (page load /
-  // filter change / after an action / manual Refresh) instead of a live subscription —
-  // a live subscription re-read the whole conversations table on every inbound message,
-  // which is what blew the DB I/O budget. (Also fails gracefully if Convex is down.)
-  const [data, setData] = useState<CandidatesData | undefined>(undefined);
-  const [kpiData, setKpiData] = useState<KpiData | undefined>(undefined);
-  const [attentionData, setAttentionData] = useState<AttentionRow[]>([]);
-  const [attentionPagination, setAttentionPagination] = useState<AttentionPagination>({
-    sending: { isDone: true, continueCursor: '' },
-    failed: { isDone: true, continueCursor: '' },
-    unknown: { isDone: true, continueCursor: '' },
-  });
-  const [loadingAttention, setLoadingAttention] = useState(false);
+  const [csFilter, setCsFilter] = useState(cs && cs !== 'all' ? cs : 'all');
+  const [view, setView] = useState<FollowUpView>('action');
+  const [stage, setStage] = useState<'all' | FollowUpStage>('all');
+  const [rows, setRows] = useState<ListRow[]>([]);
+  const [selected, setSelected] = useState<ListRow | null>(null);
+  const [mobileDetail, setMobileDetail] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [searchMessage, setSearchMessage] = useState('Masukkan minimal 3 karakter, lalu tekan Cari.');
   const [pagination, setPagination] = useState({ isDone: true, continueCursor: '' });
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
-  const loadSnapshot = useCallback(async () => {
+  useEffect(() => {
+    fetch('/api/me').then((r) => r.ok ? r.json() : null).then(setMe).catch(() => setMe(null));
+  }, []);
+  const isCs = me?.role === 'cs';
+  const csName = isCs ? (me?.csName || me?.name) : csFilter !== 'all' ? csFilter : undefined;
+
+  const loadQueue = useCallback(async (cursor: string | null = null, append = false) => {
     if (!me) return;
-    setRefreshing(true);
-    setSnapshotError(null);
+    setLoading(true); setError(null);
     try {
-      const snapshot = await fetchFollowUpSnapshot(csName);
-      setData(snapshot.candidates);
-      setKpiData(snapshot.kpi);
-      setAttentionData(snapshot.attention);
-      setAttentionPagination(snapshot.attentionPagination);
-      setPagination(snapshot.pagination);
-    } catch (error) {
-      setSnapshotError(error instanceof Error ? error.message : 'Gagal memuat antrean follow-up.');
-    } finally {
-      setRefreshing(false);
-    }
-  }, [me, csName]);
+      const result = await fetchQueue({ csName, stage: stage === 'all' ? undefined : stage }, cursor);
+      setRows((current) => append ? [...current, ...result.page.filter((next) => !current.some((old) => rowId(old) === rowId(next)))] : result.page);
+      setPagination(result.pagination);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Gagal memuat antrean follow-up.'); }
+    finally { setLoading(false); }
+  }, [csName, me, stage]);
 
-  const loadMore = useCallback(async () => {
-    if (!pagination.continueCursor || pagination.isDone || loadingMore) return;
-    setLoadingMore(true);
+  const loadHistory = useCallback(async (historyView: FollowUpHistoryView, cursor: string | null = null, append = false) => {
+    if (!me) return;
+    setLoading(true); setError(null);
     try {
-      const snapshot = await fetchFollowUpSnapshot(csName, fetch, pagination.continueCursor);
-      setData((current) => {
-        const merge = (left: Candidate[] = [], right: Candidate[] = []) => {
-          const rows = new Map(left.map((row) => [row.conversationId, row]));
-          right.forEach((row) => rows.set(row.conversationId, row));
-          return [...rows.values()];
-        };
-        return {
-          stage1: merge(current?.stage1, snapshot.candidates.stage1),
-          stage2: merge(current?.stage2, snapshot.candidates.stage2),
-          stage3: merge(current?.stage3, snapshot.candidates.stage3),
-        };
-      });
-      setPagination(snapshot.pagination);
-    } catch (error) {
-      setSnapshotError(error instanceof Error ? error.message : 'Gagal memuat antrean berikutnya.');
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [csName, loadingMore, pagination]);
-
-  const loadMoreAttention = useCallback(async () => {
-    if (loadingAttention) return;
-    const state = (['sending', 'failed', 'unknown'] as const).find((key) => !attentionPagination[key].isDone);
-    if (!state) return;
-    setLoadingAttention(true);
-    try {
-      const result = await fetchFollowUpAttention(csName, state, attentionPagination[state].continueCursor);
-      setAttentionData((current) => {
-        const rows = new Map(current.map((row) => [row.conversationId, row]));
-        result.page.forEach((row) => rows.set(row.conversationId, row));
-        return [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt);
-      });
-      setAttentionPagination((current) => ({
-        ...current,
-        [state]: { isDone: result.isDone, continueCursor: result.continueCursor },
-      }));
-    } catch (error) {
-      setSnapshotError(error instanceof Error ? error.message : 'Gagal memuat status berikutnya.');
-    } finally {
-      setLoadingAttention(false);
-    }
-  }, [attentionPagination, csName, loadingAttention]);
+      const result = await fetchHistory(historyView, csName, cursor);
+      setRows((current) => append ? [...current, ...result.page] : result.page);
+      setPagination({ isDone: result.isDone, continueCursor: result.continueCursor });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Gagal memuat riwayat follow-up.'); }
+    finally { setLoading(false); }
+  }, [csName, me]);
 
   useEffect(() => {
-    loadSnapshot();
-  }, [loadSnapshot]);
+    setSelected(null); setMobileDetail(false); setRows([]);
+    if (view === 'action') void loadQueue();
+    else if (view !== 'search') void loadHistory(view);
+  }, [view, loadHistory, loadQueue]);
 
-  // Archived + Closing are tab-gated (only run when that tab is open) and read indexed,
-  // bounded ranges — fine to keep reactive.
-  const archivedData = useQuery(api.followUp.getArchivedFollowUps, me && activeTab === 'archived' ? { csName } : 'skip');
-  const closingData = useQuery(api.followUp.getClosedFollowUps, me && activeTab === 'closing' ? { csName, sinceDays: 7 } : 'skip');
-
-  const isLoading =
-    activeTab === 'archived'
-      ? archivedData === undefined
-      : activeTab === 'closing'
-        ? closingData === undefined
-        : data === undefined;
-
-  const withStage: Staged[] = [
-    ...(data?.stage1 ?? []).map((c) => ({ ...c, stage: 1 as const })),
-    ...(data?.stage2 ?? []).map((c) => ({ ...c, stage: 2 as const })),
-    ...(data?.stage3 ?? []).map((c) => ({ ...c, stage: 3 as const })),
-  ];
-  const q = searchQuery.trim().toLowerCase();
-  const matchesSearch = (name: string, phone: string) =>
-    !q || name.toLowerCase().includes(q) || phone.includes(q);
-
-  const selectable = activeTab === 'all' || activeTab === 'stage1' || activeTab === 'stage2' || activeTab === 'stage3';
-
-  // Active funnel list for the current tab
-  const wantStage = activeTab === 'stage1' ? 1 : activeTab === 'stage2' ? 2 : activeTab === 'stage3' ? 3 : null;
-  const activeList: Staged[] = withStage
-    .filter((c) => (wantStage ? c.stage === wantStage : true))
-    .filter((c) => matchesSearch(c.customerName, c.customerPhone))
-    .sort((a, b) => (sortBy === 'oldest' ? a.dueAt - b.dueAt : b.dueAt - a.dueAt));
-
-  const archivedList: ArchivedRow[] = (archivedData ?? [])
-    .filter((c) => matchesSearch(c.customerName, c.customerPhone))
-    .sort((a, b) => (sortBy === 'oldest' ? a.followUpArchivedAt - b.followUpArchivedAt : b.followUpArchivedAt - a.followUpArchivedAt));
-
-  const closingList: ClosedRow[] = (closingData ?? [])
-    .filter((c) => matchesSearch(c.customerName, c.customerPhone))
-    .sort((a, b) => (sortBy === 'oldest' ? a.closedAt - b.closedAt : b.closedAt - a.closedAt));
-
-  const tabs: Array<{ key: Tab; label: string; count: number }> = [
-    { key: 'all', label: 'Semua', count: withStage.length },
-    { key: 'stage1', label: 'H+1', count: data?.stage1.length ?? 0 },
-    { key: 'stage2', label: 'H+2', count: data?.stage2.length ?? 0 },
-    { key: 'stage3', label: 'H+3', count: data?.stage3.length ?? 0 },
-    { key: 'attention', label: 'Perlu dicek', count: attentionData.length },
-    { key: 'closing', label: 'Closing', count: closingData?.length ?? 0 },
-    { key: 'archived', label: 'Arsip', count: archivedData?.length ?? 0 },
-  ];
-
-  const selected = selectable ? activeList.find((c) => c.conversationId === selectedId) ?? null : null;
-  const selectedClosing = activeTab === 'closing' ? closingList.find((c) => c.conversationId === selectedId) ?? null : null;
-
-  const switchTab = (key: Tab) => {
-    setActiveTab(key);
-    setSelectedId(null);
-    setSelectedIds(new Set());
-  };
-
-  const handleBack = () => {
-    setShowConvOnMobile(false);
-    setSelectedId(null);
-  };
-
-  const toggleCheck = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-  const allVisibleChecked = activeList.length > 0 && activeList.every((c) => selectedIds.has(c.conversationId));
-  const toggleSelectAll = () => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (allVisibleChecked) activeList.forEach((c) => next.delete(c.conversationId));
-      else activeList.forEach((c) => next.add(c.conversationId));
-      return next;
-    });
-  };
-
-  async function runBulkArchive() {
-    const ids = [...selectedIds];
-    if (ids.length === 0 || bulkBusy) return;
-    setBulkBusy(true);
-    setBulkStatus(null);
-    let ok = 0;
-    let fail = 0;
-    for (let i = 0; i < ids.length; i++) {
-      setBulkProgress({ done: i, total: ids.length, action: 'arsip' });
-      try {
-        const r = await fetch('/api/follow-up/archive', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ conversationId: ids[i] }),
-        }).then((x) => x.json());
-        if (r.ok) ok++;
-        else fail++;
-      } catch {
-        fail++;
-      }
-    }
-    setBulkProgress(null);
-    setBulkBusy(false);
-    setSelectedIds(new Set());
-    loadSnapshot();
-    setBulkStatus({
-      type: fail ? 'error' : 'ok',
-      message: `Arsip massal: ${ok} berhasil${fail ? `, ${fail} gagal` : ''}.`,
-    });
-    setTimeout(() => setBulkStatus(null), 5000);
+  async function runSearch() {
+    const term = searchInput.trim();
+    if (term.length < 3) { setSearchMessage('Ketik minimal 3 karakter untuk mencari customer.'); return; }
+    setLoading(true); setError(null); setSearchMessage('');
+    try { const result = await searchCustomers(term, csName); setRows(result.page); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Pencarian gagal.'); }
+    finally { setLoading(false); }
   }
 
-  async function handleRestoreArchived(conversationId: string) {
-    setRestoringId(conversationId);
-    try {
-      const r = await fetch('/api/follow-up/unarchive', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId }),
-      }).then((x) => x.json());
-      if (r.ok) {
-        setSelectedId(null);
-        loadSnapshot();
-        setFeedback({ type: 'ok', message: 'Follow-up dipulihkan ke antrean.' });
-      } else {
-        setFeedback({ type: 'error', message: r.error || 'Gagal memulihkan follow-up.' });
-      }
-    } catch {
-      setFeedback({ type: 'error', message: 'Gagal menghubungi server untuk memulihkan follow-up.' });
-    } finally {
-      setRestoringId(null);
-    }
+  function selectRow(row: ListRow) { setSelected(row); setMobileDetail(true); }
+  function switchView(next: FollowUpView, focus = false) {
+    setView(next); setSelected(null); setMobileDetail(false); setError(null);
+    if (next === 'search') { setRows([]); setSearchMessage('Masukkan minimal 3 karakter, lalu tekan Cari.'); }
+    if (focus) requestAnimationFrame(() => tabRefs.current[VIEWS.findIndex((item) => item.key === next)]?.focus());
   }
+  const queueSelection = selected && 'dueAt' in selected ? selected : null;
+  const visibleRows = stage === 'all' || view === 'search' || view === 'completed'
+    ? rows
+    : rows.filter((row) => row.stage === stage);
+  const retry = () => view === 'action' ? loadQueue() : view === 'search' ? runSearch() : loadHistory(view);
 
-  const kpiPct =
-    kpiData && typeof kpiData === 'object' && 'totalClosings' in kpiData && kpiData.totalClosings > 0
-      ? Math.round((kpiData.fromFollowUp / kpiData.totalClosings) * 100)
-      : 0;
-
-  return (
-    // Fills almost all the space below the (lean) panel header, above the mobile bottom-nav; nudge if needed.
-    <div className="flex h-[calc(100dvh-8.5rem)] min-h-[24rem] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-sm md:h-[calc(100dvh-5rem)]">
-      {/* KPI — compact one-liner */}
-      {kpiData && typeof kpiData === 'object' && 'totalClosings' in kpiData && (
-        <div className={`shrink-0 border-b border-border bg-emerald-50/60 px-3 py-1.5 dark:bg-emerald-950/20 ${showConvOnMobile ? 'hidden md:block' : ''}`}>
-          <p className="truncate text-xs">
-            <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-              {kpiData.fromFollowUp} closing dari follow-up ({kpiPct}%)
-            </span>
-            <span className="text-muted-foreground">
-              {' '}· 30 hari · total {kpiData.totalClosings} · H1 {kpiData.byStage.h1} H2 {kpiData.byStage.h2} H3 {kpiData.byStage.h3}
-            </span>
-          </p>
-        </div>
-      )}
-
-      {/* Controls — compact; hidden on mobile while a chat is open (WhatsApp behavior) */}
-      <div role="toolbar" aria-label="Kontrol follow-up" className={`shrink-0 space-y-2 border-b border-border bg-card p-2.5 ${showConvOnMobile ? 'hidden md:block' : ''}`}>
-        <div className="flex gap-2">
-          <div className="min-w-0 flex-1">
-            <label htmlFor="follow-up-search" className="text-xs font-medium text-muted-foreground">Cari customer</label>
-            <input
-              id="follow-up-search"
-              type="text"
-              placeholder="Cari nama/nomor…"
-              aria-label="Cari customer"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setSelectedId(null);
-              }}
-              className="mt-1 min-h-11 w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground md:min-h-9"
-            />
-          </div>
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as 'oldest' | 'newest')}
-            title="Urutkan (lama/baru ghosting)"
-            className="min-h-11 shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm text-foreground md:min-h-9"
-          >
-            <option value="oldest">Lama</option>
-            <option value="newest">Baru</option>
-          </select>
-          <button
-            type="button"
-            onClick={loadSnapshot}
-            disabled={refreshing}
-            title="Muat ulang daftar"
-            className="min-h-11 min-w-11 shrink-0 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground transition-colors hover:bg-accent disabled:opacity-50 md:min-h-9 md:min-w-9"
-          >
-            {refreshing ? '…' : '↻'}
-          </button>
-          {!isCs && (
-            <select
-              value={csFilter}
-              onChange={(e) => {
-                setCsFilter(e.target.value);
-                setSelectedId(null);
-                setSelectedIds(new Set());
-              }}
-              title="Filter per CS"
-              className="min-h-11 max-w-[38%] shrink-0 rounded-lg border border-input bg-background px-2 py-1.5 text-sm font-medium text-foreground md:min-h-9"
-            >
-              <option value="all">Semua CS</option>
-              {csList.map((c) => (
-                <option key={c.key} value={c.csName}>
-                  {c.csName.replace(/^CS\s+/i, '')}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div role="tablist" aria-label="Antrean follow-up" className="flex flex-1 gap-1.5 overflow-x-auto">
-            {tabs.map((t, index) => (
-              <button
-                key={t.key}
-                ref={(node) => { tabRefs.current[index] = node; }}
-                id={`follow-up-tab-${t.key}`}
-                type="button"
-                role="tab"
-                aria-selected={activeTab === t.key}
-                aria-controls="follow-up-queue"
-                tabIndex={activeTab === t.key ? 0 : -1}
-                onClick={() => switchTab(t.key)}
-                onKeyDown={(event) => {
-                  const nextIndex = getNextFollowUpTabIndex(event.key, index, tabs.length);
-                  if (nextIndex === null) return;
-                  event.preventDefault();
-                  switchTab(tabs[nextIndex].key);
-                  tabRefs.current[nextIndex]?.focus();
-                }}
-                  className={`inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-lg px-2.5 py-1 text-sm font-medium transition-colors md:min-h-9 ${
-                  activeTab === t.key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent'
-                }`}
-              >
-                {t.label} ({t.count})
-              </button>
-            ))}
-          </div>
+  return <div className="mx-auto flex h-[calc(100dvh-8.25rem)] min-h-[32rem] max-w-[1500px] flex-col overflow-hidden rounded-2xl border bg-background shadow-sm md:h-[calc(100dvh-5rem)]">
+    <div className={`border-b bg-card p-3 md:p-4 ${mobileDetail ? 'hidden md:block' : ''}`}>
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+        <div><h2 className="text-base font-semibold">Workspace follow-up</h2><p className="mt-1 text-sm text-muted-foreground">Hubungi customer secara manual, tanpa pengiriman otomatis.</p></div>
+        <div className="flex flex-wrap items-end gap-2">
+          {view !== 'search' && view !== 'completed' && <label className="text-xs font-medium text-muted-foreground">Tahap
+            <select value={stage} onChange={(event) => setStage(event.target.value === 'all' ? 'all' : Number(event.target.value) as FollowUpStage)} className="mt-1 block min-h-11 rounded-lg border bg-background px-3 text-sm md:min-h-9">
+              <option value="all">Semua tahap</option><option value="1">H+1</option><option value="2">H+2</option><option value="3">H+3</option>
+            </select></label>}
+          {!isCs && <label className="text-xs font-medium text-muted-foreground">CS
+            <select value={csFilter} onChange={(event) => setCsFilter(event.target.value)} className="mt-1 block min-h-11 rounded-lg border bg-background px-3 text-sm md:min-h-9">
+              <option value="all">Semua CS</option>{csList.filter((item) => item.isActive).map((item) => <option key={item.key} value={item.csName}>{item.csName.replace(/^CS\s+/i, '')}</option>)}
+            </select></label>}
+          <Button variant="outline" className="min-h-11 md:min-h-9" disabled={loading} onClick={retry}>{loading ? 'Memuat…' : 'Muat ulang'}</Button>
         </div>
       </div>
-
-      {snapshotError && data !== undefined && (
-        <div role="alert" className="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          <span>{snapshotError}</span>
-          <Button onClick={loadSnapshot} disabled={refreshing} variant="outline" size="sm" className="min-h-11 shrink-0 md:min-h-9">
-            {refreshing ? 'Memuat…' : 'Coba lagi'}
-          </Button>
-        </div>
-      )}
-
-      {/* Bulk status banner */}
-      {(bulkStatus || feedback) && (
-        <div
-          role={(bulkStatus ?? feedback)?.type === 'error' ? 'alert' : 'status'}
-          aria-live={(bulkStatus ?? feedback)?.type === 'error' ? undefined : 'polite'}
-          className={`shrink-0 px-4 py-2 text-sm font-medium ${(bulkStatus ?? feedback)?.type === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-100'}`}
-        >
-          {(bulkStatus ?? feedback)?.message}
-        </div>
-      )}
-
-      {/* Two-pane */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* List pane */}
-        <div className={`flex w-full flex-col border-r border-border bg-background md:w-96 md:shrink-0 ${showConvOnMobile ? 'hidden md:flex' : 'flex'}`}>
-          {/* Select-all toolbar */}
-          {selectable && !isLoading && activeList.length > 0 && (
-            <div className="flex shrink-0 items-center gap-2.5 border-b border-border bg-muted/30 px-3 py-1.5">
-              <RowCheck checked={allVisibleChecked} onToggle={toggleSelectAll} />
-              <span className="text-xs text-muted-foreground">
-                {selectedIds.size > 0 ? `${selectedIds.size} dipilih` : `Pilih semua (${activeList.length})`}
-              </span>
-            </div>
-          )}
-
-          <div id="follow-up-queue" role="tabpanel" aria-labelledby={`follow-up-tab-${activeTab}`} className="flex-1 overflow-y-auto">
-            {snapshotError && data === undefined && activeTab !== 'archived' && activeTab !== 'closing' && activeTab !== 'attention' ? (
-              <div className="p-3">
-                <FollowUpSnapshotError message={snapshotError} retrying={refreshing} onRetry={loadSnapshot} />
-              </div>
-            ) : isLoading ? (
-              <div className="space-y-2 p-3">
-                <Skeleton className="h-20 w-full" />
-                <Skeleton className="h-20 w-full" />
-                <Skeleton className="h-20 w-full" />
-              </div>
-            ) : activeTab === 'attention' ? (
-              attentionData.length === 0 ? (
-                <div className="p-3"><PanelState kind="empty" title="Tidak ada pengiriman yang perlu dicek" description="Status gagal atau belum diketahui akan muncul di sini." /></div>
-              ) : (
-                <>
-                  {attentionData.map((row) => <AttentionListItem key={row.conversationId} row={row} />)}
-                  {Object.values(attentionPagination).some((page) => !page.isDone) && (
-                    <div className="p-3">
-                      <Button type="button" variant="outline" className="w-full" onClick={loadMoreAttention} disabled={loadingAttention}>
-                        {loadingAttention ? 'Memuat…' : 'Muat status berikutnya'}
-                      </Button>
-                    </div>
-                  )}
-                </>
-              )
-            ) : activeTab === 'archived' ? (
-              archivedList.length === 0 ? (
-                <div className="p-3"><PanelState kind="empty" title="Belum ada yang diarsipkan" description="Arsip follow-up akan muncul di sini." /></div>
-              ) : (
-                archivedList.map((c) => (
-                  <ArchivedListItem
-                    key={c.conversationId}
-                    archived={c}
-                    onRestore={() => handleRestoreArchived(c.conversationId)}
-                    isRestoring={restoringId === c.conversationId}
-                  />
-                ))
-              )
-            ) : activeTab === 'closing' ? (
-              closingList.length === 0 ? (
-                <div className="p-3"><PanelState kind="empty" title="Belum ada closing 7 hari terakhir" description="Closing dari follow-up akan muncul di sini." /></div>
-              ) : (
-                closingList.map((c, i) => (
-                  <ClosingListItem
-                    key={`${c.orderId}-${c.customerPhone}-${i}`}
-                    row={c}
-                    isSelected={selectedId === c.conversationId}
-                    onClick={
-                      c.conversationId
-                        ? () => {
-                            setSelectedId(c.conversationId!);
-                            setShowConvOnMobile(true);
-                          }
-                        : undefined
-                    }
-                  />
-                ))
-              )
-            ) : activeList.length === 0 ? (
-              <div className="space-y-3 p-3">
-                <PanelState kind="empty" title="Tidak ada yang perlu di-follow-up" description="Antrean baru akan muncul saat ada tindakan berikutnya." />
-                {!pagination.isDone && (
-                  <Button type="button" variant="outline" className="w-full" onClick={loadMore} disabled={loadingMore}>
-                    {loadingMore ? 'Memuat…' : 'Muat antrean berikutnya'}
-                  </Button>
-                )}
-              </div>
-            ) : (
-              <>
-                {activeList.map((c) => (
-                  <ChatListItem
-                    key={c.conversationId}
-                    candidate={c}
-                    isSelected={selectedId === c.conversationId}
-                    selectable={selectable}
-                    isChecked={selectedIds.has(c.conversationId)}
-                    onToggleCheck={() => toggleCheck(c.conversationId)}
-                    onClick={() => {
-                      setSelectedId(c.conversationId);
-                      setShowConvOnMobile(true);
-                    }}
-                  />
-                ))}
-                {!pagination.isDone && (
-                  <div className="p-3">
-                    <Button type="button" variant="outline" className="w-full" onClick={loadMore} disabled={loadingMore}>
-                      {loadingMore ? 'Memuat…' : 'Muat antrean berikutnya'}
-                    </Button>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* Bulk action bar */}
-          {selectable && selectedIds.size > 0 && (
-            <div className="shrink-0 space-y-2 border-t border-border bg-card p-3">
-              {bulkProgress ? (
-                <p role="status" aria-live="polite" className="text-center text-xs text-muted-foreground">
-                  Mengarsip {bulkProgress.done + 1}/{bulkProgress.total}…
-                </p>
-              ) : (
-                <p className="text-xs font-medium text-foreground">{selectedIds.size} lead dipilih</p>
-              )}
-              <div className="flex gap-2">
-                <Button onClick={() => setBulkConfirmation('arsip')} disabled={bulkBusy} variant="outline" className="h-10 flex-1">
-                  Arsip massal
-                </Button>
-                <Button onClick={() => setSelectedIds(new Set())} disabled={bulkBusy} variant="ghost" className="h-10">
-                  Batal
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Conversation pane */}
-        <div className={`flex-1 ${showConvOnMobile ? 'block' : 'hidden md:block'}`}>
-          {selected ? (
-            <ConversationPane candidate={selected} onBack={handleBack} onChanged={loadSnapshot} />
-          ) : selectedClosing ? (
-            <ReadOnlyConversation row={selectedClosing} onBack={handleBack} />
-          ) : (
-            <ConversationPane candidate={null} />
-          )}
-        </div>
-      </div>
-      <AlertDialog open={bulkConfirmation !== null} onOpenChange={(open) => !open && setBulkConfirmation(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Arsipkan follow-up massal?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Arsipkan {selectedIds.size} lead yang dipilih dari antrean follow-up.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Batal</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (bulkConfirmation) runBulkArchive();
-                setBulkConfirmation(null);
-              }}
-            >
-              Arsipkan
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <nav role="tablist" aria-label="Tugas follow-up" className="mt-4 flex gap-1 overflow-x-auto rounded-xl bg-muted/60 p-1">
+        {VIEWS.map((item, index) => <button key={item.key} ref={(node) => { tabRefs.current[index] = node; }} type="button" role="tab" aria-selected={view === item.key} tabIndex={view === item.key ? 0 : -1}
+          onClick={() => switchView(item.key)} onKeyDown={(event) => { const next = getNextFollowUpTabIndex(event.key, index, VIEWS.length); if (next !== null) { event.preventDefault(); switchView(VIEWS[next].key, true); } }}
+          className={`min-h-11 shrink-0 rounded-lg px-3 text-sm font-medium transition-colors ${view === item.key ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{item.label}</button>)}
+      </nav>
+      {view === 'search' && <form className="mt-3 flex gap-2" onSubmit={(event) => { event.preventDefault(); void runSearch(); }}>
+        <label className="sr-only" htmlFor="follow-up-search">Cari customer</label><input id="follow-up-search" aria-label="Cari customer" value={searchInput} onChange={(event) => setSearchInput(event.target.value)} placeholder="Nama atau nomor customer" className="min-h-11 min-w-0 flex-1 rounded-lg border bg-background px-3 text-sm" />
+        <Button type="submit" className="min-h-11" disabled={loading || searchInput.trim().length < 3}>Cari</Button>
+      </form>}
+      {view === 'search' && searchMessage && <p className="mt-2 text-xs text-muted-foreground">{searchMessage}</p>}
     </div>
-  );
+    <div className="flex min-h-0 flex-1">
+      <section className={`${mobileDetail ? 'hidden md:block' : 'block'} w-full overflow-y-auto border-r md:w-[25rem] md:shrink-0`}>
+        <div className="border-b px-4 py-3"><p className="font-semibold">{VIEWS.find((item) => item.key === view)?.label}</p><p className="text-xs text-muted-foreground">{VIEWS.find((item) => item.key === view)?.description}</p></div>
+        <FollowUpList view={view} rows={visibleRows} loading={loading} error={error} selectedId={selected ? rowId(selected) : null} onSelect={selectRow} onRetry={retry} />
+        {!loading && !pagination.isDone && <div className="p-3"><Button variant="outline" className="min-h-11 w-full" onClick={() => view === 'action' ? loadQueue(pagination.continueCursor, true) : view !== 'search' && loadHistory(view, pagination.continueCursor, true)}>Muat berikutnya</Button></div>}
+      </section>
+      <main className={`${mobileDetail ? 'block' : 'hidden md:block'} min-w-0 flex-1`}>
+        <FollowUpDetail candidate={queueSelection} onBack={() => setMobileDetail(false)} onChanged={() => { setSelected(null); setMobileDetail(false); void loadQueue(); }} />
+      </main>
+    </div>
+  </div>;
 }
