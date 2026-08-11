@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
+import { appendMessageCore } from "./messages";
 
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
@@ -112,9 +113,9 @@ test("system order-notification outbound never arms manual follow-up", async () 
   expect(conversation?.followUpDueAt).toBeUndefined();
 });
 
-test("an arbitrary CS outbound does not advance an approved-template follow-up stage", async () => {
+test("a due KirimDev outbound advances H+1 and records one provider-webhook attempt", async () => {
   const t = convexTest(schema);
-  await seedOrg(t);
+  const orgId = await seedOrg(t);
   const inboundAt = 30_000;
   const inbound = await t.mutation(internal.messages.appendMessageFromN8n, {
     phone: "628804",
@@ -135,22 +136,163 @@ test("an arbitrary CS outbound does not advance an approved-template follow-up s
     createdAt: inboundAt + 1_000,
   });
   const h1At = inboundAt + DAY + 1_000;
-  await t.mutation(internal.messages.appendMessageFromN8n, {
+  await t.run((ctx) => appendMessageCore(ctx, {
+    orgId,
     phone: "628804",
     order_id: "FU-MANUAL-TOUCH",
     csName: "Aisyah",
     role: "cs",
     direction: "outbound",
     content: "Follow-up manual",
+    externalMessageId: "wamid.phone.h1",
+    source: "ingest",
     createdAt: h1At,
-  });
+  }));
 
   const conversation = await t.run(async (ctx) => (await ctx.db.get(inbound.conversationId)) as Doc<"conversations"> | null);
   expect(conversation).toMatchObject({
-    followUpNextStage: 1,
-    followUpDueAt: inboundAt + 1_000 + DAY,
+    followUpStage: 1,
+    followUpNextStage: 2,
+    followUpDueAt: h1At + DAY,
     followUpState: "waiting",
   });
+  const attempts = await t.run((ctx) => ctx.db.query("followUpAttempts").collect());
+  expect(attempts).toHaveLength(1);
+  expect(attempts[0]).toMatchObject({
+    stage: 1,
+    method: "provider_webhook",
+    status: "accepted",
+    providerMessageId: "wamid.phone.h1",
+  });
+});
+
+test("a KirimDev outbound before due time does not consume the stage", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const dueAt = 200_000;
+  const conversationId = await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId,
+    orderId: "FU-EARLY",
+    customerPhone: "6288041",
+    customerName: "Early",
+    assignedCsName: "Aisyah",
+    status: "active",
+    aiEnabled: false,
+    note: "",
+    followUpCsKey: "aisyah",
+    followUpCycleInboundAt: 30_000,
+    followUpNextStage: 1,
+    followUpDueAt: dueAt,
+    followUpState: "waiting",
+    createdAt: 30_000,
+    updatedAt: 30_000,
+  }));
+
+  await t.run((ctx) => appendMessageCore(ctx, {
+    orgId,
+    phone: "6288041",
+    order_id: "FU-EARLY",
+    csName: "Aisyah",
+    role: "cs",
+    direction: "outbound",
+    content: "Belum waktunya",
+    externalMessageId: "wamid.phone.early",
+    source: "ingest",
+    createdAt: dueAt - 1,
+  }));
+
+  expect(await t.run((ctx) => ctx.db.get(conversationId))).toMatchObject({
+    followUpNextStage: 1,
+    followUpDueAt: dueAt,
+    followUpState: "waiting",
+  });
+  expect(await t.run((ctx) => ctx.db.query("followUpAttempts").collect())).toHaveLength(0);
+});
+
+test("a duplicate KirimDev outbound cannot advance the same stage twice", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const dueAt = 300_000;
+  const conversationId = await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId,
+    orderId: "FU-DUPLICATE",
+    customerPhone: "6288042",
+    customerName: "Duplicate",
+    assignedCsName: "Aisyah",
+    status: "active",
+    aiEnabled: false,
+    note: "",
+    followUpCsKey: "aisyah",
+    followUpCycleInboundAt: 40_000,
+    followUpNextStage: 1,
+    followUpDueAt: dueAt,
+    followUpState: "waiting",
+    createdAt: 40_000,
+    updatedAt: 40_000,
+  }));
+  const outbound = {
+    orgId,
+    phone: "6288042",
+    order_id: "FU-DUPLICATE",
+    csName: "Aisyah",
+    role: "cs" as const,
+    direction: "outbound" as const,
+    content: "Follow-up",
+    externalMessageId: "wamid.phone.duplicate",
+    source: "ingest",
+    createdAt: dueAt + 1,
+  };
+
+  await t.run((ctx) => appendMessageCore(ctx, outbound));
+  await t.run((ctx) => appendMessageCore(ctx, outbound));
+
+  expect(await t.run((ctx) => ctx.db.get(conversationId))).toMatchObject({
+    followUpStage: 1,
+    followUpNextStage: 2,
+  });
+  expect(await t.run((ctx) => ctx.db.query("followUpAttempts").collect())).toHaveLength(1);
+});
+
+test("a due H+3 KirimDev outbound completes the cycle", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const dueAt = 400_000;
+  const conversationId = await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId,
+    orderId: "FU-H3",
+    customerPhone: "6288043",
+    customerName: "Final",
+    assignedCsName: "Aisyah",
+    status: "active",
+    aiEnabled: false,
+    note: "",
+    followUpCsKey: "aisyah",
+    followUpCycleInboundAt: 50_000,
+    followUpNextStage: 3,
+    followUpDueAt: dueAt,
+    followUpState: "waiting",
+    createdAt: 50_000,
+    updatedAt: 50_000,
+  }));
+
+  await t.run((ctx) => appendMessageCore(ctx, {
+    orgId,
+    phone: "6288043",
+    order_id: "FU-H3",
+    csName: "Aisyah",
+    role: "cs",
+    direction: "outbound",
+    content: "Follow-up terakhir",
+    externalMessageId: "wamid.phone.h3",
+    source: "ingest",
+    createdAt: dueAt,
+  }));
+
+  const conversation = await t.run((ctx) => ctx.db.get(conversationId));
+  expect(conversation?.followUpStage).toBe(3);
+  expect(conversation?.followUpState).toBe("complete");
+  expect(conversation?.followUpNextStage).toBeUndefined();
+  expect(conversation?.followUpDueAt).toBeUndefined();
 });
 
 test("message history rejects anonymous callers", async () => {

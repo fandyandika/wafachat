@@ -2,7 +2,7 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { requireAdmin, requireAdminOrg, requireMemberOrg, requireScopedMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { normalizePhone, csKey, windowKeyFor } from "./lib";
+import { normalizePhone, csKey, isInternalTestPhone, windowKeyFor } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 import { messageMatchesPhrase, upsertRecapFromMessage } from "./shippingRecaps";
 import { canContainClosingSignal, getActiveClosingPhrases } from "./closingRules";
@@ -11,7 +11,9 @@ import { countFollowUpTouchesBeforeTime } from "./followUp";
 import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
-import { armH1AfterOutbound } from "./followUpModel";
+import { advanceAfterAccepted, armH1AfterOutbound, shouldAdvanceDueOutbound } from "./followUpModel";
+import { recordAcceptedAttempt } from "./followUpAttempts";
+import { getInternalPhoneSet } from "./orgSettings";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }, orgId: Id<"organizations">) {
   if (args.orderId) {
@@ -332,6 +334,54 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     const effectiveCsKey = csKey(
       (convPatch.assignedCsName as string | undefined) ?? args.csName ?? conversation.assignedCsName,
     );
+    const possibleProviderContact = args.source === "ingest"
+      && args.direction === "outbound"
+      && Boolean(args.externalMessageId?.trim())
+      && conversation.followUpState === "waiting"
+      && conversation.followUpNextStage !== undefined
+      && conversation.followUpDueAt !== undefined
+      && conversation.followUpCycleInboundAt !== undefined;
+    const internalPhones = possibleProviderContact
+      ? await getInternalPhoneSet(ctx, args.orgId)
+      : new Set<string>();
+    const shouldAdvance = shouldAdvanceDueOutbound({
+      status: conversation.status,
+      followUpState: conversation.followUpState,
+      nextStage: conversation.followUpNextStage,
+      dueAt: conversation.followUpDueAt,
+      cycleInboundAt: conversation.followUpCycleInboundAt,
+      createdAt,
+      role: args.role,
+      direction: args.direction,
+      source: args.source,
+      externalMessageId: args.externalMessageId,
+      isInternal: isInternalTestPhone(conversation.customerPhone, internalPhones),
+    });
+    if (shouldAdvance && effectiveCsKey) {
+      const sentStage = conversation.followUpNextStage!;
+      const accepted = await recordAcceptedAttempt(ctx, {
+        orgId: args.orgId,
+        conversationId: conversation._id,
+        csKey: effectiveCsKey,
+        cycleInboundAt: conversation.followUpCycleInboundAt!,
+        stage: sentStage,
+        method: "provider_webhook",
+        nonce: args.externalMessageId!,
+        providerMessageId: args.externalMessageId!,
+        acceptedAt: createdAt,
+      });
+      if (!accepted.duplicate) {
+        const next = advanceAfterAccepted(sentStage, createdAt);
+        convPatch.followUpStage = sentStage;
+        convPatch.followUpStageAt = createdAt;
+        convPatch.followUpNextStage = next.nextStage ?? undefined;
+        convPatch.followUpDueAt = next.dueAt ?? undefined;
+        convPatch.followUpState = next.state;
+        convPatch.followUpRequestId = undefined;
+        convPatch.followUpProviderMessageId = args.externalMessageId;
+        convPatch.followUpLastError = undefined;
+      }
+    }
     if (lastInbound && lastInbound.createdAt <= createdAt && effectiveCsKey) {
       const sameCycle = conversation.followUpCycleInboundAt === lastInbound.createdAt;
       if (!sameCycle || conversation.followUpState == null) {
