@@ -29,12 +29,12 @@ const msg = (conversationId: any, orderId: string, phone: string, direction: "in
   ({ conversationId, orderId, customerPhone: phone, role: direction === "inbound" ? "customer" as const : "cs" as const,
      direction, content: "x", messageType: "text" as const, source: "n8n" as const, createdAt });
 
-test("listDueFollowUps paginates 150 due conversations without a read-limit failure", async () => {
+test("listDueFollowUps caps high-volume pages at 30 rows", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "queue-admin", role: "admin", name: "Queue Admin", email: "queue@wafachat.test" });
   const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
-    for (let i = 0; i < 150; i++) {
+    for (let i = 0; i < 901; i++) {
       await ctx.db.insert("conversations", {
         orgId,
         ...convBase,
@@ -57,9 +57,77 @@ test("listDueFollowUps paginates 150 due conversations without a read-limit fail
     now,
     paginationOpts: { numItems: 100, cursor: first.continueCursor },
   });
-  expect(first.page).toHaveLength(100);
-  expect(second.page).toHaveLength(50);
-  expect(new Set([...first.page, ...second.page].map((row) => String(row.conversationId))).size).toBe(150);
+  expect(first.page).toHaveLength(30);
+  expect(second.page).toHaveLength(30);
+  expect(first.isDone).toBe(false);
+  expect(new Set([...first.page, ...second.page].map((row) => String(row.conversationId))).size).toBe(60);
+});
+
+test("listDueFollowUps enriches only the selected page with decision context", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "context-admin", role: "admin", name: "Admin", email: "context@wafachat.test" });
+  const orgId = await seedOrg(t);
+  const conversationId = await t.run(async (ctx) => {
+    const conversationId = await ctx.db.insert("conversations", {
+      orgId,
+      ...convBase,
+      orderId: "CONTEXT-1",
+      customerPhone: "62890001111",
+      followUpCsKey: "nabila",
+      followUpCycleInboundAt: now - 30 * HOUR,
+      followUpNextStage: 1,
+      followUpDueAt: now - HOUR,
+      followUpState: "waiting",
+    });
+    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "CONTEXT-1", customerPhone: "62890001111" });
+    await ctx.db.insert("messages", {
+      orgId,
+      ...msg(conversationId, "CONTEXT-1", "62890001111", "outbound", now - 25 * HOUR),
+      content: "Baik kak, kami tunggu kabarnya.",
+    });
+    return conversationId;
+  });
+
+  const result = await asAdmin.query(api.followUp.listDueFollowUps, {
+    now,
+    paginationOpts: { numItems: 30, cursor: null },
+  });
+  expect(result.page[0]).toMatchObject({
+    conversationId,
+    productName: "Quran Mapping",
+    lastMessagePreview: "Baik kak, kami tunggu kabarnya.",
+    lastMessageAt: now - 25 * HOUR,
+    reason: "CS terakhir membalas, customer belum merespons",
+  });
+});
+
+test("searchFollowUpCustomers is on-demand, scoped, and capped", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "search-admin", role: "admin", name: "Admin", email: "search@wafachat.test" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 25; i++) {
+      await ctx.db.insert("conversations", {
+        orgId,
+        ...convBase,
+        orderId: `SEARCH-${i}`,
+        customerPhone: `628571568${String(i).padStart(2, "0")}`,
+        customerName: `Hasna Customer ${i}`,
+        updatedAt: now - i,
+      });
+    }
+  });
+
+  await expect(asAdmin.query(api.followUp.searchFollowUpCustomers, {
+    query: "ha",
+    limit: 20,
+  })).rejects.toThrow(/minimal tiga/i);
+  const result = await asAdmin.query(api.followUp.searchFollowUpCustomers, {
+    query: "Hasna",
+    limit: 50,
+  });
+  expect(result).toHaveLength(20);
+  expect(result.every((row) => row.customerName.startsWith("Hasna"))).toBe(true);
 });
 
 test("listDueFollowUps excludes an inbound cycle older than seven days even when dueAt is recent", async () => {

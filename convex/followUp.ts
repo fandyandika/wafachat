@@ -28,6 +28,10 @@ const dueFollowUpValidator = v.object({
   cycleInboundAt: v.number(),
   stage: followUpStageValidator,
   dueAt: v.number(),
+  productName: v.string(),
+  lastMessagePreview: v.string(),
+  lastMessageAt: v.number(),
+  reason: v.string(),
 });
 
 const attentionFollowUpValidator = v.object({
@@ -66,7 +70,7 @@ export const listDueFollowUps = query({
     const lowerDueAt = args.now - FOLLOW_UP_EXPIRY_MS;
     const paginationOpts = {
       cursor: args.paginationOpts.cursor,
-      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 100)),
+      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 30)),
     };
 
     const result = effectiveCsKey
@@ -109,11 +113,16 @@ export const listDueFollowUps = query({
               .lte("followUpDueAt", args.now))
             .paginate(paginationOpts);
 
-    return {
-      page: result.page
-        .filter((row) => row.followUpCycleInboundAt !== undefined
-          && row.followUpCycleInboundAt >= args.now - FOLLOW_UP_EXPIRY_MS)
-        .map((row) => ({
+    const dueRows = result.page.filter((row) => row.followUpCycleInboundAt !== undefined
+      && row.followUpCycleInboundAt >= args.now - FOLLOW_UP_EXPIRY_MS);
+    const page = await Promise.all(dueRows.map(async (row) => {
+      const [order, lastMessage] = await Promise.all([
+        ctx.db.query("orders").withIndex("by_org_orderId", (q) => q
+          .eq("orgId", orgId).eq("orderId", row.orderId)).first(),
+        ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q
+          .eq("conversationId", row._id)).order("desc").first(),
+      ]);
+      return {
         conversationId: row._id,
         customerName: row.customerName,
         customerPhone: row.customerPhone,
@@ -123,10 +132,83 @@ export const listDueFollowUps = query({
         cycleInboundAt: row.followUpCycleInboundAt!,
         stage: row.followUpNextStage!,
         dueAt: row.followUpDueAt!,
-      })),
+        productName: order?.productName ?? "Produk tidak tersedia",
+        lastMessagePreview: (lastMessage?.content ?? "").slice(0, 180),
+        lastMessageAt: lastMessage?.createdAt ?? row.followUpCycleInboundAt!,
+        reason: "CS terakhir membalas, customer belum merespons",
+      };
+    }));
+    return {
+      page,
       isDone: result.isDone,
       continueCursor: result.continueCursor,
     };
+  },
+});
+
+const searchFollowUpCustomerValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  stage: v.optional(followUpStageValidator),
+  state: v.optional(v.union(
+    v.literal("waiting"), v.literal("sending"), v.literal("unknown"),
+    v.literal("failed"), v.literal("complete"), v.literal("archived"),
+  )),
+  updatedAt: v.number(),
+});
+
+export const searchFollowUpCustomers = query({
+  args: { query: v.string(), csName: v.optional(v.string()), limit: v.optional(v.number()) },
+  returns: v.array(searchFollowUpCustomerValidator),
+  handler: async (ctx, args) => {
+    const term = args.query.trim();
+    if (term.length < 3) throw new Error("Pencarian minimal tiga karakter.");
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.searchFollowUpCustomers",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 20), 20));
+    const digitsOnly = /^\+?[\d\s()-]+$/.test(term);
+    let candidates: any[];
+    if (digitsOnly) {
+      const phone = normalizePhone(term);
+      candidates = await ctx.db.query("conversations")
+        .withIndex("by_org_customerPhone_updatedAt", (q) => q
+          .eq("orgId", orgId).eq("customerPhone", phone))
+        .order("desc")
+        .take(limit);
+    } else {
+      const since = Date.now() - 90 * 24 * HOUR;
+      candidates = (await Promise.all((["active", "handover"] as const).map((status) => ctx.db
+        .query("conversations")
+        .withIndex("by_org_status_updatedAt", (q) => q
+          .eq("orgId", orgId).eq("status", status).gte("updatedAt", since))
+        .order("desc")
+        .take(100)))).flat();
+      const lower = term.toLocaleLowerCase("id-ID");
+      candidates = candidates.filter((row) => row.customerName.toLocaleLowerCase("id-ID").includes(lower));
+    }
+    const byPhone = new Map<string, any>();
+    for (const row of candidates) {
+      if (effectiveCsKey && csKey(row.assignedCsName) !== effectiveCsKey) continue;
+      if (!byPhone.has(row.customerPhone)) byPhone.set(row.customerPhone, row);
+      if (byPhone.size >= limit) break;
+    }
+    return [...byPhone.values()].map((row) => ({
+      conversationId: row._id,
+      customerName: row.customerName,
+      customerPhone: row.customerPhone,
+      orderId: row.orderId,
+      csName: row.assignedCsName,
+      stage: row.followUpNextStage,
+      state: row.followUpState,
+      updatedAt: row.updatedAt,
+    }));
   },
 });
 

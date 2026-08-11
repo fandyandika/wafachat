@@ -138,6 +138,7 @@ export default defineSchema({
       v.literal("failed"),
       v.literal("unknown"),
     ),
+    bucket: v.union(v.literal("sent"), v.literal("review")),
     attemptKey: v.string(),
     requestId: v.optional(v.string()),
     templateId: v.optional(v.id("followUpTemplates")),
@@ -154,6 +155,8 @@ export default defineSchema({
     .index("by_org_attemptKey", ["orgId", "attemptKey"])
     .index("by_org_status_createdAt", ["orgId", "status", "createdAt"])
     .index("by_org_csKey_status_createdAt", ["orgId", "csKey", "status", "createdAt"])
+    .index("by_org_bucket_createdAt", ["orgId", "bucket", "createdAt"])
+    .index("by_org_csKey_bucket_createdAt", ["orgId", "csKey", "bucket", "createdAt"])
     .index("by_org_conversation_createdAt", ["orgId", "conversationId", "createdAt"])
     .index("by_org_providerMessageId", ["orgId", "providerMessageId"]),
 
