@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalAction, internalMutation, mutation, query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { requireAdminOrg } from "./authz";
@@ -9,6 +9,7 @@ import { nextJakartaDueAt, type FollowUpStage } from "./followUpModel";
 
 const PAGE_SIZE = 25;
 const UNASSIGNED_CS_KEY = "unassigned";
+const SAFE_ERROR_LENGTH = 240;
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"));
 const preparationModeValidator = v.union(v.literal("dry_run"), v.literal("apply"));
@@ -90,6 +91,7 @@ const preparationRunResultValidator = v.object({
   startedAt: v.number(),
   updatedAt: v.number(),
   completedAt: v.optional(v.number()),
+  lastError: v.optional(v.string()),
 });
 
 function finiteTimestamp(value: unknown): value is number {
@@ -152,12 +154,17 @@ function normalizeConversation(conversation: Doc<"conversations">, migrationAt: 
   const stage = stageFromSnapshot(conversation);
   const anchor = anchorFromSnapshot(conversation);
   const hasMaterializedCycle = Boolean(conversation.followUpCycleId);
+  const missingAnchor = !anchor;
 
   if (conversation.followUpState === "review") {
     const patch = {
       followUpCsKey: ownerKey,
       followUpReviewReason: conversation.followUpReviewReason
-        ?? reviewReason(missingCs ? ["CS"] : ["detail tahap"]),
+        ?? reviewReason([
+          ...(missingCs ? ["CS"] : []),
+          ...(missingAnchor ? ["waktu acuan"] : []),
+          ...(!missingCs && !missingAnchor ? ["detail tahap"] : []),
+        ]),
     };
     return { patch: hasChanged(conversation, patch) ? patch : undefined, eligible: true, skipped: false };
   }
@@ -165,7 +172,7 @@ function normalizeConversation(conversation: Doc<"conversations">, migrationAt: 
   if ((conversation.followUpState === "sending"
       || conversation.followUpState === "unknown"
       || conversation.followUpState === "failed")
-    && hasMaterializedCycle && stage && !missingCs) {
+    && hasMaterializedCycle && stage && !missingCs && !missingAnchor) {
     const patch = { followUpCsKey: ownerKey };
     return { patch: hasChanged(conversation, patch) ? patch : undefined, eligible: true, skipped: false };
   }
@@ -450,8 +457,35 @@ async function startPreparationRun(
     startedAt,
     updatedAt: startedAt,
   });
-  await ctx.scheduler.runAfter(0, internal.followUpMigration.preparePage, { runId });
+  await ctx.scheduler.runAfter(0, internal.followUpMigration.runPreparationStep, { runId });
   return { runId };
+}
+
+function isCounterPhase(phase: PreparationPhase): boolean {
+  return phase === "counters_delete" || phase.startsWith("counters_");
+}
+
+async function ensureCutoverLock(ctx: MutationCtx, run: Doc<"followUpPreparationRuns">): Promise<void> {
+  if (run.mode !== "apply") return;
+  const existing = await ctx.db.query("followUpCutoverLocks")
+    .withIndex("by_org", (q) => q.eq("orgId", run.orgId))
+    .unique();
+  if (existing) {
+    if (String(existing.runId) !== String(run._id)) throw new Error("Organisasi dikunci oleh cutover lain.");
+    return;
+  }
+  await ctx.db.insert("followUpCutoverLocks", {
+    orgId: run.orgId,
+    runId: run._id,
+    lockedAt: Date.now(),
+  });
+}
+
+async function clearCutoverLock(ctx: MutationCtx, run: Doc<"followUpPreparationRuns">): Promise<void> {
+  const lock = await ctx.db.query("followUpCutoverLocks")
+    .withIndex("by_org", (q) => q.eq("orgId", run.orgId))
+    .unique();
+  if (lock && String(lock.runId) === String(run._id)) await ctx.db.delete(lock._id);
 }
 
 export const preparePage = internalMutation({
@@ -471,6 +505,7 @@ export const preparePage = internalMutation({
     if (args.orgId && String(args.orgId) !== String(run.orgId)) throw new Error("Preparation run tidak aktif.");
 
     const phase: PreparationPhase = run.phase ?? "products_orders";
+    if (isCounterPhase(phase)) await ensureCutoverLock(ctx, run);
     const cursor = run.phase ? run.cursor ?? null : null;
     const counterState = COUNTER_STATE[phase];
     const result = phase === "products_orders"
@@ -504,9 +539,7 @@ export const preparePage = internalMutation({
       completedAt: runComplete ? updatedAt : undefined,
     });
 
-    if (args.scheduleNext !== false && !runComplete) {
-      await ctx.scheduler.runAfter(0, internal.followUpMigration.preparePage, { runId: run._id });
-    }
+    if (runComplete) await clearCutoverLock(ctx, run);
 
     return {
       phase,
@@ -520,6 +553,48 @@ export const preparePage = internalMutation({
       nextPhase,
       runComplete,
     };
+  },
+});
+
+export const markPreparationFailed = internalMutation({
+  args: { runId: v.id("followUpPreparationRuns"), error: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run || run.status !== "running") return null;
+    await clearCutoverLock(ctx, run);
+    await ctx.db.patch(run._id, {
+      status: "failed",
+      failed: run.failed + 1,
+      lastError: args.error.slice(0, SAFE_ERROR_LENGTH),
+      updatedAt: Date.now(),
+      completedAt: Date.now(),
+    });
+    return null;
+  },
+});
+
+export const runPreparationStep = internalAction({
+  args: { runId: v.id("followUpPreparationRuns") },
+  returns: v.object({ complete: v.boolean(), failed: v.boolean() }),
+  handler: async (ctx, args): Promise<{ complete: boolean; failed: boolean }> => {
+    try {
+      const result: { runComplete: boolean } = await ctx.runMutation(
+        internal.followUpMigration.preparePage,
+        { runId: args.runId },
+      );
+      if (!result.runComplete) {
+        await ctx.scheduler.runAfter(0, internal.followUpMigration.runPreparationStep, { runId: args.runId });
+      }
+      return { complete: result.runComplete, failed: false };
+    } catch {
+      const safeError = "Cutover page gagal. Perbaiki penyebabnya lalu jalankan resume.";
+      await ctx.runMutation(internal.followUpMigration.markPreparationFailed, {
+        runId: args.runId,
+        error: safeError,
+      });
+      return { complete: false, failed: true };
+    }
   },
 });
 
@@ -546,6 +621,35 @@ export const startCutoverBySlug = internalMutation({
   },
 });
 
+export const resumeCutoverBySlug = internalMutation({
+  args: { orgSlug: v.string() },
+  returns: v.object({ runId: v.id("followUpPreparationRuns") }),
+  handler: async (ctx, args) => {
+    const organization = await ctx.db.query("organizations")
+      .withIndex("by_slug", (q) => q.eq("slug", args.orgSlug.trim()))
+      .unique();
+    if (!organization) throw new Error("Organisasi tidak ditemukan.");
+    const failedRun = await ctx.db.query("followUpPreparationRuns")
+      .withIndex("by_org_status_startedAt", (q) => q.eq("orgId", organization._id).eq("status", "failed"))
+      .order("desc")
+      .first();
+    if (!failedRun) throw new Error("Cutover gagal yang dapat dilanjutkan tidak ditemukan.");
+    const phase = (failedRun.phase ?? "products_orders") as PreparationPhase;
+    const restartCounters = isCounterPhase(phase);
+    await ctx.db.patch(failedRun._id, {
+      status: "running",
+      phase: restartCounters ? "counters_delete" : phase,
+      cursor: restartCounters ? undefined : failedRun.cursor,
+      lastError: undefined,
+      completedAt: undefined,
+      updatedAt: Date.now(),
+    });
+    if (restartCounters) await ensureCutoverLock(ctx, { ...failedRun, status: "running", phase: "counters_delete" });
+    await ctx.scheduler.runAfter(0, internal.followUpMigration.runPreparationStep, { runId: failedRun._id });
+    return { runId: failedRun._id };
+  },
+});
+
 export const getFollowUpPreparationRun = query({
   args: { runId: v.id("followUpPreparationRuns") },
   returns: preparationRunResultValidator,
@@ -565,6 +669,7 @@ export const getFollowUpPreparationRun = query({
       startedAt: run.startedAt,
       updatedAt: run.updatedAt,
       completedAt: run.completedAt,
+      lastError: run.lastError,
     };
   },
 });

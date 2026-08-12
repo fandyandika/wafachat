@@ -221,7 +221,7 @@ test("uses resumable 25-row phases and schedules only the internal page worker",
       name: string;
     }>;
     expect(scheduled).toHaveLength(1);
-    expect(scheduled[0]).toMatchObject({ name: "followUpMigration:preparePage" });
+    expect(scheduled[0]).toMatchObject({ name: "followUpMigration:runPreparationStep" });
 
     const first = await t.mutation(internal.followUpMigration.preparePage, {
       runId,
@@ -293,13 +293,14 @@ test("backfills product snapshots and every legacy recap closing classification 
 test("rebuilds exact organization counters from normalized active lifecycle rows", async () => {
   const t = convexTest(schema, modules);
   const orgId = await seedOrg(t);
-  await t.run(async (ctx: any) => {
+  const otherOrgId = await t.run(async (ctx: any) => {
     const activeRows = [
       { orderId: "H1-1", cs: "aisyah", state: "waiting", stage: 1 },
       { orderId: "H2-2", cs: "aisyah", state: "waiting", stage: 2 },
       { orderId: "REVIEW-3", cs: "aisyah", state: "review", stage: undefined },
       { orderId: "SENDING-4", cs: "aisyah", state: "sending", stage: 2 },
       { orderId: "H3-5", cs: "budi", state: "waiting", stage: 3 },
+      { orderId: "UNASSIGNED-6", cs: "", state: "review", stage: undefined },
     ] as const;
     for (const row of activeRows) {
       await ctx.db.insert("conversations", conversation(orgId, row.orderId, {
@@ -312,10 +313,10 @@ test("rebuilds exact organization counters from normalized active lifecycle rows
         followUpDueAt: row.state === "waiting" ? calendarDueAt : undefined,
       }));
     }
-    await ctx.db.insert("conversations", conversation(orgId, "TERMINAL-6", {
+    await ctx.db.insert("conversations", conversation(orgId, "TERMINAL-7", {
       followUpCsKey: "aisyah",
       followUpState: "archived",
-      followUpCycleId: "cycle:terminal-6",
+      followUpCycleId: "cycle:terminal-7",
     }));
     for (let index = 0; index < 30; index += 1) {
       await ctx.db.insert("followUpCounters", {
@@ -328,6 +329,13 @@ test("rebuilds exact organization counters from normalized active lifecycle rows
         updatedAt: 1,
       });
     }
+    const otherOrgId = await ctx.db.insert("organizations", {
+      slug: "counter-other", name: "Other", createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("followUpCounters", {
+      orgId: otherOrgId, csKey: "foreign", h1: 8, h2: 7, h3: 6, review: 5, updatedAt: 1,
+    });
+    return otherOrgId;
   });
 
   const runId = await createRun(t, orgId, "apply");
@@ -340,9 +348,13 @@ test("rebuilds exact organization counters from normalized active lifecycle rows
     .toEqual([
       { csKey: "aisyah", h1: 1, h2: 1, h3: 0, review: 2 },
       { csKey: "budi", h1: 0, h2: 0, h3: 1, review: 0 },
+      { csKey: "unassigned", h1: 0, h2: 0, h3: 0, review: 1 },
     ]);
   expect(counters.reduce((total: number, row: any) => total + row.h1 + row.h2 + row.h3 + row.review, 0))
-    .toBe(5);
+    .toBe(6);
+  expect(await t.run((ctx: any) => ctx.db.query("followUpCounters")
+    .withIndex("by_org_csKey", (q: any) => q.eq("orgId", otherOrgId).eq("csKey", "foreign")).unique()))
+    .toMatchObject({ h1: 8, h2: 7, h3: 6, review: 5 });
 });
 
 test("dry-run leaves business snapshots and counters unchanged", async () => {
@@ -401,6 +413,116 @@ test("a second apply is idempotent and both public and CLI starts reject overlap
     expect(afterSecond.recaps).toEqual(afterFirst.recaps);
     expect(afterSecond.counters.map(({ updatedAt: _updatedAt, _id: _id, _creationTime: _creationTime, ...row }: any) => row))
       .toEqual(afterFirst.counters.map(({ updatedAt: _updatedAt, _id: _id, _creationTime: _creationTime, ...row }: any) => row));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("every active delivery state without a valid anchor enters review", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const ids = await t.run(async (ctx: any) => {
+    const result: Array<Id<"conversations">> = [];
+    for (const state of ["waiting", "sending", "unknown", "failed", "review"] as const) {
+      result.push(await ctx.db.insert("conversations", conversation(orgId, `NO-ANCHOR-${state}`, {
+        followUpCsKey: "aisyah",
+        followUpCycleId: `cycle:${state}`,
+        followUpNextStage: 2,
+        followUpState: state,
+        followUpReviewReason: undefined,
+      })));
+    }
+    return result;
+  });
+  const runId = await createRun(t, orgId, "apply");
+  await finishCutover(t, runId);
+  const rows = await t.run(async (ctx: any) => Promise.all(ids.map((id) => ctx.db.get(id))));
+  expect(rows.map((row: any) => row.followUpState)).toEqual([
+    "review", "review", "review", "review", "review",
+  ]);
+  for (const row of rows) expect(row?.followUpReviewReason).toMatch(/waktu acuan/i);
+});
+
+test("product fallback ignores ambiguous and foreign-tenant mappings", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const otherOrgId = await seedOrg(t, "other-products");
+  const { ambiguous, foreign } = await t.run(async (ctx: any) => {
+    const ambiguous = await ctx.db.insert("conversations", conversation(orgId, "AMBIGUOUS-1"));
+    await ctx.db.insert("conversations", conversation(orgId, "AMBIGUOUS-1", { customerPhone: "628199999991" }));
+    await ctx.db.insert("orders", order(orgId, "AMBIGUOUS-1", "Quran Mapping"));
+    const foreign = await ctx.db.insert("conversations", conversation(orgId, "FOREIGN-2"));
+    const foreignConversation = await ctx.db.insert("conversations", conversation(otherOrgId, "FOREIGN-OTHER-2"));
+    await ctx.db.insert("shippingRecaps", recap(orgId, "ready", "72", {
+      orderIdBerdu: "FOREIGN-2",
+      conversationId: foreignConversation,
+      packageContent: "Quran Mapping",
+    }));
+    return { ambiguous, foreign };
+  });
+  const runId = await createRun(t, orgId, "apply");
+  await finishCutover(t, runId);
+  expect(((await t.run((ctx: any) => ctx.db.get(ambiguous))) as any)?.followUpProductName).toBeUndefined();
+  expect(((await t.run((ctx: any) => ctx.db.get(foreign))) as any)?.followUpProductName).toBeUndefined();
+});
+
+test("later recap phase resumes after 25 rows", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx: any) => {
+    for (let index = 0; index < 30; index += 1) {
+      await ctx.db.insert("shippingRecaps", recap(orgId, "ready", String(index + 100)));
+    }
+  });
+  const runId = await t.run((ctx: any) => ctx.db.insert("followUpPreparationRuns", {
+    orgId, mode: "apply", status: "running", phase: "recap_closing_buckets",
+    nextConversationStatus: "active", scanned: 0, eligible: 0, updated: 0,
+    skipped: 0, failed: 0, startedAt: now, updatedAt: now,
+  })) as Id<"followUpPreparationRuns">;
+  const first = await t.mutation(internal.followUpMigration.preparePage, { runId, scheduleNext: false });
+  expect(first).toMatchObject({ phase: "recap_closing_buckets", processed: 25, done: false });
+  await finishCutover(t, runId);
+  const rows = await t.run((ctx: any) => ctx.db.query("shippingRecaps")
+    .withIndex("by_org_closedAt", (q: any) => q.eq("orgId", orgId)).collect()) as Array<{
+      closingBucket?: "counted";
+    }>;
+  expect(rows.every((row: any) => row.closingBucket === "counted")).toBe(true);
+});
+
+test("failed scheduled page marks the run failed, unlocks, and internal resume completes", async () => {
+  vi.useFakeTimers({ now });
+  try {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const runId = await t.run(async (ctx: any) => {
+    const runId = await ctx.db.insert("followUpPreparationRuns", {
+      orgId, mode: "apply", status: "running", phase: "counters_waiting",
+      nextConversationStatus: "handover", scanned: 0, eligible: 0, updated: 0,
+      skipped: 0, failed: 0, startedAt: now, updatedAt: now,
+    });
+    await ctx.db.insert("followUpCutoverLocks", { orgId, runId: String(runId), lockedAt: now });
+    await ctx.db.insert("conversations", conversation(orgId, "FAIL-PAGE-1", {
+      followUpCsKey: "aisyah", followUpCycleId: "cycle:fail", followUpCycleStartedAt: anchor,
+      followUpNextStage: 1, followUpDueAt: calendarDueAt, followUpState: "waiting",
+    }));
+    for (let index = 0; index < 2; index += 1) {
+      await ctx.db.insert("followUpCounters", {
+        orgId, csKey: "aisyah", h1: 0, h2: 0, h3: 0, review: 0, updatedAt: index,
+      });
+    }
+    return runId;
+  });
+  const failed = await t.action(internal.followUpMigration.runPreparationStep, { runId });
+  expect(failed).toMatchObject({ failed: true });
+  expect(await t.run((ctx: any) => ctx.db.get(runId))).toMatchObject({ status: "failed", failed: 1 });
+  expect(await t.run((ctx: any) => ctx.db.query("followUpCutoverLocks")
+    .withIndex("by_org", (q: any) => q.eq("orgId", orgId)).unique())).toBeNull();
+
+  await t.mutation(internal.followUpMigration.resumeCutoverBySlug, { orgSlug: "pustakaislam" });
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+  expect(await t.run((ctx: any) => ctx.db.get(runId))).toMatchObject({ status: "complete" });
+  expect(await t.run((ctx: any) => ctx.db.query("followUpCutoverLocks")
+    .withIndex("by_org", (q: any) => q.eq("orgId", orgId)).unique())).toBeNull();
   } finally {
     vi.useRealTimers();
   }

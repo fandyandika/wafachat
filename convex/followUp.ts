@@ -9,6 +9,7 @@ import { getInternalPhoneSet } from "./orgSettings";
 import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 import { getBoundedActiveAgentRegistry } from "./agents";
 import {
+  assertFollowUpCutoverUnlocked,
   confirmCurrentStage,
   correctCurrentStage,
   markCurrentStageSending,
@@ -809,6 +810,7 @@ export const finalizeDueFollowUp = internalMutation({
     const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.finalizeDueFollowUp");
     const conversation = await ctx.db.get(args.conversationId);
     if (!conversation || String(conversation.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    await assertFollowUpCutoverUnlocked(ctx, conversation.orgId);
     if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
       throw new Error("unauthorized: conversation scope mismatch");
     }
@@ -909,6 +911,7 @@ export const expireSendingReservation = internalMutation({
     ) {
       return { expired: false };
     }
+    await assertFollowUpCutoverUnlocked(ctx, conversation.orgId);
     if (conversation.followUpCycleInboundAt && conversation.followUpNextStage) {
       const key = attemptKey(
         String(conversation._id),

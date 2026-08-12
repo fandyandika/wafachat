@@ -204,6 +204,86 @@ test("an early H+1 trigger advances to H+2 on the next Jakarta calendar day", as
     .toMatchObject({ h1: 0, h2: 1, h3: 0 });
 });
 
+test("org cutover lock blocks lifecycle writes only for the locked tenant", async () => {
+  const locked = await fixture({ stage: 1 });
+  const other = await locked.t.run(async (ctx) => {
+    const orgId = await ctx.db.insert("organizations", {
+      slug: "other-lifecycle-org", name: "Other", createdAt: 1, updatedAt: 1,
+    });
+    const conversationId = await ctx.db.insert("conversations", {
+      orgId, orderId: "OTHER-1", customerPhone: "628999999999", customerName: "Other",
+      assignedCsName: "Aisyah", status: "active", aiEnabled: false, note: "",
+      followUpCsKey: "aisyah", followUpCycleInboundAt: 1_000, followUpCycleId: "cycle-other",
+      followUpCycleStartedAt: 1_000, followUpNextStage: 1, followUpDueAt: sentAt + HOUR,
+      followUpState: "waiting", createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "aisyah", h1: 1, h2: 0, h3: 0, review: 0, updatedAt: 1,
+    });
+    return { orgId, conversationId };
+  });
+  const beforeLockMessage = await insertMessage(
+    locked.t, locked.orgId, locked.conversationId, "outbound", "Follow up H+1", sentAt,
+  );
+  await locked.t.run(async (ctx) => applyOutboundLifecycle(ctx, {
+    conversation: await ctx.db.get(locked.conversationId) as Doc<"conversations">,
+    messageId: beforeLockMessage,
+    content: "Follow up H+1",
+    csKey: "aisyah",
+    detectedStage: 1,
+    createdAt: sentAt,
+    source: "provider_template",
+  }));
+
+  const lockId = await locked.t.run(async (ctx) => {
+    const runId = await ctx.db.insert("followUpPreparationRuns", {
+      orgId: locked.orgId, mode: "apply", status: "running", phase: "counters_delete",
+      nextConversationStatus: "handover", scanned: 0, eligible: 0, updated: 0,
+      skipped: 0, failed: 0, startedAt: sentAt, updatedAt: sentAt,
+    });
+    return ctx.db.insert("followUpCutoverLocks", {
+      orgId: locked.orgId,
+      runId,
+      lockedAt: sentAt + 1,
+    });
+  });
+  const lockedBefore = await getConversation(locked.t, locked.conversationId);
+  const blockedMessage = await insertMessage(
+    locked.t, locked.orgId, locked.conversationId, "inbound", "Saya balas", sentAt + 2,
+  );
+  await expect(locked.t.run((ctx) => applyInboundReset(ctx, {
+    conversation: lockedBefore,
+    messageId: blockedMessage,
+    content: "Saya balas",
+    createdAt: sentAt + 2,
+  }))).rejects.toThrow(/cutover.*coba lagi/i);
+  expect(await getConversation(locked.t, locked.conversationId)).toEqual(lockedBefore);
+
+  const otherMessage = await locked.t.run((ctx) => ctx.db.insert("messages", {
+    orgId: other.orgId, conversationId: other.conversationId, orderId: "OTHER-1",
+    customerPhone: "628999999999", role: "customer", direction: "inbound",
+    content: "Tenant lain", messageType: "text", source: "ingest", createdAt: sentAt + 2,
+  }));
+  await locked.t.run(async (ctx) => applyInboundReset(ctx, {
+    conversation: await ctx.db.get(other.conversationId) as Doc<"conversations">,
+    messageId: otherMessage,
+    content: "Tenant lain",
+    createdAt: sentAt + 2,
+  }));
+  expect((await getConversation(locked.t, other.conversationId)).followUpState).toBeUndefined();
+
+  await locked.t.run((ctx) => ctx.db.delete(lockId));
+  expect(await locked.t.run((ctx) => ctx.db.query("followUpCutoverLocks")
+    .withIndex("by_org", (q) => q.eq("orgId", locked.orgId)).unique())).toBeNull();
+  await locked.t.run((ctx) => applyInboundReset(ctx, {
+    conversation: lockedBefore,
+    messageId: blockedMessage,
+    content: "Saya balas",
+    createdAt: sentAt + 2,
+  }));
+  expect((await getConversation(locked.t, locked.conversationId)).followUpState).toBeUndefined();
+});
+
 test("ordinary outbound owner transfer moves the active bucket and inbound reset clears the new owner", async () => {
   const { t, orgId, conversationId } = await fixture({ stage: 2 });
   const outboundMessageId = await insertMessage(t, orgId, conversationId, "outbound", "Pesan biasa", sentAt);

@@ -26,6 +26,18 @@ type LifecycleResult = {
   cycleId?: string;
 };
 
+export async function assertFollowUpCutoverUnlocked(
+  ctx: LifecycleCtx,
+  orgId: Id<"organizations">,
+): Promise<void> {
+  const lock = await ctx.db.query("followUpCutoverLocks")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique();
+  if (lock) {
+    throw new Error("Cutover Follow-up sedang berlangsung. Coba lagi; event aman untuk diputar ulang.");
+  }
+}
+
 function preview(content: string): string {
   return content.slice(0, 180);
 }
@@ -138,6 +150,7 @@ export async function applyOutboundLifecycle(
   ctx: LifecycleCtx,
   input: OutboundLifecycleInput,
 ): Promise<LifecycleResult> {
+  await assertFollowUpCutoverUnlocked(ctx, input.conversation.orgId);
   const eventKey = outboundEventKey(input);
   if (await existingEvent(ctx, input.conversation.orgId, eventKey)) {
     return { applied: false, duplicate: true, stale: false };
@@ -270,6 +283,7 @@ export async function applyInboundReset(
     createdAt: number;
   },
 ): Promise<LifecycleResult> {
+  await assertFollowUpCutoverUnlocked(ctx, input.conversation.orgId);
   const eventKey = `message:${String(input.messageId)}`;
   if (await existingEvent(ctx, input.conversation.orgId, eventKey)) {
     return { applied: false, duplicate: true, stale: false };
@@ -349,6 +363,7 @@ export async function confirmCurrentStage(
   ctx: LifecycleCtx,
   input: ConfirmCurrentStageInput,
 ): Promise<LifecycleResult> {
+  await assertFollowUpCutoverUnlocked(ctx, input.conversation.orgId);
   const eventKey = input.providerMessageId
     ? `provider:${input.providerMessageId}`
     : `confirmation:${input.requestId}`;
@@ -421,6 +436,7 @@ export async function markCurrentStageSending(
     createdAt: number;
   },
 ): Promise<LifecycleResult> {
+  await assertFollowUpCutoverUnlocked(ctx, input.conversation.orgId);
   const conversation = await currentConversation(ctx, input.conversation);
   if (conversation.followUpCycleId !== input.expectedCycleId
     || conversation.followUpNextStage !== input.expectedStage
@@ -454,6 +470,7 @@ export async function correctCurrentStage(
     actorName?: string;
   },
 ): Promise<LifecycleResult> {
+  await assertFollowUpCutoverUnlocked(ctx, input.conversation.orgId);
   const eventKey = `correction:${input.requestId}`;
   const existingTransition = await ctx.db.query("followUpTransitions")
     .withIndex("by_org_eventKey", (q) => q.eq("orgId", input.conversation.orgId).eq("eventKey", eventKey))
@@ -523,6 +540,7 @@ export async function terminateCycle(
     source?: "manual" | "system";
   },
 ): Promise<LifecycleResult> {
+  await assertFollowUpCutoverUnlocked(ctx, input.conversation.orgId);
   if (await existingEvent(ctx, input.conversation.orgId, input.eventKey)) {
     return { applied: false, duplicate: true, stale: false };
   }
@@ -572,6 +590,7 @@ export async function reopenArchivedCycle(
     createdAt: number;
   },
 ): Promise<LifecycleResult> {
+  await assertFollowUpCutoverUnlocked(ctx, input.conversation.orgId);
   const conversation = await currentConversation(ctx, input.conversation);
   if (conversation.followUpState !== "archived" || !conversation.followUpCycleId) {
     return { applied: false, duplicate: false, stale: true };

@@ -238,11 +238,18 @@ export default defineSchema({
     updated: v.number(),
     skipped: v.number(),
     failed: v.number(),
+    lastError: v.optional(v.string()),
     startedAt: v.number(),
     updatedAt: v.number(),
     completedAt: v.optional(v.number()),
   }).index("by_org_startedAt", ["orgId", "startedAt"])
     .index("by_org_status_startedAt", ["orgId", "status", "startedAt"]),
+
+  followUpCutoverLocks: defineTable({
+    orgId: v.id("organizations"),
+    runId: v.id("followUpPreparationRuns"),
+    lockedAt: v.number(),
+  }).index("by_org", ["orgId"]),
 
   lifecycleSweepStates: defineTable({
     orgId: v.id("organizations"),
