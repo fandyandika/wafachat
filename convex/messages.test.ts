@@ -413,6 +413,161 @@ test("configured H+3 archives lifecycle without changing the sales status", asyn
   ]);
 });
 
+test("inbound done marker takes terminal precedence and closes the active cycle once", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  let conversationId: any;
+  await t.run(async (ctx) => {
+    conversationId = await ctx.db.insert("conversations", {
+      orgId,
+      orderId: "FU-INBOUND-DONE",
+      customerPhone: "6288044",
+      customerName: "Inbound Done",
+      assignedCsName: "Aisyah",
+      status: "active",
+      aiEnabled: false,
+      note: "",
+      followUpCsKey: "aisyah",
+      followUpCycleInboundAt: 50_000,
+      followUpCycleId: "cycle:inbound-done",
+      followUpCycleStartedAt: 50_001,
+      followUpNextStage: 2,
+      followUpDueAt: 60_000,
+      followUpState: "waiting",
+      createdAt: 50_000,
+      updatedAt: 50_001,
+    });
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "aisyah", h1: 0, h2: 1, h3: 0, review: 0, updatedAt: 50_001,
+    });
+  });
+
+  await t.run((ctx) => appendMessageCore(ctx, {
+    orgId,
+    phone: "6288044",
+    order_id: "FU-INBOUND-DONE",
+    role: "customer",
+    direction: "inbound",
+    content: "Saya checkout di shopee ya kak",
+    createdAt: 70_000,
+  }));
+
+  expect(await t.run((ctx) => ctx.db.get(conversationId))).toMatchObject({
+    status: "closed",
+    followUpState: "complete",
+    followUpOutcome: "closing",
+  });
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").unique()))
+    .toMatchObject({ h1: 0, h2: 0, h3: 0, review: 0 });
+  expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toEqual([
+    expect.objectContaining({
+      cycleId: "cycle:inbound-done",
+      kind: "closing",
+      source: "system",
+    }),
+  ]);
+});
+
+test("configured H+3 terminal collision records closing once with existing sales closure semantics", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  let conversationId: any;
+  await t.run(async (ctx) => {
+    conversationId = await ctx.db.insert("conversations", {
+      orgId,
+      orderId: "FU-H3-TERMINAL",
+      customerPhone: "6288045",
+      customerName: "H3 Terminal",
+      assignedCsName: "Aisyah",
+      status: "active",
+      aiEnabled: false,
+      note: "",
+      followUpCsKey: "aisyah",
+      followUpCycleInboundAt: 80_000,
+      followUpCycleId: "cycle:h3-terminal",
+      followUpCycleStartedAt: 80_001,
+      followUpNextStage: 3,
+      followUpDueAt: 90_000,
+      followUpState: "waiting",
+      createdAt: 80_000,
+      updatedAt: 80_001,
+    });
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "aisyah", h1: 0, h2: 0, h3: 1, review: 0, updatedAt: 80_001,
+    });
+    await ctx.db.insert("followUpTemplates", {
+      orgId,
+      stage: 3,
+      label: "H+3",
+      templateName: "follow_up_h3_terminal",
+      language: "id",
+      variables: [],
+      matchPatterns: ["silakan checkout di shopee"],
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+  });
+
+  await t.run((ctx) => appendMessageCore(ctx, {
+    orgId,
+    phone: "6288045",
+    order_id: "FU-H3-TERMINAL",
+    csName: "Aisyah",
+    role: "cs",
+    direction: "outbound",
+    content: "Silakan checkout di shopee",
+    createdAt: 100_000,
+  }));
+
+  expect(await t.run((ctx) => ctx.db.get(conversationId))).toMatchObject({
+    status: "closed",
+    followUpState: "complete",
+    followUpOutcome: "closing",
+  });
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").unique()))
+    .toMatchObject({ h1: 0, h2: 0, h3: 0, review: 0 });
+  expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toEqual([
+    expect.objectContaining({
+      cycleId: "cycle:h3-terminal",
+      kind: "closing",
+      source: "system",
+    }),
+  ]);
+});
+
+test("message trigger rule loading rejects more than three active stage rows", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (const [index, stage] of [1, 2, 3, 3].entries()) {
+      await ctx.db.insert("followUpTemplates", {
+        orgId,
+        stage: stage as 1 | 2 | 3,
+        label: `Rule ${index}`,
+        templateName: `follow_up_rule_${index}`,
+        language: "id",
+        variables: [],
+        matchPatterns: [],
+        isActive: true,
+        createdAt: index,
+        updatedAt: index,
+      });
+    }
+  });
+
+  await expect(t.run((ctx) => appendMessageCore(ctx, {
+    orgId,
+    phone: "6288046",
+    order_id: "FU-RULE-CORRUPTION",
+    csName: "Aisyah",
+    role: "cs",
+    direction: "outbound",
+    content: "Pesan biasa",
+    createdAt: 110_000,
+  }))).rejects.toThrow(/konfigurasi trigger follow-up tidak valid/i);
+});
+
 test("message history rejects anonymous callers", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
@@ -513,14 +668,11 @@ test("appendMessageFromN8n: outbound closing phrase -> exactly one recap + closi
   const conversation = await t.run(async (ctx) => (await ctx.db.get(r1.conversationId)) as Doc<"conversations"> | null);
   expect(conversation).toMatchObject({ status: "closed", followUpState: "complete" });
   expect(conversation?.followUpDueAt).toBeUndefined();
-  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
-    expect.objectContaining({ csKey: "aisyah", h1: 0, h2: 0, h3: 0, review: 0 }),
-  ]);
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([]);
   const lifecycleClosings = await t.run(async (ctx) => (await ctx.db
     .query("followUpTransitions")
     .collect()).filter((transition) => transition.kind === "closing"));
-  expect(lifecycleClosings).toHaveLength(1);
-  expect(lifecycleClosings[0]).toMatchObject({ cycleId: conversation?.followUpCycleId, source: "system" });
+  expect(lifecycleClosings).toHaveLength(0);
 });
 
 test("appendMessageFromN8n: inbound with phrase -> NO recap", async () => {

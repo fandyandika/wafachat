@@ -36,7 +36,8 @@ async function getActiveFollowUpRules(ctx: { db: any }, orgId: Id<"organizations
   const rows = await ctx.db
     .query("followUpTemplates")
     .withIndex("by_org_active_stage", (q: any) => q.eq("orgId", orgId).eq("isActive", true))
-    .collect();
+    .take(4);
+  if (rows.length > 3) throw new Error("Konfigurasi trigger Follow-up tidak valid.");
   return rows.map((row: any) => ({
     stage: row.stage as FollowUpStage,
     templateName: row.templateName,
@@ -291,6 +292,15 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   }
 
   const createdAt = args.createdAt ?? Date.now();
+  const doneMarker = messageHasDoneMarker(args.content, args.direction);
+  const closingSignalEligible = args.closingSignalEligible
+    ?? canContainClosingSignal(args.direction, args.messageType ?? "text");
+  const closingPhrases = closingSignalEligible
+    ? await getActiveClosingPhrases(ctx, args.orgId)
+    : [];
+  const closingPhraseMatched = closingSignalEligible
+    && messageMatchesPhrase(args.content, closingPhrases);
+  const terminalMessage = doneMarker || closingPhraseMatched;
   const messageId = await ctx.db.insert("messages", {
     conversationId: conversation._id,
     orderId: conversation.orderId,
@@ -385,22 +395,32 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   ) {
     convPatch.assignedCsName = args.csName;
   }
+  if (terminalMessage && args.direction === "inbound" && args.role === "customer") {
+    convPatch.followUpStageOverride = undefined;
+    convPatch.followUpLastInboundPreview = args.content.slice(0, 180);
+    convPatch.followUpLastInboundAt = createdAt;
+  } else if (terminalMessage && args.direction === "outbound" && args.role === "cs") {
+    convPatch.followUpLastOutboundPreview = args.content.slice(0, 180);
+    convPatch.followUpLastOutboundAt = createdAt;
+  }
   await ctx.db.patch(conversation._id, convPatch);
   const effectiveCsKey = csKey(
     (convPatch.assignedCsName as string | undefined) ?? args.csName ?? conversation.assignedCsName,
   );
-  await applyInsertedMessageLifecycle(ctx, {
-    conversation,
-    messageId,
-    content: args.content,
-    providerTemplateName: args.providerTemplateName,
-    externalMessageId: args.externalMessageId,
-    direction: args.direction,
-    role: args.role,
-    effectiveCsKey,
-    createdAt,
-    source: args.source,
-  });
+  if (!terminalMessage) {
+    await applyInsertedMessageLifecycle(ctx, {
+      conversation,
+      messageId,
+      content: args.content,
+      providerTemplateName: args.providerTemplateName,
+      externalMessageId: args.externalMessageId,
+      direction: args.direction,
+      role: args.role,
+      effectiveCsKey,
+      createdAt,
+      source: args.source,
+    });
+  }
   await ctx.db.insert("events", {
     conversationId: conversation._id,
     orderId: conversation.orderId,
@@ -419,9 +439,8 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   });
 
   let closingRecapId: Id<"shippingRecaps"> | undefined;
-  if (args.closingSignalEligible ?? canContainClosingSignal(args.direction, args.messageType ?? "text")) {
-    const phrases = await getActiveClosingPhrases(ctx, args.orgId);
-    if (messageMatchesPhrase(args.content, phrases)) {
+  if (closingSignalEligible) {
+    if (closingPhraseMatched) {
       const result = await upsertRecapFromMessage(ctx, {
         orderId: conversation.orderId,
         customerPhone: conversation.customerPhone,
@@ -459,7 +478,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   // Funnel-exclude markers (shopee / bonus / review / testi / feedback / cod diproses): the lead is
   // post-sale or handled elsewhere → close it in REAL TIME so it drops out of the follow-up funnel
   // immediately (same idea as closing detection above; the daily sweep is the backstop). Reversible.
-  if (closingRecapId || messageHasDoneMarker(args.content, args.direction)) {
+  if (closingRecapId || doneMarker) {
     const latestConversation = await ctx.db.get(conversation._id);
     if (latestConversation) {
       await terminateCycle(ctx, {
@@ -477,6 +496,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
       followUpNextStage: undefined,
       followUpDueAt: undefined,
       followUpState: "complete",
+      followUpOutcome: "closing",
       followUpRequestId: undefined,
       followUpLastError: undefined,
       updatedAt: createdAt,
