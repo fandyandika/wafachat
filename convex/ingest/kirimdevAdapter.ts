@@ -8,7 +8,8 @@ export type UniversalMessageEvent = {
   content: string;
   direction: "inbound" | "outbound";
   role: "customer" | "cs" | "ai";
-  messageType: "text";
+  messageType: "text" | "template" | "button";
+  templateName?: string;
   externalMessageId: string;
   createdAt: number;
   phoneNumberId?: string;
@@ -33,9 +34,11 @@ export function parseKirimdevWebhook(
   if (event === "message.sent") {
     const d = b.data ?? {};
     const m = d.message ?? {};
-    if ((m.type || "text") !== "text") return skip("outbound not text");
+    const templateName = m.template?.name ?? m.template_name ?? d.template?.name;
+    const messageType = templateName ? "template" : (m.type === "button" ? "button" : "text");
+    if (messageType === "text" && (m.type || "text") !== "text") return skip("outbound not text");
     const phone = String(d.contact?.phone_number || m.to || "").replace(/^\+/, "");
-    const content = m.body || "";
+    const content = m.body || m.button?.text || "";
     if (!phone || !content) return skip("missing phone/content");
     const createdAt = d.timestamp ? Date.parse(d.timestamp) : nowMs;
     return {
@@ -45,7 +48,8 @@ export function parseKirimdevWebhook(
         content,
         direction: "outbound",
         role: m.source === "dashboard" ? "cs" : "ai",
-        messageType: "text",
+        messageType,
+        templateName: templateName || undefined,
         externalMessageId: String(m.provider_id || m.id || ""),
         createdAt: Number.isFinite(createdAt) ? createdAt : nowMs,
         phoneNumberId: (d.meta?.phone_number_id || d.session || undefined) as string | undefined,
@@ -73,7 +77,7 @@ export function parseKirimdevWebhook(
         content,
         direction: "inbound",
         role: "customer",
-        messageType: "text",
+        messageType: msg.type === "button" ? "button" : "text",
         externalMessageId: String(msg.id || headers["x-kirim-event-id"] || ""),
         createdAt: msg.timestamp ? Number(msg.timestamp) * 1000 : nowMs,
         phoneNumberId: (value.metadata?.phone_number_id || undefined) as string | undefined,

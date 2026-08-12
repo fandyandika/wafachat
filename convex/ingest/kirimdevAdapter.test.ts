@@ -79,7 +79,10 @@ describe("message.received", () => {
     };
     const r = parseKirimdevWebhook(RECEIVED_HEADERS, body, NOW);
     expect(r.kind).toBe("message");
-    if (r.kind === "message") expect(r.event.content).toBe("Ya, lanjutkan");
+    if (r.kind === "message") {
+      expect(r.event.content).toBe("Ya, lanjutkan");
+      expect(r.event.messageType).toBe("button");
+    }
   });
 
   test("media inbound skips with type reason", () => {
@@ -122,6 +125,30 @@ describe("message.sent", () => {
     const r = parseKirimdevWebhook({ "x-kirim-event": "message.sent" }, body, NOW);
     expect(r.kind).toBe("message");
     if (r.kind === "message") expect(r.event.role).toBe("ai");
+  });
+
+  test("real outbound template shape preserves exact template metadata", () => {
+    const body = structuredClone(SENT_BODY) as any;
+    body.data.message = {
+      id: "msg_H2",
+      provider_id: "wamid.h2",
+      to: "+6285799533626",
+      body: "Masih berminat, Kak?",
+      type: "template",
+      source: "dashboard",
+      template: { name: "follow_up_h2", language: "id" },
+    };
+
+    const parsed = parseKirimdevWebhook({ "x-kirim-event": "message.sent" }, body, NOW);
+    expect(parsed.kind).toBe("message");
+    if (parsed.kind === "message") {
+      expect(parsed.event).toMatchObject({
+        messageType: "template",
+        templateName: "follow_up_h2",
+        phoneNumberId: "485071188032281",
+        externalMessageId: "wamid.h2",
+      });
+    }
   });
 
   test("non-text outbound skips", () => {
