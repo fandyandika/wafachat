@@ -63,7 +63,7 @@ describe("manual follow-up state transitions", () => {
     });
   });
 
-  test("external provider outbound may advance a waiting cycle before its due time", () => {
+  test("ordinary provider outbound cannot advance a waiting cycle before trigger matching exists", () => {
     const valid = {
       status: "active" as const,
       followUpState: "waiting" as const,
@@ -77,10 +77,10 @@ describe("manual follow-up state transitions", () => {
       externalMessageId: "wamid.phone.1",
       isInternal: false,
     };
-    expect(shouldAdvanceDueOutbound(valid)).toBe(true);
+    expect(shouldAdvanceDueOutbound(valid)).toBe(false);
     expect(shouldAdvanceDueOutbound({ ...valid, status: "closed" })).toBe(false);
     expect(shouldAdvanceDueOutbound({ ...valid, isInternal: true })).toBe(false);
     expect(shouldAdvanceDueOutbound({ ...valid, source: "n8n" })).toBe(false);
-    expect(shouldAdvanceDueOutbound({ ...valid, createdAt: 9_999 })).toBe(true);
+    expect(shouldAdvanceDueOutbound({ ...valid, createdAt: 9_999 })).toBe(false);
   });
 });

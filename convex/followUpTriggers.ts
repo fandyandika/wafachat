@@ -35,6 +35,8 @@ export function detectFollowUpStage(input: DetectFollowUpStageInput): FollowUpSt
 }
 
 export function nextStageAfterDetected(current: FollowUpStage, detected: FollowUpStage, eventAt: number) {
+  if (detected < current) return null;
+
   const completedStages = [] as FollowUpStage[];
   for (let stage = current; stage <= detected; stage += 1) completedStages.push(stage as FollowUpStage);
 

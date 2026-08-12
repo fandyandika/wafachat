@@ -11,7 +11,12 @@ describe("provider follow-up triggers", () => {
       completedStages: [1, 2], nextStage: 3,
       dueAt: Date.UTC(2026, 7, 13, 1), state: "waiting",
     });
-    expect(nextStageAfterDetected(2, 3, Date.UTC(2026, 7, 12, 2)).state).toBe("archived");
+    expect(nextStageAfterDetected(2, 3, Date.UTC(2026, 7, 12, 2))).toMatchObject({ state: "archived" });
+  });
+
+  test("stale lower trigger is a no-op", () => {
+    expect(nextStageAfterDetected(2, 1, Date.UTC(2026, 7, 12, 2))).toBeNull();
+    expect(nextStageAfterDetected(3, 1, Date.UTC(2026, 7, 12, 2))).toBeNull();
   });
 
   test("template wins, normalized pattern matches, ordinary text does not", () => {
