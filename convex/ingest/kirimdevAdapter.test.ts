@@ -127,6 +127,14 @@ describe("message.sent", () => {
     if (r.kind === "message") expect(r.event.role).toBe("ai");
   });
 
+  test("coexistence phone-app echo maps to the human CS role", () => {
+    const body = structuredClone(SENT_BODY) as any;
+    body.data.message.source = "app";
+    const r = parseKirimdevWebhook({ "x-kirim-event": "message.sent" }, body, NOW);
+    expect(r.kind).toBe("message");
+    if (r.kind === "message") expect(r.event.role).toBe("cs");
+  });
+
   test("real outbound template shape preserves exact template metadata", () => {
     const body = structuredClone(SENT_BODY) as any;
     body.data.message = {

@@ -51,7 +51,7 @@ export function parseKirimdevWebhook(
         phone,
         content,
         direction: "outbound",
-        role: m.source === "dashboard" ? "cs" : "ai",
+        role: m.source === "dashboard" || m.source === "app" ? "cs" : "ai",
         messageType,
         templateName: templateName || undefined,
         externalMessageId,
