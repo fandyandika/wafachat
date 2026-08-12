@@ -532,10 +532,17 @@ const closedPageRowValidator = v.object({
   touches: v.number(),
   fromFollowUp: v.boolean(),
 });
+const validClosingStatusValidator = v.union(
+  v.literal("ready"),
+  v.literal("needs_review"),
+  v.literal("exported"),
+  v.literal("delivered"),
+);
 
 export const listClosedFollowUpsPage = query({
   args: {
     csName: v.optional(v.string()),
+    status: v.optional(validClosingStatusValidator),
     paginationOpts: paginationOptsValidator,
   },
   returns: v.object({
@@ -550,25 +557,28 @@ export const listClosedFollowUpsPage = query({
       args.csName,
     );
     const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const status = args.status ?? "ready";
     const paginationOpts = {
       cursor: args.paginationOpts.cursor,
       numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
     };
     const result = await (effectiveCsKey
       ? ctx.db.query("shippingRecaps")
-          .withIndex("by_org_csKey_closedAt", (q) => q
+          .withIndex("by_org_csKey_status_closedAt", (q) => q
             .eq("orgId", orgId)
-            .eq("csKey", effectiveCsKey))
+            .eq("csKey", effectiveCsKey)
+            .eq("status", status))
       : ctx.db.query("shippingRecaps")
-          .withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId)))
+          .withIndex("by_org_status_closedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("status", status)))
       .order("desc")
       .paginate(paginationOpts);
 
     return {
-      page: result.page.flatMap((row) => {
-        if (row.status === "cancelled" || row.status === "cancelled_after_export") return [];
+      page: result.page.map((row) => {
         const touches = row.followUpTouchesAtClose ?? 0;
-        return [{
+        return {
           conversationId: row.conversationId,
           customerName: row.customerName,
           customerPhone: row.customerPhone,
@@ -578,7 +588,7 @@ export const listClosedFollowUpsPage = query({
           product: row.packageContent,
           touches,
           fromFollowUp: touches > 0,
-        }];
+        };
       }),
       isDone: result.isDone,
       continueCursor: result.continueCursor,

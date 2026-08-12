@@ -660,7 +660,8 @@ export default defineSchema({
     .index("by_org_customerPhone", ["orgId", "customerPhone"])
     .index("by_org_closedAt", ["orgId", "closedAt"])
     .index("by_org_status_closedAt", ["orgId", "status", "closedAt"])
-    .index("by_org_csKey_closedAt", ["orgId", "csKey", "closedAt"]),
+    .index("by_org_csKey_closedAt", ["orgId", "csKey", "closedAt"])
+    .index("by_org_csKey_status_closedAt", ["orgId", "csKey", "status", "closedAt"]),
 
   adminChannels: defineTable({
     orgId: v.id("organizations"),

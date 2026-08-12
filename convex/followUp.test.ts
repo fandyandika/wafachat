@@ -420,11 +420,35 @@ test("review and archive views paginate newest-first through lifecycle state ind
   });
 });
 
-test("closing view paginates newest-first through recap closedAt indexes", async () => {
+test("closing view skips 31 newer cancellations before paginating valid closings", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "closed-pages-admin", role: "admin", name: "Closed Admin", email: "closed-pages@wafachat.test" });
   const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
+    for (let i = 0; i < 31; i++) {
+      await ctx.db.insert("shippingRecaps", {
+        orgId,
+        orderIdBerdu: `CANCELLED-${i}`,
+        customerPhone: `6288299${String(i).padStart(3, "0")}`,
+        customerName: `Cancelled ${i}`,
+        csName: "Nabila",
+        csKey: "nabila",
+        closedAt: now + 1_000 - i,
+        recipientName: `Cancelled ${i}`,
+        recipientPhone: `6288299${String(i).padStart(3, "0")}`,
+        recipientAddress: "",
+        recipientDistrict: "",
+        recipientCity: "",
+        packageContent: "Quran Mapping",
+        paymentMethod: "cod",
+        status: "cancelled",
+        flags: [],
+        sourceMessageText: "",
+        version: 1,
+        createdAt: now + 1_000 - i,
+        updatedAt: now + 1_000 - i,
+      });
+    }
     for (let i = 0; i < 35; i++) {
       await ctx.db.insert("shippingRecaps", {
         orgId,
@@ -450,16 +474,42 @@ test("closing view paginates newest-first through recap closedAt indexes", async
         updatedAt: now - i,
       });
     }
+    await ctx.db.insert("shippingRecaps", {
+      orgId,
+      orderIdBerdu: "EXPORTED-ONLY",
+      customerPhone: "6288200999",
+      customerName: "Exported",
+      csName: "Nabila",
+      csKey: "nabila",
+      closedAt: now - 100,
+      recipientName: "Exported",
+      recipientPhone: "6288200999",
+      recipientAddress: "",
+      recipientDistrict: "",
+      recipientCity: "",
+      packageContent: "Quran Mapping",
+      paymentMethod: "cod",
+      status: "exported",
+      flags: [],
+      sourceMessageText: "",
+      version: 1,
+      createdAt: now - 100,
+      updatedAt: now - 100,
+    });
   });
 
   const first = await asAdmin.query(api.followUp.listClosedFollowUpsPage, {
+    csName: "Nabila",
     paginationOpts: { numItems: 100, cursor: null },
   });
   const second = await asAdmin.query(api.followUp.listClosedFollowUpsPage, {
+    csName: "Nabila",
     paginationOpts: { numItems: 100, cursor: first.continueCursor },
   });
   expect(first.page).toHaveLength(30);
   expect(second.page).toHaveLength(5);
+  expect(first.page.every((row) => row.orderId.startsWith("CLOSED-"))).toBe(true);
+  expect(second.isDone).toBe(true);
   expect(first.page[0]).toMatchObject({
     orderId: "CLOSED-0",
     product: "Quran Mapping",
@@ -467,6 +517,12 @@ test("closing view paginates newest-first through recap closedAt indexes", async
     fromFollowUp: false,
   });
   expect(first.page[1]).toMatchObject({ orderId: "CLOSED-1", touches: 1, fromFollowUp: true });
+  const exported = await asAdmin.query(api.followUp.listClosedFollowUpsPage, {
+    csName: "Nabila",
+    status: "exported",
+    paginationOpts: { numItems: 30, cursor: null },
+  });
+  expect(exported.page.map((row) => row.orderId)).toEqual(["EXPORTED-ONLY"]);
 });
 
 test("getFollowUpCandidates: stale conversation (updated >6d ago) excluded by recency bound", async () => {
