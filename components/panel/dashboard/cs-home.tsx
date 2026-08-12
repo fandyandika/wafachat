@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
 import { ArrowRight, RefreshCw } from 'lucide-react';
+import { useQuery } from 'convex/react';
 
+import { api } from '@/convex/_generated/api';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { Me } from '@/components/panel/use-me';
@@ -11,8 +13,6 @@ import { cn } from '@/lib/utils';
 import { DashboardContextBar, LedgerMetric, LedgerMetricGrid, LedgerSection } from './ledger';
 import { formatDashboardUpdatedAt, useDashboardData } from './use-dashboard-data';
 import { windowKeyToday, windowRangeForKey } from '@/lib/report-window-core';
-
-type QueueCounts = { h1: number; h2: number; h3: number };
 
 export function CsHome({ me }: { me: Me }) {
   const workDate = windowKeyToday();
@@ -22,28 +22,11 @@ export function CsHome({ me }: { me: Me }) {
     includeDuplicates: false,
     includePerformance: false,
   });
-  const [counts, setCounts] = useState<QueueCounts>();
-  const [countsTruncated, setCountsTruncated] = useState(false);
-  const [countsError, setCountsError] = useState<string | null>(null);
-
-  const loadCounts = useCallback(async () => {
-    setCountsError(null);
-    const response = await fetch('/api/follow-up/counts', { method: 'POST' });
-    const body = await response.json();
-    if (!response.ok || !body.ok) throw new Error(body.error || 'Gagal memuat antrean');
-    setCounts(body.counts as QueueCounts);
-    setCountsTruncated(body.truncated === true);
-  }, []);
-
-  useEffect(() => {
-    void loadCounts().catch((error) => setCountsError((error as Error).message));
-  }, [loadCounts]);
+  const counts = useQuery(api.followUp.getFollowUpCounts, { csName: me.csName });
+  const countsTruncated = false;
 
   const refreshAll = async () => {
-    await Promise.all([
-      data.refreshAll(),
-      loadCounts().catch((error) => setCountsError((error as Error).message)),
-    ]);
+    await data.refreshAll();
   };
 
   return (
@@ -64,7 +47,6 @@ export function CsHome({ me }: { me: Me }) {
         title="Pekerjaan berikutnya"
         action={<Link href="/panel/follow-up" className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-primary">Buka Follow-up <ArrowRight className="size-4" /></Link>}
       >
-        {countsError ? <p role="alert" className="border-b border-negative bg-negative-soft px-4 py-2 text-sm text-negative">{countsError}</p> : null}
         <LedgerMetricGrid>
           <LedgerMetric label="H+1" value={counts ? `${counts.h1}${countsTruncated ? '+' : ''}` : '—'} detail={countsTruncated ? 'Minimum · antrean besar' : 'Tindak lanjut pertama'} />
           <LedgerMetric label="H+2" value={counts ? `${counts.h2}${countsTruncated ? '+' : ''}` : '—'} detail={countsTruncated ? 'Minimum · antrean besar' : 'Pengingat'} />
