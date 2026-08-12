@@ -327,6 +327,7 @@ type ConfirmCurrentStageBase = {
   conversation: Doc<"conversations">;
   requestId: string;
   createdAt: number;
+  expectedStage?: FollowUpStage;
   providerMessageId?: string;
   templateName?: string;
   actorUserId?: Id<"users">;
@@ -359,7 +360,8 @@ export async function confirmCurrentStage(
   if (!conversation.followUpCycleId
     || currentStage === undefined
     || bucketFor(conversation) === null
-    || (input.expectedCycleId !== undefined && input.expectedCycleId !== conversation.followUpCycleId)) {
+    || (input.expectedCycleId !== undefined && input.expectedCycleId !== conversation.followUpCycleId)
+    || (input.expectedStage !== undefined && input.expectedStage !== currentStage)) {
     if (input.source === "provider_template" || input.source === "provider_webhook") {
       await recordEventReceipt(ctx, {
         orgId: conversation.orgId,
@@ -409,6 +411,39 @@ export async function confirmCurrentStage(
   return { applied: true, duplicate: false, stale: false, cycleId: conversation.followUpCycleId };
 }
 
+export async function markCurrentStageSending(
+  ctx: LifecycleCtx,
+  input: {
+    conversation: Doc<"conversations">;
+    expectedCycleId: string;
+    expectedStage: FollowUpStage;
+    requestId: string;
+    createdAt: number;
+  },
+): Promise<LifecycleResult> {
+  const conversation = await currentConversation(ctx, input.conversation);
+  if (conversation.followUpCycleId !== input.expectedCycleId
+    || conversation.followUpNextStage !== input.expectedStage
+    || conversation.followUpState !== "waiting") {
+    return { applied: false, duplicate: false, stale: true };
+  }
+  const ownerKey = conversation.followUpCsKey ?? normalizeCsKey(conversation.assignedCsName);
+  await moveCounter(ctx, conversation, ownerKey, "review", input.createdAt);
+  await ctx.db.patch(conversation._id, {
+    followUpState: "sending",
+    followUpRequestId: input.requestId,
+    followUpProviderMessageId: undefined,
+    followUpLastError: undefined,
+    updatedAt: input.createdAt,
+  });
+  return {
+    applied: true,
+    duplicate: false,
+    stale: false,
+    cycleId: conversation.followUpCycleId,
+  };
+}
+
 export async function correctCurrentStage(
   ctx: LifecycleCtx,
   input: {
@@ -438,6 +473,9 @@ export async function correctCurrentStage(
     followUpDueAt: now,
     followUpState: "waiting",
     followUpStageOverride: input.targetStage,
+    followUpRequestId: undefined,
+    followUpProviderMessageId: undefined,
+    followUpLastError: undefined,
     followUpLastTransitionAt: now,
     followUpOutcome: undefined,
     followUpReviewReason: undefined,
@@ -512,4 +550,33 @@ export async function terminateCycle(
     createdAt: input.createdAt,
   });
   return { applied: true, duplicate: false, stale: false, cycleId: conversation.followUpCycleId };
+}
+
+export async function reopenArchivedCycle(
+  ctx: LifecycleCtx,
+  input: {
+    conversation: Doc<"conversations">;
+    createdAt: number;
+  },
+): Promise<LifecycleResult> {
+  const conversation = await currentConversation(ctx, input.conversation);
+  if (conversation.followUpState !== "archived" || !conversation.followUpCycleId) {
+    return { applied: false, duplicate: false, stale: true };
+  }
+  const ownerKey = conversation.followUpCsKey ?? normalizeCsKey(conversation.assignedCsName);
+  await moveCounter(ctx, conversation, ownerKey, "review", input.createdAt);
+  await ctx.db.patch(conversation._id, {
+    followUpState: "review",
+    followUpArchivedAt: undefined,
+    followUpOutcome: undefined,
+    followUpReviewReason: "Dibuka kembali; pilih tahap yang benar",
+    followUpLastTransitionAt: input.createdAt,
+    updatedAt: input.createdAt,
+  });
+  return {
+    applied: true,
+    duplicate: false,
+    stale: false,
+    cycleId: conversation.followUpCycleId,
+  };
 }

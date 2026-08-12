@@ -12,7 +12,6 @@ export async function POST(req: NextRequest) {
   if (!session) return NextResponse.json({ ok: false, error: "Sesi tidak valid." }, { status: 401 });
   const body = await req.json().catch(() => ({}));
   if (typeof body.conversationId !== "string"
-    || (body.stage !== 1 && body.stage !== 2 && body.stage !== 3)
     || typeof body.requestId !== "string"
     || !REQUEST_ID_RE.test(body.requestId)) {
     return NextResponse.json({ ok: false, error: "Data konfirmasi tidak valid." }, { status: 400 });
@@ -22,7 +21,6 @@ export async function POST(req: NextRequest) {
   try {
     const result = await convex.mutation(api.followUp.confirmManualContact, {
       conversationId: body.conversationId as Id<"conversations">,
-      stage: body.stage,
       requestId: body.requestId,
     });
     return NextResponse.json(result);

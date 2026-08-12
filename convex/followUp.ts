@@ -8,7 +8,13 @@ import { eligibleStage } from "./followUpMath";
 import { getInternalPhoneSet } from "./orgSettings";
 import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 import { getBoundedActiveAgentRegistry } from "./agents";
-import { advanceAfterAccepted, FOLLOW_UP_EXPIRY_MS } from "./followUpModel";
+import {
+  confirmCurrentStage,
+  correctCurrentStage,
+  markCurrentStageSending,
+  reopenArchivedCycle,
+  terminateCycle,
+} from "./followUpLifecycle";
 import { internal } from "./_generated/api";
 import { buildTemplatePayload, sendKirimDevMessage } from "../lib/kirimdev";
 import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
@@ -608,6 +614,8 @@ const reservationResultValidator = v.union(
     language: v.string(),
     orderedValues: v.array(v.string()),
     idempotencyKey: v.string(),
+    expectedCycleId: v.string(),
+    stage: followUpStageValidator,
   }),
 );
 
@@ -624,6 +632,8 @@ type ReservationResult =
       language: string;
       orderedValues: string[];
       idempotencyKey: string;
+      expectedCycleId: string;
+      stage: 1 | 2 | 3;
     };
 type SendDueFollowUpResult = {
   ok: boolean;
@@ -677,18 +687,17 @@ export const reserveDueFollowUp = internalMutation({
       throw new Error("Pengiriman Follow-up masih diproses.");
     }
 
-    const currentTime = Date.now();
     if (
       conversation.status === "closed" ||
       conversation.followUpState !== "waiting" ||
       conversation.followUpNextStage !== args.stage ||
       conversation.followUpDueAt === undefined ||
-      conversation.followUpDueAt > currentTime ||
       conversation.followUpCycleInboundAt === undefined ||
-      conversation.followUpCycleInboundAt < currentTime - FOLLOW_UP_EXPIRY_MS
+      conversation.followUpCycleId === undefined
     ) {
       throw new Error("Follow-up ini tidak lagi jatuh tempo.");
     }
+    const currentTime = Date.now();
 
     const recap = await ctx.db
       .query("shippingRecaps")
@@ -743,6 +752,7 @@ export const reserveDueFollowUp = internalMutation({
       conversationId: conversation._id,
       csKey: agentKey,
       cycleInboundAt: conversation.followUpCycleInboundAt,
+      cycleId: conversation.followUpCycleId,
       stage: args.stage,
       method: "provider_template",
       nonce: args.requestId,
@@ -756,13 +766,14 @@ export const reserveDueFollowUp = internalMutation({
     });
     if (attempt.duplicate) return { shouldSend: false as const, status: attempt.status };
 
-    await ctx.db.patch(conversation._id, {
-      followUpState: "sending",
-      followUpRequestId: args.requestId,
-      followUpProviderMessageId: undefined,
-      followUpLastError: undefined,
-      updatedAt: currentTime,
+    const sending = await markCurrentStageSending(ctx, {
+      conversation,
+      expectedCycleId: conversation.followUpCycleId,
+      expectedStage: args.stage,
+      requestId: args.requestId,
+      createdAt: currentTime,
     });
+    if (!sending.applied) throw new Error("Follow-up ini tidak lagi jatuh tempo.");
     await ctx.scheduler.runAfter(2 * 60_000, internal.followUp.expireSendingReservation, {
       conversationId: conversation._id,
       requestId: args.requestId,
@@ -776,6 +787,8 @@ export const reserveDueFollowUp = internalMutation({
       language: template.language,
       orderedValues,
       idempotencyKey,
+      expectedCycleId: conversation.followUpCycleId,
+      stage: args.stage,
     };
   },
 });
@@ -784,6 +797,8 @@ export const finalizeDueFollowUp = internalMutation({
   args: {
     conversationId: v.id("conversations"),
     requestId: v.string(),
+    expectedCycleId: v.string(),
+    stage: followUpStageValidator,
     outcome: v.union(v.literal("accepted"), v.literal("failed"), v.literal("unknown")),
     providerMessageId: v.optional(v.string()),
     error: v.optional(v.string()),
@@ -797,20 +812,10 @@ export const finalizeDueFollowUp = internalMutation({
     if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
       throw new Error("unauthorized: conversation scope mismatch");
     }
-    if (conversation.followUpRequestId !== args.requestId) throw new Error("Reservasi Follow-up tidak cocok.");
-    if (conversation.followUpProviderMessageId) return { ok: true as const, status: "accepted" as const };
-    if (conversation.followUpState !== "sending") {
-      const status: ReservationStatus = conversation.followUpState === "unknown" ? "unknown" : "failed";
-      return { ok: true as const, status };
-    }
-
-    if (!conversation.followUpCycleInboundAt || !conversation.followUpNextStage) {
-      throw new Error("Stage Follow-up tidak tersedia.");
-    }
     const key = attemptKey(
       String(conversation._id),
-      conversation.followUpCycleInboundAt,
-      conversation.followUpNextStage,
+      args.expectedCycleId,
+      args.stage,
       "provider_template",
       args.requestId,
     );
@@ -818,6 +823,8 @@ export const finalizeDueFollowUp = internalMutation({
       .withIndex("by_org_attemptKey", (q) => q.eq("orgId", orgId).eq("attemptKey", key))
       .unique();
     if (!attempt) throw new Error("Attempt Follow-up tidak ditemukan.");
+    if (attempt.status === "accepted") return { ok: true as const, status: "accepted" as const };
+    if (attempt.status !== "sending") return { ok: true as const, status: attempt.status };
 
     const finalizedAt = args.acceptedAt ?? Date.now();
     if (!Number.isFinite(finalizedAt) || Math.abs(Date.now() - finalizedAt) > 60_000) {
@@ -830,11 +837,15 @@ export const finalizeDueFollowUp = internalMutation({
         at: finalizedAt,
         error: args.error ?? "Pengiriman gagal tanpa detail.",
       });
-      await ctx.db.patch(conversation._id, {
-        followUpState: args.outcome,
-        followUpLastError: (args.error ?? "Pengiriman gagal tanpa detail.").slice(0, 500),
-        updatedAt: finalizedAt,
-      });
+      if (conversation.followUpCycleId === args.expectedCycleId
+        && conversation.followUpRequestId === args.requestId
+        && conversation.followUpState === "sending") {
+        await ctx.db.patch(conversation._id, {
+          followUpState: args.outcome,
+          followUpLastError: (args.error ?? "Pengiriman gagal tanpa detail.").slice(0, 500),
+          updatedAt: finalizedAt,
+        });
+      }
       return { ok: true as const, status: args.outcome as ReservationStatus };
     }
     if (!args.providerMessageId?.trim()) throw new Error("ID pesan provider wajib untuk pengiriman diterima.");
@@ -851,7 +862,7 @@ export const finalizeDueFollowUp = internalMutation({
         customerPhone: conversation.customerPhone,
         role: "cs",
         direction: "outbound",
-        content: `[follow-up H+${conversation.followUpNextStage}]`,
+        content: `[follow-up H+${args.stage}]`,
         messageType: "template",
         source: "panel",
         externalMessageId: args.providerMessageId,
@@ -859,25 +870,26 @@ export const finalizeDueFollowUp = internalMutation({
       });
     }
 
-    const sentStage = conversation.followUpNextStage;
-    const next = advanceAfterAccepted(sentStage, finalizedAt);
     await finalizeAttempt(ctx, {
       attemptId: attempt._id,
       status: "accepted",
       at: finalizedAt,
       providerMessageId: args.providerMessageId,
     });
-    await ctx.db.patch(conversation._id, {
-      followUpStage: sentStage,
-      followUpStageAt: finalizedAt,
-      followUpNextStage: next.nextStage ?? undefined,
-      followUpDueAt: next.dueAt ?? undefined,
-      followUpState: next.state,
-      followUpProviderMessageId: args.providerMessageId,
-      followUpLastError: undefined,
-      lastMessageAt: finalizedAt,
-      updatedAt: finalizedAt,
+    await confirmCurrentStage(ctx, {
+      conversation,
+      expectedCycleId: args.expectedCycleId,
+      expectedStage: args.stage,
+      requestId: args.requestId,
+      createdAt: finalizedAt,
+      source: "provider_template",
+      providerMessageId: args.providerMessageId,
+      templateName: attempt.templateName,
     });
+    const current = await ctx.db.get(conversation._id);
+    if (current && current.followUpCycleId === args.expectedCycleId) {
+      await ctx.db.patch(conversation._id, { lastMessageAt: finalizedAt });
+    }
     return { ok: true as const, status: "accepted" as const };
   },
 });
@@ -900,14 +912,26 @@ export const expireSendingReservation = internalMutation({
     if (conversation.followUpCycleInboundAt && conversation.followUpNextStage) {
       const key = attemptKey(
         String(conversation._id),
-        conversation.followUpCycleInboundAt,
+        conversation.followUpCycleId ?? conversation.followUpCycleInboundAt,
         conversation.followUpNextStage,
         "provider_template",
         args.requestId,
       );
-      const attempt = await ctx.db.query("followUpAttempts")
+      let attempt = await ctx.db.query("followUpAttempts")
         .withIndex("by_org_attemptKey", (q) => q.eq("orgId", conversation.orgId).eq("attemptKey", key))
         .unique();
+      if (!attempt && conversation.followUpCycleId) {
+        const legacyKey = attemptKey(
+          String(conversation._id),
+          conversation.followUpCycleInboundAt,
+          conversation.followUpNextStage,
+          "provider_template",
+          args.requestId,
+        );
+        attempt = await ctx.db.query("followUpAttempts")
+          .withIndex("by_org_attemptKey", (q) => q.eq("orgId", conversation.orgId).eq("attemptKey", legacyKey))
+          .unique();
+      }
       if (attempt) await finalizeAttempt(ctx, {
         attemptId: attempt._id,
         status: "unknown",
@@ -952,6 +976,8 @@ export const sendDueFollowUp = action({
         conversationId: args.conversationId,
         requestId: args.requestId,
         outcome: "failed",
+        expectedCycleId: reservation.expectedCycleId,
+        stage: reservation.stage,
         error,
       });
       return { ok: false, status: "failed", error };
@@ -975,6 +1001,8 @@ export const sendDueFollowUp = action({
           conversationId: args.conversationId,
           requestId: args.requestId,
           outcome: "accepted",
+          expectedCycleId: reservation.expectedCycleId,
+          stage: reservation.stage,
           providerMessageId: result.providerMessageId,
           acceptedAt: Date.now(),
         });
@@ -990,6 +1018,8 @@ export const sendDueFollowUp = action({
         conversationId: args.conversationId,
         requestId: args.requestId,
         outcome,
+        expectedCycleId: reservation.expectedCycleId,
+        stage: reservation.stage,
         error: result.error,
       });
       return { ok: false, status: outcome, error: result.error };
@@ -999,6 +1029,8 @@ export const sendDueFollowUp = action({
         conversationId: args.conversationId,
         requestId: args.requestId,
         outcome: "unknown",
+        expectedCycleId: reservation.expectedCycleId,
+        stage: reservation.stage,
         error,
       });
       return { ok: false, status: "unknown", error };
@@ -1009,7 +1041,6 @@ export const sendDueFollowUp = action({
 export const confirmManualContact = mutation({
   args: {
     conversationId: v.id("conversations"),
-    stage: followUpStageValidator,
     requestId: v.string(),
   },
   returns: v.object({ ok: v.literal(true), duplicate: v.boolean() }),
@@ -1024,32 +1055,61 @@ export const confirmManualContact = mutation({
     if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
       throw new Error("unauthorized: conversation scope mismatch");
     }
-    if (!conversation.followUpCycleInboundAt) throw new Error("Follow-up ini tidak lagi jatuh tempo.");
-    const key = attemptKey(String(conversation._id), conversation.followUpCycleInboundAt, args.stage, "manual_confirmation", args.requestId);
-    const existing = await ctx.db.query("followUpAttempts")
-      .withIndex("by_org_attemptKey", (q) => q.eq("orgId", orgId).eq("attemptKey", key))
+    const existingConfirmation = await ctx.db.query("followUpTransitions")
+      .withIndex("by_org_eventKey", (q) => q.eq("orgId", orgId).eq("eventKey", `confirmation:${args.requestId}`))
       .unique();
-    if (existing?.status === "accepted") return { ok: true as const, duplicate: true };
-
+    if (existingConfirmation) {
+      if (String(existingConfirmation.conversationId) !== String(conversation._id)) {
+        throw new Error("Request ID Follow-up sudah digunakan.");
+      }
+      return { ok: true as const, duplicate: true };
+    }
+    if ((conversation.followUpStage === 1 || conversation.followUpStage === 2 || conversation.followUpStage === 3)
+      && conversation.followUpCycleInboundAt !== undefined) {
+      const cycleIdentities = conversation.followUpCycleId
+        ? [conversation.followUpCycleId, conversation.followUpCycleInboundAt]
+        : [conversation.followUpCycleInboundAt];
+      for (const cycleIdentity of cycleIdentities) {
+        const priorAttempt = await ctx.db.query("followUpAttempts")
+          .withIndex("by_org_attemptKey", (q) => q.eq("orgId", orgId).eq("attemptKey", attemptKey(
+            String(conversation._id),
+            cycleIdentity,
+            conversation.followUpStage as 1 | 2 | 3,
+            "manual_confirmation",
+            args.requestId,
+          )))
+          .unique();
+        if (priorAttempt?.status === "accepted") return { ok: true as const, duplicate: true };
+      }
+    }
     const confirmedAt = Date.now();
     if (conversation.status === "closed"
       || conversation.followUpState !== "waiting"
-      || conversation.followUpNextStage !== args.stage
-      || conversation.followUpDueAt === undefined
-      || conversation.followUpDueAt > confirmedAt
-      || conversation.followUpCycleInboundAt < confirmedAt - FOLLOW_UP_EXPIRY_MS) {
+      || conversation.followUpNextStage === undefined
+      || conversation.followUpCycleInboundAt === undefined
+      || conversation.followUpCycleId === undefined) {
       throw new Error("Follow-up ini tidak lagi jatuh tempo.");
     }
     const recap = await ctx.db.query("shippingRecaps")
       .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", orgId).eq("orderIdBerdu", conversation.orderId))
       .first();
     if (recap) throw new Error("Order sudah closing atau dibatalkan.");
+    const stage = conversation.followUpNextStage;
+    const lifecycle = await confirmCurrentStage(ctx, {
+      conversation,
+      requestId: args.requestId,
+      createdAt: confirmedAt,
+      actorName: viewer.name,
+    });
+    if (lifecycle.duplicate) return { ok: true as const, duplicate: true };
+    if (!lifecycle.applied) throw new Error("Follow-up ini tidak lagi jatuh tempo.");
     const accepted = await recordAcceptedAttempt(ctx, {
       orgId,
       conversationId: conversation._id,
       csKey: conversation.followUpCsKey ?? csKey(conversation.assignedCsName),
       cycleInboundAt: conversation.followUpCycleInboundAt,
-      stage: args.stage,
+      cycleId: conversation.followUpCycleId,
+      stage,
       method: "manual_confirmation",
       nonce: args.requestId,
       requestId: args.requestId,
@@ -1058,19 +1118,43 @@ export const confirmManualContact = mutation({
       acceptedAt: confirmedAt,
     });
     if (accepted.duplicate) return { ok: true as const, duplicate: true };
-    const next = advanceAfterAccepted(args.stage, confirmedAt);
-    await ctx.db.patch(conversation._id, {
-      followUpStage: args.stage,
-      followUpStageAt: confirmedAt,
-      followUpNextStage: next.nextStage ?? undefined,
-      followUpDueAt: next.dueAt ?? undefined,
-      followUpState: next.state,
-      followUpRequestId: args.requestId,
-      followUpProviderMessageId: undefined,
-      followUpLastError: undefined,
-      updatedAt: confirmedAt,
-    });
     return { ok: true as const, duplicate: false };
+  },
+});
+
+export const correctFollowUpStage = mutation({
+  args: {
+    conversationId: v.id("conversations"),
+    targetStage: followUpStageValidator,
+    requestId: v.string(),
+  },
+  returns: v.object({ ok: v.literal(true), duplicate: v.boolean() }),
+  handler: async (ctx, args) => {
+    if (!REQUEST_ID_RE.test(args.requestId)) throw new Error("Request ID Follow-up tidak valid.");
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.correctFollowUpStage",
+    );
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || String(conversation.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
+    if (conversation.status === "closed") throw new Error("Percakapan sudah ditutup.");
+    if (conversation.followUpState === "sending" || conversation.followUpState === "unknown") {
+      throw new Error("Status pengiriman belum diketahui. Periksa riwayat KirimDev sebelum mengubah tahap.");
+    }
+    const recap = await ctx.db.query("shippingRecaps")
+      .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", orgId).eq("orderIdBerdu", conversation.orderId))
+      .first();
+    if (recap) throw new Error("Order sudah closing atau dibatalkan.");
+    const result = await correctCurrentStage(ctx, {
+      conversation,
+      targetStage: args.targetStage,
+      requestId: args.requestId,
+      actorName: viewer.name,
+    });
+    return { ok: true as const, duplicate: result.duplicate };
   },
 });
 
@@ -1215,15 +1299,13 @@ export const archiveFollowUp = mutation({
       throw new Error("unauthorized: conversation scope mismatch");
     }
     const now = Date.now();
-    await ctx.db.patch(args.conversationId, {
-      status: "closed",
-      followUpArchivedAt: now,
-      followUpNextStage: undefined,
-      followUpDueAt: undefined,
-      followUpState: "archived",
-      followUpRequestId: undefined,
-      followUpLastError: undefined,
-      updatedAt: now,
+    await terminateCycle(ctx, {
+      conversation: c,
+      eventKey: `archive:${c.followUpCycleId ?? String(c._id)}`,
+      kind: "archived",
+      createdAt: now,
+      actorName: viewer.name,
+      source: "manual",
     });
     return { ok: true as const };
   },
@@ -1241,16 +1323,7 @@ export const unarchiveFollowUp = mutation({
       throw new Error("unauthorized: conversation scope mismatch");
     }
     const now = Date.now();
-    await ctx.db.patch(args.conversationId, {
-      status: "active",
-      followUpArchivedAt: undefined,
-      followUpNextStage: undefined,
-      followUpDueAt: undefined,
-      followUpState: undefined,
-      followUpRequestId: undefined,
-      followUpLastError: undefined,
-      updatedAt: now,
-    });
+    await reopenArchivedCycle(ctx, { conversation: c, createdAt: now });
     return { ok: true as const };
   },
 });
