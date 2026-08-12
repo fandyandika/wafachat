@@ -172,6 +172,20 @@ test("org isolation: same orderId in two orgs = TWO rows; org-B upsert never pat
   });
 });
 
+test('order reassignment preserves active-cycle ownership and refreshes idle ownership', async () => {
+  const t = convexTest(schema, modules);
+  const admin = t.withIdentity({ subject: 'reassign-admin', role: 'admin', name: 'Admin', email: 'reassign@w' });
+  const { orgId } = await admin.mutation(api.orgs.seedDefaultOrg, {});
+  await t.mutation(internal.state.upsertOrderFromN8n, { phone: '628-reassign', csName: 'Nabila', order_id: 'REASSIGN-1' });
+  const conversationId = await t.run(async (ctx) => (await ctx.db.query('conversations').withIndex('by_org_orderId', (q) => q.eq('orgId', orgId).eq('orderId', 'REASSIGN-1')).unique())!._id);
+  await t.run((ctx) => ctx.db.patch(conversationId, { followUpCsKey: undefined, followUpCycleId: 'cycle-nabila', followUpNextStage: 1, followUpDueAt: Date.now(), followUpState: 'waiting' }));
+  await t.mutation(internal.state.upsertOrderFromN8n, { phone: '628-reassign', csName: 'Aisyah', order_id: 'REASSIGN-1' });
+  await expect(t.run((ctx) => ctx.db.get(conversationId))).resolves.toMatchObject({ assignedCsName: 'Aisyah', followUpCsKey: 'nabila' });
+  await t.run((ctx) => ctx.db.patch(conversationId, { followUpCycleId: undefined, followUpNextStage: undefined, followUpDueAt: undefined, followUpState: undefined }));
+  await t.mutation(internal.state.upsertOrderFromN8n, { phone: '628-reassign', csName: 'Aisyah', order_id: 'REASSIGN-1' });
+  await expect(t.run((ctx) => ctx.db.get(conversationId))).resolves.toMatchObject({ assignedCsName: 'Aisyah', followUpCsKey: 'aisyah' });
+});
+
 test("order ingestion snapshots product context and the due queue does not reread a later order row", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({

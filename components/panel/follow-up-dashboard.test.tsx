@@ -3,9 +3,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { getFunctionName } from 'convex/server';
 
-const { usePaginatedQueryMock, useQueryMock } = vi.hoisted(() => ({
+const { usePaginatedQueryMock, useQueryMock, buttonClicks } = vi.hoisted(() => ({
   usePaginatedQueryMock: vi.fn(),
   useQueryMock: vi.fn(),
+  buttonClicks: new Map<string, () => void>(),
 }));
 
 (globalThis as any).React = React;
@@ -15,9 +16,15 @@ vi.mock('convex/react', () => ({
   useQuery: useQueryMock,
 }));
 vi.mock('@/components/panel/use-panel-filters', () => ({ usePanelFilters: () => ({ cs: 'all' }) }));
+vi.mock('@/components/ui/button', () => ({
+  Button: ({ children, onClick, ...props }: any) => {
+    if (typeof children === 'string' && onClick) buttonClicks.set(children, onClick);
+    return <button onClick={onClick} {...props}>{children}</button>;
+  },
+}));
 
 import { api } from '@/convex/_generated/api';
-import { FollowUpDashboard, getNextFollowUpTabIndex } from './follow-up-dashboard';
+import { FollowUpDashboard, getNextFollowUpTabIndex, selectionAfterCompletedAction, loadActiveFollowUpPage } from './follow-up-dashboard';
 
 beforeEach(() => {
   useQueryMock.mockReset();
@@ -26,6 +33,7 @@ beforeEach(() => {
     .mockReturnValueOnce({ h1: 3, h2: 2, h3: 1, review: 4 })
     .mockReturnValue(undefined);
   usePaginatedQueryMock.mockReset();
+  buttonClicks.clear();
   usePaginatedQueryMock.mockReturnValue({
     results: [], status: 'Exhausted', isLoading: false, loadMore: vi.fn(),
   });
@@ -66,10 +74,38 @@ test.each([
 });
 
 test('active pagination exposes a load-more control without querying inactive tabs', () => {
-  usePaginatedQueryMock.mockReturnValue({ results: [], status: 'CanLoadMore', isLoading: false, loadMore: vi.fn() });
+  const pagers = Array.from({ length: 4 }, () => vi.fn());
+  usePaginatedQueryMock.mockImplementation((_query, args) => ({ results: [], status: 'CanLoadMore', isLoading: false, loadMore: pagers[usePaginatedQueryMock.mock.calls.length - 1] }));
   const html = renderToStaticMarkup(<FollowUpDashboard initialMe={{ name: 'Owner', role: 'admin' }} initialView="archived" />);
   expect(html).toContain('Muat berikutnya');
   expect(usePaginatedQueryMock.mock.calls.filter(([, args]) => args !== 'skip')).toHaveLength(1);
+  buttonClicks.get('Muat berikutnya')?.();
+  expect(pagers[3]).toHaveBeenCalledWith(30);
+  expect(pagers.slice(0, 3).every((pager) => pager.mock.calls.length === 0)).toBe(true);
+});
+
+test('reactive page failure exposes retry wired to the active pager', () => {
+  const retry = vi.fn();
+  usePaginatedQueryMock.mockReturnValue({ results: [], status: 'Error', error: new Error('Query gagal'), isLoading: false, loadMore: retry });
+  const html = renderToStaticMarkup(<FollowUpDashboard initialMe={{ name: 'Owner', role: 'admin' }} initialView="review" />);
+  expect(html).toContain('Query gagal');
+  expect(html).toContain('Coba lagi');
+  loadActiveFollowUpPage({ loadMore: retry });
+  expect(retry).toHaveBeenCalledWith(30);
+});
+
+test('deferred completion from customer A cannot clear newly selected customer B', async () => {
+  const { completeFollowUpAction } = await import('./follow-up/follow-up-detail');
+  let selected = { conversationId: 'conversation-a' } as any;
+  let resolve!: (result: { success: true }) => void;
+  const action = new Promise<{ success: true }>((done) => { resolve = done; });
+  const pending = completeFollowUpAction(() => action, 'conversation-a', (actedId) => {
+    selected = selectionAfterCompletedAction(selected, actedId);
+  });
+  selected = { conversationId: 'conversation-b' } as any;
+  resolve({ success: true });
+  await pending;
+  expect(selected.conversationId).toBe('conversation-b');
 });
 
 test('counts are reactive and search is an explicit action', () => {

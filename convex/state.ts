@@ -331,6 +331,9 @@ export async function upsertOrderCore(
       await ctx.db.patch(existingConversation._id, {
         customerName,
         assignedCsName: canon.csName,
+        followUpCsKey: existingConversation.followUpCycleId
+          ? existingConversation.followUpCsKey ?? csKey(existingConversation.assignedCsName)
+          : canon.key,
         status: existingConversation.status === "active" ? "active"
           : existingConversation.status === "closed" || aiEligible ? "active"
           : existingConversation.status,
@@ -585,6 +588,7 @@ export async function markConversationCancelledCore(ctx: any, args: {
   note?: string;
   orderId?: string;
   phone?: string;
+  requiredCycleId?: string;
 }) {
     const now = Date.now();
     const { conversation, orgId } = args;
@@ -596,6 +600,18 @@ export async function markConversationCancelledCore(ctx: any, args: {
     });
     const nextNote = args.note ?? "customer cancelled";
 
+    if (args.requiredCycleId && conversation.followUpCycleId !== args.requiredCycleId) {
+      throw new Error("Siklus follow-up sudah berubah.");
+    }
+    const lifecycle = await terminateCycle(ctx, {
+      conversation,
+      eventKey: `terminal:cancelled:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+      kind: "cancelled",
+      createdAt: now,
+      source: "manual",
+    });
+    if (args.requiredCycleId && !lifecycle.applied) throw new Error("Siklus follow-up tidak aktif atau sudah berubah.");
+
     await patchClosingStatsWithKey(ctx, {
       key: transitionKey,
       remove: true,
@@ -604,14 +620,6 @@ export async function markConversationCancelledCore(ctx: any, args: {
       field: "cancelled",
       keyField: "cancelledKeys",
       key: transitionKey,
-    });
-
-    await terminateCycle(ctx, {
-      conversation,
-      eventKey: `terminal:cancelled:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
-      kind: "cancelled",
-      createdAt: now,
-      source: "manual",
     });
 
     await ctx.db.patch(conversation._id, {
@@ -716,6 +724,7 @@ export async function markConversationClosingCore(ctx: any, args: {
   note?: string;
   orderId?: string;
   phone?: string;
+  requiredCycleId?: string;
 }) {
     const now = Date.now();
     const { conversation, orgId } = args;
@@ -727,16 +736,20 @@ export async function markConversationClosingCore(ctx: any, args: {
     });
     const nextNote = args.note ?? "manual closing by CS";
 
-    await patchClosingStatsWithKey(ctx, {
-      key: transitionKey,
-      source: "manual",
-    });
-
-    await terminateCycle(ctx, {
+    if (args.requiredCycleId && conversation.followUpCycleId !== args.requiredCycleId) {
+      throw new Error("Siklus follow-up sudah berubah.");
+    }
+    const lifecycle = await terminateCycle(ctx, {
       conversation,
       eventKey: `terminal:closing:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
       kind: "closing",
       createdAt: now,
+      source: "manual",
+    });
+    if (args.requiredCycleId && !lifecycle.applied) throw new Error("Siklus follow-up tidak aktif atau sudah berubah.");
+
+    await patchClosingStatsWithKey(ctx, {
+      key: transitionKey,
       source: "manual",
     });
 

@@ -21,9 +21,9 @@ import { formatFollowUpTime } from './follow-up-status';
 function waNumber(phone: string) { return phone.replace(/\D/g, '').replace(/^0/, '62'); }
 function isQueueRow(row: FollowUpActionRow): row is FollowUpQueueRow { return 'cycleInboundAt' in row; }
 
-export async function completeFollowUpAction<T>(action: () => Promise<T>, onChanged?: () => void): Promise<T> {
+export async function completeFollowUpAction<T>(action: () => Promise<T>, conversationId: string, onChanged?: (conversationId: string) => void): Promise<T> {
   const result = await action();
-  onChanged?.();
+  onChanged?.(conversationId);
   return result;
 }
 
@@ -40,7 +40,7 @@ const TRANSITION_LABEL = {
 export function FollowUpDetail({ candidate, onBack, onChanged, onSendTemplate }: {
   candidate: FollowUpActionRow | null;
   onBack?: () => void;
-  onChanged?: () => void;
+  onChanged?: (conversationId: string) => void;
   onSendTemplate?: (candidate: FollowUpQueueRow) => void;
 }) {
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -76,7 +76,7 @@ export function FollowUpDetail({ candidate, onBack, onChanged, onSendTemplate }:
       const result = await action() as { success?: boolean; error?: string } | undefined;
       if (result?.success === false) throw new Error(result.error || 'Tindakan tidak dapat diselesaikan.');
       setFeedback({ tone: 'success', message: success });
-      await completeFollowUpAction(async () => result, onChanged);
+      await completeFollowUpAction(async () => result, currentCandidate.conversationId, onChanged);
     } catch (error) {
       setFeedback({ tone: 'error', message: error instanceof Error ? error.message : 'Tindakan gagal. Coba lagi.' });
     } finally {
@@ -147,8 +147,8 @@ export function FollowUpDetail({ candidate, onBack, onChanged, onSendTemplate }:
       <a href={`https://wa.me/${waNumber(candidate.customerPhone)}`} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center justify-center rounded-lg border bg-background px-3 text-center text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">Buka WhatsApp</a>
       {queue ? <Button type="button" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => onSendTemplate?.(queue)}>Kirim template</Button> : null}
       <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('contact', () => confirmContact({ conversationId: candidate.conversationId, requestId: crypto.randomUUID() }), 'Kontak manual berhasil dicatat.')}>{busyAction === 'contact' ? 'Mencatat…' : 'Sudah dihubungi'}</Button>
-      <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('closing', () => markClosing({ conversationId: candidate.conversationId as Id<'conversations'> }), 'Closing berhasil dicatat.')}>Closing</Button>
-      <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('cancel', () => markCancelled({ conversationId: candidate.conversationId as Id<'conversations'>, reason: 'Customer membatalkan pesanan' }), 'Pembatalan berhasil dicatat.')}>Batal</Button>
+      <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('closing', () => markClosing({ conversationId: candidate.conversationId as Id<'conversations'>, expectedCycleId: candidate.cycleId ?? '' }), 'Closing berhasil dicatat.')}>Closing</Button>
+      <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('cancel', () => markCancelled({ conversationId: candidate.conversationId as Id<'conversations'>, expectedCycleId: candidate.cycleId ?? '', reason: 'Customer membatalkan pesanan' }), 'Pembatalan berhasil dicatat.')}>Batal</Button>
       <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('archive', () => archiveFollowUp(candidate.conversationId), 'Follow-up diarsipkan.')}>{busyAction === 'archive' ? 'Mengarsipkan…' : 'Arsip'}</Button>
     </footer>
   </div>;

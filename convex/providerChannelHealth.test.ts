@@ -125,7 +125,7 @@ test('getProviderChannelHealthForCs finds an exact canonical key beyond the newe
   const orgId = await seedOrg(t);
   await t.run(async (ctx) => {
     await touchProviderChannelHealth(ctx, {
-      orgId, providerNumberId: 'pn-exact', channelType: 'cs', csKey: 'siti-nur-aulia', direction: 'inbound', touchedAt: 1,
+      orgId, providerNumberId: 'pn-exact', channelType: 'cs', csKey: 'sitinuraulia', direction: 'inbound', touchedAt: 1,
     });
     for (let i = 0; i < 60; i++) {
       await touchProviderChannelHealth(ctx, {
@@ -134,7 +134,7 @@ test('getProviderChannelHealthForCs finds an exact canonical key beyond the newe
     }
   });
   await expect(asAdmin(t).query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'siti-nur-aulia' }))
-    .resolves.toMatchObject({ providerNumberId: 'pn-exact', csKey: 'siti-nur-aulia' });
+    .resolves.toMatchObject({ providerNumberId: 'pn-exact', csKey: 'sitinuraulia' });
 });
 
 test('exact channel health lookup is tenant-scoped and authenticated', async () => {
@@ -142,10 +142,35 @@ test('exact channel health lookup is tenant-scoped and authenticated', async () 
   const orgId = await seedOrg(t);
   const otherOrgId = await t.run((ctx) => ctx.db.insert('organizations', { slug: 'other-health', name: 'Other', createdAt: 1, updatedAt: 1 }));
   await t.run(async (ctx) => {
-    await touchProviderChannelHealth(ctx, { orgId, providerNumberId: 'ours', channelType: 'cs', csKey: 'queen-risma', direction: 'inbound', touchedAt: 1 });
-    await touchProviderChannelHealth(ctx, { orgId: otherOrgId, providerNumberId: 'theirs', channelType: 'cs', csKey: 'queen-risma', direction: 'inbound', touchedAt: 2 });
+    await touchProviderChannelHealth(ctx, { orgId, providerNumberId: 'ours', channelType: 'cs', csKey: 'queenrisma', direction: 'inbound', touchedAt: 1 });
+    await touchProviderChannelHealth(ctx, { orgId: otherOrgId, providerNumberId: 'theirs', channelType: 'cs', csKey: 'queenrisma', direction: 'inbound', touchedAt: 2 });
   });
   await expect(t.query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'queen-risma' })).rejects.toThrow(/unauthorized/);
   await expect(asAdmin(t).query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'queen-risma' }))
     .resolves.toMatchObject({ providerNumberId: 'ours' });
+});
+
+test('CS health lookup is server-scoped to its own canonical identity', async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const userId = await t.run((ctx) => ctx.db.insert('users', { orgId, email: 'siti@w', name: 'Siti Nur, Aulia', passwordHash: 'x', role: 'cs', csName: 'Siti Nur, Aulia', isActive: true, createdAt: 1, updatedAt: 1 }));
+  await t.run(async (ctx) => {
+    await touchProviderChannelHealth(ctx, { orgId, providerNumberId: 'siti-provider', channelType: 'cs', csKey: 'sitinuraulia', direction: 'inbound', touchedAt: 1 });
+    await touchProviderChannelHealth(ctx, { orgId, providerNumberId: 'lila-provider', channelType: 'cs', csKey: 'lila', direction: 'inbound', touchedAt: 2 });
+  });
+  const cs = t.withIdentity({ subject: String(userId), role: 'cs', name: 'Siti Nur, Aulia', email: 'siti@w', csName: 'Siti Nur, Aulia' });
+  await expect(cs.query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'lila' }))
+    .resolves.toMatchObject({ providerNumberId: 'siti-provider', csKey: 'sitinuraulia' });
+});
+
+test('exact health deterministically returns the newest error across multiple provider numbers', async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    await touchProviderChannelHealth(ctx, { orgId, providerNumberId: 'healthy-newest', channelType: 'cs', csKey: 'aisyah', direction: 'inbound', touchedAt: 500 });
+    await touchProviderChannelHealth(ctx, { orgId, providerNumberId: 'error-old', channelType: 'cs', csKey: 'aisyah', direction: 'outbound', touchedAt: 200, diagnostic: 'Old error' });
+    await touchProviderChannelHealth(ctx, { orgId, providerNumberId: 'error-new', channelType: 'cs', csKey: 'aisyah', direction: 'outbound', touchedAt: 300, diagnostic: 'Newest error' });
+  });
+  await expect(asAdmin(t).query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'CS Aisyah' }))
+    .resolves.toMatchObject({ providerNumberId: 'error-new', lastError: 'Newest error' });
 });

@@ -43,6 +43,14 @@ function rowId(row: FollowUpListRow): string {
   return row.conversationId ?? `${row.customerPhone}:${row.orderId}`;
 }
 
+export function selectionAfterCompletedAction(current: FollowUpListRow | null, actedConversationId: string): FollowUpListRow | null {
+  return current && current.conversationId === actedConversationId ? null : current;
+}
+
+export function loadActiveFollowUpPage(page: { loadMore: (count: number) => void }) {
+  page.loadMore(30);
+}
+
 function stageForView(view: FollowUpView): FollowUpStage | null {
   if (view === 'h1') return 1;
   if (view === 'h2') return 2;
@@ -64,6 +72,8 @@ export function FollowUpDashboard({ initialMe, initialView = 'h1' }: { initialMe
   const [templateCandidate, setTemplateCandidate] = useState<FollowUpQueueRow | null>(null);
   const [queryNow] = useState(() => Date.now());
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const selectedRef = useRef<FollowUpListRow | null>(null);
+  selectedRef.current = selected;
 
   useEffect(() => {
     if (initialMe) return;
@@ -104,6 +114,9 @@ export function FollowUpDashboard({ initialMe, initialView = 'h1' }: { initialMe
   const templateSetup = useQuery(api.followUpTemplates.getFollowUpTemplateSetup, templateCandidate ? {} : 'skip');
 
   const activePage = activeStage ? stagePage : view === 'review' ? reviewPage : view === 'closing' ? closingPage : archivePage;
+  const reactiveError = activePage.status === ('Error' as typeof activePage.status)
+    ? ((activePage as unknown as { error?: Error }).error?.message ?? 'Data follow-up gagal dimuat.')
+    : null;
   const reactiveRows = activePage.results as FollowUpListRow[];
   const rows = searchRows ?? reactiveRows;
   const loading = searchRows === null && activePage.status === 'LoadingFirstPage' || searchLoading;
@@ -180,13 +193,17 @@ export function FollowUpDashboard({ initialMe, initialView = 'h1' }: { initialMe
     <div className="flex min-h-0 flex-1">
       <section className={`${mobileDetail ? 'hidden md:block' : 'block'} w-full overflow-y-auto border-r md:w-[27rem] md:shrink-0`}>
         <div className="border-b px-4 py-3"><p className="font-semibold">{searchRows === null ? activeView.label : 'Hasil pencarian'}</p><p className="text-xs text-muted-foreground">{searchRows === null ? activeView.description : `Hasil untuk “${searchInput.trim()}”`}</p></div>
-        <FollowUpList view={listView} rows={rows} loading={loading} error={searchError} selectedId={selected ? rowId(selected) : null} onSelect={selectRow} onRetry={searchError ? runSearch : undefined} />
-        {searchRows === null && (activePage.status === 'CanLoadMore' || activePage.status === 'LoadingMore') ? <div className="p-3"><Button variant="outline" className="min-h-11 w-full" disabled={activePage.status === 'LoadingMore'} onClick={() => activePage.loadMore(30)}>{activePage.status === 'LoadingMore' ? 'Memuat…' : 'Muat berikutnya'}</Button></div> : null}
+        <FollowUpList view={listView} rows={rows} loading={loading} error={searchError ?? reactiveError} selectedId={selected ? rowId(selected) : null} onSelect={selectRow} onRetry={searchError ? runSearch : reactiveError ? () => loadActiveFollowUpPage(activePage) : undefined} />
+        {searchRows === null && (activePage.status === 'CanLoadMore' || activePage.status === 'LoadingMore') ? <div className="p-3"><Button variant="outline" className="min-h-11 w-full" disabled={activePage.status === 'LoadingMore'} onClick={() => loadActiveFollowUpPage(activePage)}>{activePage.status === 'LoadingMore' ? 'Memuat…' : 'Muat berikutnya'}</Button></div> : null}
       </section>
 
       <main className={`${mobileDetail ? 'block' : 'hidden md:block'} min-w-0 flex-1`}>
         {actionSelection
-          ? <FollowUpDetail candidate={actionSelection} onBack={() => setMobileDetail(false)} onChanged={() => { setSelected(null); setMobileDetail(false); }} onSendTemplate={setTemplateCandidate} />
+          ? <FollowUpDetail candidate={actionSelection} onBack={() => setMobileDetail(false)} onChanged={(actedConversationId) => {
+            if (selectedRef.current?.conversationId !== actedConversationId) return;
+            setSelected((current) => selectionAfterCompletedAction(current, actedConversationId));
+            setMobileDetail(false);
+          }} onSendTemplate={setTemplateCandidate} />
           : readOnlySelection
             ? <FollowUpReadOnlyDetail row={readOnlySelection} onBack={() => setMobileDetail(false)} />
             : <FollowUpDetail candidate={null} />}

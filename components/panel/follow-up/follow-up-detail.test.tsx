@@ -96,10 +96,21 @@ test('successful actions close immediately without scheduling a stale callback',
   vi.useFakeTimers();
   const { completeFollowUpAction } = await import('./follow-up-detail');
   const changed = vi.fn();
-  await expect(completeFollowUpAction(async () => ({ success: true }), changed)).resolves.toEqual({ success: true });
-  expect(changed).toHaveBeenCalledOnce();
+  await expect(completeFollowUpAction(async () => ({ success: true }), 'c1', changed)).resolves.toEqual({ success: true });
+  expect(changed).toHaveBeenCalledWith('c1');
   expect(vi.getTimerCount()).toBe(0);
   vi.useRealTimers();
+});
+
+test('deferred action completion carries the acted conversation token', async () => {
+  const { completeFollowUpAction } = await import('./follow-up-detail');
+  let resolve!: (value: { success: true }) => void;
+  const deferred = new Promise<{ success: true }>((done) => { resolve = done; });
+  const changed = vi.fn();
+  const pending = completeFollowUpAction(() => deferred, 'conversation-a', changed);
+  resolve({ success: true });
+  await expect(pending).resolves.toEqual({ success: true });
+  expect(changed).toHaveBeenCalledWith('conversation-a');
 });
 
 test('mobile action bar is sticky, opaque, touch sized, and focus visible', () => {

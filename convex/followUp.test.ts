@@ -382,16 +382,53 @@ test('assigned CS can close or cancel its follow-up while cross-CS and cross-org
     orgId, email: 'siti.nur+fu@wafachat.test', name: 'Siti Nur Aulia', passwordHash: 'x', role: 'cs', csName: 'Siti Nur Aulia', isActive: true, createdAt: 1, updatedAt: 1,
   }));
   const ids = await t.run(async (ctx) => ({
-    closing: await ctx.db.insert('conversations', { orgId, ...convBase, assignedCsName: 'Siti Nur Aulia', customerPhone: '628111', orderId: 'CS-CLOSE', followUpCsKey: 'siti-nur-aulia', followUpCycleId: 'cycle-close', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
-    cancel: await ctx.db.insert('conversations', { orgId, ...convBase, assignedCsName: 'Siti Nur Aulia', customerPhone: '628112', orderId: 'CS-CANCEL', followUpCsKey: 'siti-nur-aulia', followUpCycleId: 'cycle-cancel', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
+    closing: await ctx.db.insert('conversations', { orgId, ...convBase, assignedCsName: 'Siti Nur Aulia', customerPhone: '628111', orderId: 'CS-CLOSE', followUpCsKey: 'sitinuraulia', followUpCycleId: 'cycle-close', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
+    cancel: await ctx.db.insert('conversations', { orgId, ...convBase, assignedCsName: 'Siti Nur Aulia', customerPhone: '628112', orderId: 'CS-CANCEL', followUpCsKey: 'sitinuraulia', followUpCycleId: 'cycle-cancel', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
     otherCs: await ctx.db.insert('conversations', { orgId, ...convBase, assignedCsName: 'Lila', customerPhone: '628113', orderId: 'OTHER-CS-ACTION', followUpCsKey: 'lila', followUpCycleId: 'cycle-other', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
-    otherOrg: await ctx.db.insert('conversations', { orgId: otherOrgId, ...convBase, assignedCsName: 'Siti Nur Aulia', customerPhone: '628114', orderId: 'OTHER-ORG-ACTION', followUpCsKey: 'siti-nur-aulia', followUpCycleId: 'cycle-other-org', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
+    otherOrg: await ctx.db.insert('conversations', { orgId: otherOrgId, ...convBase, assignedCsName: 'Siti Nur Aulia', customerPhone: '628114', orderId: 'OTHER-ORG-ACTION', followUpCsKey: 'sitinuraulia', followUpCycleId: 'cycle-other-org', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
   }));
   const asCs = t.withIdentity({ subject: String(userId), role: 'cs', name: 'Siti Nur Aulia', email: 'siti.nur+fu@wafachat.test', csName: 'Siti Nur Aulia' });
-  await expect(asCs.mutation(api.followUp.markFollowUpClosing, { conversationId: ids.closing })).resolves.toMatchObject({ success: true });
-  await expect(asCs.mutation(api.followUp.markFollowUpCancelled, { conversationId: ids.cancel, reason: 'Customer membatalkan pesanan' })).resolves.toMatchObject({ success: true });
-  await expect(asCs.mutation(api.followUp.markFollowUpClosing, { conversationId: ids.otherCs })).rejects.toThrow(/scope mismatch|unauthorized/i);
-  await expect(asCs.mutation(api.followUp.markFollowUpCancelled, { conversationId: ids.otherOrg, reason: 'Batal' })).rejects.toThrow(/tidak ditemukan|unauthorized/i);
+  await expect(asCs.mutation(api.followUp.markFollowUpClosing, { conversationId: ids.closing, expectedCycleId: 'cycle-close' })).resolves.toMatchObject({ success: true });
+  await expect(asCs.mutation(api.followUp.markFollowUpCancelled, { conversationId: ids.cancel, expectedCycleId: 'cycle-cancel', reason: 'Customer membatalkan pesanan' })).resolves.toMatchObject({ success: true });
+  await expect(asCs.mutation(api.followUp.markFollowUpClosing, { conversationId: ids.otherCs, expectedCycleId: 'cycle-other' })).rejects.toThrow(/scope mismatch|unauthorized/i);
+  await expect(asCs.mutation(api.followUp.markFollowUpCancelled, { conversationId: ids.otherOrg, expectedCycleId: 'cycle-other-org', reason: 'Batal' })).rejects.toThrow(/tidak ditemukan|unauthorized/i);
+});
+
+test('terminal ownership follows the active cycle owner rather than stale assigned CS', async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const userId = await t.run((ctx) => ctx.db.insert('users', {
+    orgId, email: 'cycle-owner@wafachat.test', name: 'Aisyah', passwordHash: 'x', role: 'cs', csName: 'Aisyah', isActive: true, createdAt: 1, updatedAt: 1,
+  }));
+  const asAisyah = t.withIdentity({ subject: String(userId), role: 'cs', name: 'Aisyah', email: 'cycle-owner@wafachat.test', csName: 'Aisyah' });
+  const owned = await t.run((ctx) => ctx.db.insert('conversations', {
+    orgId, ...convBase, orderId: 'OWN-1', customerPhone: '628-own-1', assignedCsName: 'Lila', followUpCsKey: 'aisyah', followUpCycleId: 'owned-cycle', followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting',
+  }));
+  const staleAssigned = await t.run((ctx) => ctx.db.insert('conversations', {
+    orgId, ...convBase, customerPhone: '628-own-2', orderId: 'OWN-2', assignedCsName: 'Aisyah', followUpCsKey: 'lila', followUpCycleId: 'lila-cycle', followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting',
+  }));
+  await expect(asAisyah.mutation(api.followUp.markFollowUpClosing, { conversationId: owned, expectedCycleId: 'owned-cycle' })).resolves.toMatchObject({ success: true });
+  await expect(asAisyah.mutation(api.followUp.markFollowUpClosing, { conversationId: staleAssigned, expectedCycleId: 'lila-cycle' })).rejects.toThrow(/scope mismatch/i);
+});
+
+test.each([
+  ['idle', { followUpCycleId: undefined, followUpNextStage: undefined, followUpState: undefined }],
+  ['replied', { followUpCycleId: undefined, followUpNextStage: undefined, followUpState: undefined, followUpLastInboundAt: now + 1 }],
+  ['archived', { followUpCycleId: 'archived-cycle', followUpNextStage: undefined, followUpState: 'archived' }],
+  ['replacement', { followUpCycleId: 'replacement-cycle', followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }],
+] as const)('terminal action rejects %s lifecycle without writing sales state', async (_name, lifecycle) => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const conversationId = await t.run((ctx) => ctx.db.insert('conversations', {
+    orgId, ...convBase, orderId: `TERMINAL-${_name}`, customerPhone: `628-terminal-${_name}`, followUpCsKey: 'nabila', ...lifecycle,
+  }));
+  const admin = t.withIdentity({ subject: 'terminal-admin', role: 'admin', name: 'Admin', email: 'terminal@wafachat' });
+  await expect(admin.mutation(api.followUp.markFollowUpClosing, { conversationId, expectedCycleId: 'expected-cycle' })).rejects.toThrow(/sudah berubah|tidak aktif/i);
+  await expect(admin.mutation(api.followUp.markFollowUpCancelled, { conversationId, expectedCycleId: 'expected-cycle', reason: 'Customer membatalkan' })).rejects.toThrow(/sudah berubah|tidak aktif/i);
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query('events').collect()).toHaveLength(0);
+    expect(await ctx.db.query('dailyStats').collect()).toHaveLength(0);
+  });
 });
 
 test("closing view paginates one interleaved counted stream despite newer cancellations", async () => {
@@ -449,7 +486,7 @@ test("closing view paginates one interleaved counted stream despite newer cancel
         sourceMessageText: "",
         version: 1,
         followUpTouchesAtClose: i % 4,
-        followUpCsKey: i === 0 ? "nabila" : undefined,
+        followUpCsKey: i <= 1 ? "nabila" : undefined,
         followUpStage: i === 0 ? 3 : undefined,
         followUpProductName: i === 0 ? "Quran Mapping Snapshot" : undefined,
         followUpLastInboundPreview: i === 0 ? "Customer closing context" : undefined,

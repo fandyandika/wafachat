@@ -1,6 +1,7 @@
 import { query } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { requireMemberOrg } from "./authz";
+import { requireMemberOrg, requireScopedMemberOrg } from "./authz";
+import { csKey } from "./lib";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 
@@ -17,6 +18,7 @@ export type ProviderChannelHealthTouch = {
 };
 
 export async function touchProviderChannelHealth(ctx: { db: any }, args: ProviderChannelHealthTouch) {
+  const canonicalCsKey = args.csKey ? csKey(args.csKey) : undefined;
   const existing = await ctx.db
     .query("providerChannelHealth")
     .withIndex("by_org_providerNumberId", (q: any) => q
@@ -32,11 +34,11 @@ export async function touchProviderChannelHealth(ctx: { db: any }, args: Provide
     ? {}
     : diagnostic
       ? {
-          csKey: args.channelType === "unknown" ? undefined : args.csKey,
+          csKey: args.channelType === "unknown" ? undefined : canonicalCsKey,
           lastError: diagnostic,
           errorAt: Math.max(existing?.errorAt ?? 0, args.touchedAt),
         }
-      : { csKey: args.csKey, lastError: undefined, errorAt: undefined };
+      : { csKey: canonicalCsKey, lastError: undefined, errorAt: undefined };
   const value = {
     channelType: isLatest || !existing ? args.channelType : existing.channelType,
     ...directionPatch,
@@ -122,12 +124,18 @@ export const getProviderChannelHealthForCs = query({
   args: { csKey: v.string() },
   returns: channelHealthResult,
   handler: async (ctx, args) => {
-    const { orgId } = await requireMemberOrg(ctx, "providerChannelHealth.getProviderChannelHealthForCs");
-    const key = args.csKey.trim();
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "providerChannelHealth.getProviderChannelHealthForCs");
+    const key = csKey(viewer.role === "cs" ? effectiveCsName ?? "" : args.csKey);
     if (!key) throw new Error("CS key wajib tersedia.");
-    const row = await ctx.db.query("providerChannelHealth")
+    const rows = await ctx.db.query("providerChannelHealth")
       .withIndex("by_org_csKey", (q) => q.eq("orgId", orgId).eq("csKey", key))
-      .first();
+      .collect();
+    const row = rows.sort((left, right) => {
+      const errorDifference = Number(Boolean(right.lastError)) - Number(Boolean(left.lastError));
+      if (errorDifference !== 0) return errorDifference;
+      const timeDifference = (right.errorAt ?? right.updatedAt) - (left.errorAt ?? left.updatedAt);
+      return timeDifference || left.providerNumberId.localeCompare(right.providerNumberId);
+    })[0];
     if (!row) return null;
     return {
       _id: row._id,

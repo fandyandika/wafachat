@@ -605,7 +605,14 @@ export const listClosedFollowUpsPage = query({
           product: row.packageContent,
           touches,
           fromFollowUp: touches > 0,
-          contextAvailable: row.followUpCsKey !== undefined,
+          contextAvailable: row.followUpStage !== undefined
+            || row.followUpProductName !== undefined
+            || row.followUpLastInboundPreview !== undefined
+            || row.followUpLastInboundAt !== undefined
+            || row.followUpLastOutboundPreview !== undefined
+            || row.followUpLastOutboundAt !== undefined
+            || row.followUpLastDetectedStage !== undefined
+            || row.followUpLastDetectedTemplate !== undefined,
           stage: row.followUpStage,
           productName: row.followUpProductName,
           lastInboundPreview: row.followUpLastInboundPreview,
@@ -1190,27 +1197,27 @@ async function scopedFollowUpConversation(ctx: any, conversationId: Id<"conversa
   const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, functionName);
   const conversation = await ctx.db.get(conversationId);
   if (!conversation || String(conversation.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
-  if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
+  if (viewer.role === "cs" && (!effectiveCsName || conversation.followUpCsKey !== csKey(effectiveCsName))) {
     throw new Error("unauthorized: conversation scope mismatch");
   }
   return { orgId, conversation };
 }
 
 export const markFollowUpClosing = mutation({
-  args: { conversationId: v.id("conversations") },
+  args: { conversationId: v.id("conversations"), expectedCycleId: v.string() },
   handler: async (ctx, args) => {
     const { orgId, conversation } = await scopedFollowUpConversation(ctx, args.conversationId, "followUp.markFollowUpClosing");
-    return markConversationClosingCore(ctx, { orgId, conversation });
+    return markConversationClosingCore(ctx, { orgId, conversation, requiredCycleId: args.expectedCycleId });
   },
 });
 
 export const markFollowUpCancelled = mutation({
-  args: { conversationId: v.id("conversations"), reason: v.string() },
+  args: { conversationId: v.id("conversations"), expectedCycleId: v.string(), reason: v.string() },
   handler: async (ctx, args) => {
     const reason = args.reason.trim();
     if (!reason) throw new Error("Alasan pembatalan wajib diisi.");
     const { orgId, conversation } = await scopedFollowUpConversation(ctx, args.conversationId, "followUp.markFollowUpCancelled");
-    return markConversationCancelledCore(ctx, { orgId, conversation, note: reason });
+    return markConversationCancelledCore(ctx, { orgId, conversation, note: reason, requiredCycleId: args.expectedCycleId });
   },
 });
 
