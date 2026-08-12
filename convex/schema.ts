@@ -218,6 +218,19 @@ export default defineSchema({
     orgId: v.id("organizations"),
     mode: v.union(v.literal("dry_run"), v.literal("apply")),
     status: v.union(v.literal("running"), v.literal("complete"), v.literal("failed")),
+    phase: v.optional(v.union(
+      v.literal("products_orders"),
+      v.literal("products_recaps"),
+      v.literal("recap_closing_buckets"),
+      v.literal("normalize_active"),
+      v.literal("normalize_handover"),
+      v.literal("counters_delete"),
+      v.literal("counters_waiting"),
+      v.literal("counters_sending"),
+      v.literal("counters_unknown"),
+      v.literal("counters_failed"),
+      v.literal("counters_review"),
+    )),
     cursor: v.optional(v.string()),
     nextConversationStatus: v.union(v.literal("active"), v.literal("handover")),
     scanned: v.number(),
@@ -228,7 +241,8 @@ export default defineSchema({
     startedAt: v.number(),
     updatedAt: v.number(),
     completedAt: v.optional(v.number()),
-  }).index("by_org_startedAt", ["orgId", "startedAt"]),
+  }).index("by_org_startedAt", ["orgId", "startedAt"])
+    .index("by_org_status_startedAt", ["orgId", "status", "startedAt"]),
 
   lifecycleSweepStates: defineTable({
     orgId: v.id("organizations"),

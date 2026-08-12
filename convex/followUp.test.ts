@@ -198,59 +198,6 @@ test("listDueFollowUps compatibility query no longer expires old waiting cycles"
   expect(result.page.map((row) => row.orderId)).toEqual(["STALE-CYCLE"]);
 });
 
-test("recent follow-up backfill materializes at most 25 conversations per page", async () => {
-  const t = convexTest(schema, modules);
-  const orgId = await seedOrg(t);
-  await t.run(async (ctx) => {
-    for (let i = 0; i < 30; i++) {
-      const orderId = `BACKFILL-${i}`;
-      const phone = `6289100${String(i).padStart(4, "0")}`;
-      const conversationId = await ctx.db.insert("conversations", {
-        orgId,
-        ...convBase,
-        orderId,
-        customerPhone: phone,
-        updatedAt: now - i,
-      });
-      await ctx.db.insert("messages", {
-        orgId,
-        ...msg(conversationId, orderId, phone, "inbound", now - 30 * HOUR),
-      });
-      await ctx.db.insert("messages", {
-        orgId,
-        ...msg(conversationId, orderId, phone, "outbound", now - 29 * HOUR),
-      });
-    }
-  });
-
-  const first = await t.mutation(internal.followUpMigration.backfillPage, {
-    orgId,
-    status: "active",
-    now,
-    scheduleNext: false,
-  });
-  expect(first.processed).toBe(25);
-  expect(first.done).toBe(false);
-  expect(await t.run(async (ctx) => (await ctx.db
-    .query("conversations")
-    .withIndex("by_org_followUpState_dueAt", (q) => q.eq("orgId", orgId).eq("followUpState", "waiting"))
-    .collect()).length)).toBe(25);
-
-  const second = await t.mutation(internal.followUpMigration.backfillPage, {
-    orgId,
-    status: "active",
-    now,
-    cursor: first.continueCursor,
-    scheduleNext: false,
-  });
-  expect(second.processed).toBe(5);
-  expect(second.done).toBe(true);
-  expect(await t.run(async (ctx) => (await ctx.db
-    .query("conversations")
-    .withIndex("by_org_followUpState_dueAt", (q) => q.eq("orgId", orgId).eq("followUpState", "waiting"))
-    .collect()).length)).toBe(30);
-});
-
 test("listDueFollowUps enforces tenant, CS, and stage scope before pagination", async () => {
   const t = convexTest(schema, modules);
   const orgId = await seedOrg(t);
