@@ -15,6 +15,7 @@ import { requireAdminOrg } from "./authz";
 import { messageHasDoneMarker } from "./followUpMath";
 import { paginator } from "convex-helpers/server/pagination";
 import schema from "./schema";
+import { terminateCycle } from "./followUpLifecycle";
 
 // 5 days — same ceiling the follow-up funnel uses (followUpMath). Past this, a silent lead is dead.
 export const ARCHIVE_AFTER_MS = 5 * 24 * 60 * 60 * 1000;
@@ -56,6 +57,10 @@ async function closeReason(
   }
   if (recap) return "won";
   if (await hasDoneMarker(ctx, c._id)) return "marker";
+
+  if (["waiting", "sending", "failed", "unknown", "review"].includes(c.followUpState ?? "")) {
+    return null;
+  }
 
   const lastInbound = await ctx.db
     .query("messages")
@@ -157,6 +162,15 @@ export const processConversationIds = internalMutation({
       const reason = await closeReason(ctx, conversation, args.orgId, args.now);
       if (!reason) continue;
       if (!args.dryRun) {
+        if (reason === "won" || reason === "marker") {
+          await terminateCycle(ctx, {
+            conversation,
+            eventKey: `sweep:${reason}:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+            kind: "closing",
+            createdAt: args.now,
+            source: "system",
+          });
+        }
         await ctx.db.patch(id, {
           status: "closed",
           followUpNextStage: undefined,

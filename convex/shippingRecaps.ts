@@ -9,6 +9,7 @@ import { performanceFromRaw } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
+import { terminateCycle } from "./followUpLifecycle";
 
 // Re-export from lib for backward compatibility
 export const canonicalizeProduct = canonicalizeProductLib;
@@ -35,10 +36,18 @@ async function terminateLinkedConversation(
   orgId: Id<"organizations">,
   conversationId: Id<"conversations"> | undefined,
   at: number,
+  kind: "closing" | "cancelled" = "closing",
 ) {
   if (!conversationId) return;
   const conversation = await ctx.db.get(conversationId);
   if (!conversation || String(conversation.orgId) !== String(orgId)) return;
+  await terminateCycle(ctx, {
+    conversation,
+    eventKey: `terminal:${kind}:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+    kind,
+    createdAt: at,
+    source: "system",
+  });
   await ctx.db.patch(conversation._id, {
     status: "closed",
     followUpNextStage: undefined,
@@ -88,7 +97,7 @@ export async function cancelRecapByExactOrderCore(ctx: any, args: {
     createdAt: now,
     orgId: args.orgId,
   });
-  await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now);
+  await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now, "cancelled");
   return { recapId: row._id, orderIdBerdu, status };
 }
 
@@ -967,7 +976,7 @@ export const markCancelled = mutation({
       createdAt: now,
       orgId,
     });
-    await terminateLinkedConversation(ctx, orgId, row.conversationId, now);
+    await terminateLinkedConversation(ctx, orgId, row.conversationId, now, "cancelled");
     return { success: true, recapId: args.recapId, status };
   },
 });
@@ -1173,7 +1182,7 @@ export const markCancelledBulk = mutation({
         createdAt: now,
         orgId: row.orgId,
       });
-      await terminateLinkedConversation(ctx, orgId, row.conversationId, now);
+      await terminateLinkedConversation(ctx, orgId, row.conversationId, now, "cancelled");
     }
 
     // Single batch rollup computation for all affected cs+window pairs
@@ -1229,7 +1238,7 @@ export const markLatestCancelledByPhone = internalMutation({
       orgId: row.orgId,
     });
 
-    await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now);
+    await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now, "cancelled");
 
     return { success: true, recapId: row._id, status, phone };
   },

@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   ConversationStatus,
+  canonicalizeProduct,
   csKey,
   getJakartaDate,
   makeOrderKey,
@@ -16,6 +17,7 @@ import { getCsFeatureConfig } from "./csConfigs";
 import { bumpForOrderDoc } from "./rollups";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
+import { terminateCycle } from "./followUpLifecycle";
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.literal("closed"));
 
@@ -161,6 +163,7 @@ export const createTestConversation = mutation({
       status: "active",
       aiEnabled: aiEligible,
       note: "",
+      followUpProductName: canonicalizeProduct(productName),
       createdAt: now,
       updatedAt: now,
       orgId,
@@ -254,6 +257,7 @@ export async function upsertOrderCore(
   const csConfig = await getCsFeatureConfig(ctx, args.orgId, args.csName);
   const reportable = csConfig.isActive && csConfig.reportingEnabled;
   const aiEligible = reportable && csConfig.aiAssistantEnabled;
+  const followUpProductName = canonicalizeProduct(args.productName);
 
   const existingCustomer = await ctx.db
     .query("customers")
@@ -330,6 +334,7 @@ export async function upsertOrderCore(
           : existingConversation.status === "closed" || aiEligible ? "active"
           : existingConversation.status,
         aiEnabled: aiEligible,
+        followUpProductName,
         ...(args.createdAt !== undefined ? { createdAt: args.createdAt } : {}),
         updatedAt: now,
       });
@@ -342,6 +347,7 @@ export async function upsertOrderCore(
         status: "active",
         aiEnabled: aiEligible,
         note: "",
+        followUpProductName,
         createdAt: args.createdAt ?? now,
         updatedAt: now,
         orgId: args.orgId,
@@ -430,6 +436,16 @@ export const setConversationStatusFromN8n = internalMutation({
       customerName: args.customerName ?? conversation.customerName,
       updatedAt: now,
     });
+
+    if (args.status === "closed") {
+      await terminateCycle(ctx, {
+        conversation,
+        eventKey: `terminal:closing:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+        kind: "closing",
+        createdAt: now,
+        source: "system",
+      });
+    }
 
     if (args.status === "handover" && previousStatus !== "handover" && conversation.aiEnabled) {
       await patchStatsWithKey(ctx, {
@@ -592,6 +608,14 @@ export const markConversationCancelled = mutation({
       key: transitionKey,
     });
 
+    await terminateCycle(ctx, {
+      conversation,
+      eventKey: `terminal:cancelled:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+      kind: "cancelled",
+      createdAt: now,
+      source: "manual",
+    });
+
     await ctx.db.patch(conversation._id, {
       note: nextNote,
       updatedAt: now,
@@ -699,6 +723,14 @@ export const markConversationClosing = mutation({
 
     await patchClosingStatsWithKey(ctx, {
       key: transitionKey,
+      source: "manual",
+    });
+
+    await terminateCycle(ctx, {
+      conversation,
+      eventKey: `terminal:closing:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+      kind: "closing",
+      createdAt: now,
       source: "manual",
     });
 
@@ -856,6 +888,13 @@ export const recordStatEventFromN8n = internalMutation({
       });
 
       if (conversation) {
+        await terminateCycle(ctx, {
+          conversation,
+          eventKey: `terminal:closing:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+          kind: "closing",
+          createdAt: Date.now(),
+          source: "system",
+        });
         await ctx.db.insert("events", {
           conversationId: conversation._id,
           orderId: conversation.orderId,

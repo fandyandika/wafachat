@@ -637,6 +637,11 @@ test("manual confirmation completes the server-side current stage", async () => 
 
 test("terminal lifecycle events decrement exactly once without inventing a sales close", async () => {
   const { t, conversationId } = await fixture({ stage: 2 });
+  await t.run((ctx) => ctx.db.patch(conversationId, {
+    followUpRequestId: "request-in-flight",
+    followUpProviderMessageId: "wamid.in-flight",
+    followUpLastError: "old error",
+  }));
   const conversation = await getConversation(t, conversationId);
   const input = {
     conversation,
@@ -655,6 +660,10 @@ test("terminal lifecycle events decrement exactly once without inventing a sales
     followUpState: "complete",
     followUpOutcome: "closing",
   });
+  const terminated = await getConversation(t, conversationId);
+  expect(terminated.followUpRequestId).toBeUndefined();
+  expect(terminated.followUpProviderMessageId).toBeUndefined();
+  expect(terminated.followUpLastError).toBeUndefined();
   expect(await t.run((ctx) => ctx.db.query("followUpCounters").unique()))
     .toMatchObject({ h1: 0, h2: 0, h3: 0 });
   expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toHaveLength(1);

@@ -154,6 +154,7 @@ export async function processCapturedEvent(
       direction: parsed.event.direction,
       content: parsed.event.content,
       messageType: parsed.event.messageType,
+      providerTemplateName: parsed.event.templateName,
       externalMessageId: parsed.event.externalMessageId,
       createdAt: parsed.event.createdAt,
       csName,

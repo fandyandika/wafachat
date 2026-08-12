@@ -279,6 +279,7 @@ export async function applyInboundReset(
   const previousBucket = bucketFor(conversation);
   if (!cycleId) {
     await ctx.db.patch(conversation._id, {
+      followUpStageOverride: undefined,
       followUpLastInboundPreview: preview(input.content),
       followUpLastInboundAt: input.createdAt,
       updatedAt: input.createdAt,
@@ -485,6 +486,9 @@ export async function terminateCycle(
     followUpNextStage: undefined,
     followUpDueAt: undefined,
     followUpState: archived ? "archived" : "complete",
+    followUpRequestId: undefined,
+    followUpProviderMessageId: undefined,
+    followUpLastError: undefined,
     followUpLastTransitionAt: input.createdAt,
     followUpOutcome: input.kind === "closing"
       ? "closing"

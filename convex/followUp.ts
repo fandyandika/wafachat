@@ -117,12 +117,10 @@ export const listDueFollowUps = query({
     const dueRows = result.page.filter((row) => row.followUpCycleInboundAt !== undefined
       && row.followUpCycleInboundAt >= args.now - FOLLOW_UP_EXPIRY_MS);
     const page = await Promise.all(dueRows.map(async (row) => {
-      const [order, lastMessage] = await Promise.all([
-        ctx.db.query("orders").withIndex("by_org_orderId", (q) => q
-          .eq("orgId", orgId).eq("orderId", row.orderId)).first(),
-        ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q
-          .eq("conversationId", row._id)).order("desc").first(),
-      ]);
+      const lastMessage = await ctx.db.query("messages")
+        .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", row._id))
+        .order("desc")
+        .first();
       return {
         conversationId: row._id,
         customerName: row.customerName,
@@ -133,7 +131,7 @@ export const listDueFollowUps = query({
         cycleInboundAt: row.followUpCycleInboundAt!,
         stage: row.followUpNextStage!,
         dueAt: row.followUpDueAt!,
-        productName: order?.productName ?? "Produk tidak tersedia",
+        productName: row.followUpProductName ?? "Produk tidak tersedia",
         lastMessagePreview: (lastMessage?.content ?? "").slice(0, 180),
         lastMessageAt: lastMessage?.createdAt ?? row.followUpCycleInboundAt!,
         reason: "CS terakhir membalas, customer belum merespons",
@@ -858,17 +856,13 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
     }
     const deduped = [...byPhone.values()];
 
-    // Product name only for the final candidates.
-    const orders = await Promise.all(
-      deduped.map((e) => ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", args.orgId).eq("orderId", e.c.orderId)).first()),
-    );
     const stage1: Candidate[] = [];
     const stage2: Candidate[] = [];
     const stage3: Candidate[] = [];
-    deduped.forEach((e, i) => {
+    deduped.forEach((e) => {
       const card: Candidate = {
         conversationId: e.c._id, customerName: e.c.customerName, customerPhone: e.c.customerPhone,
-        productName: orders[i]?.productName ?? "—", orderId: e.c.orderId,
+        productName: e.c.followUpProductName ?? "—", orderId: e.c.orderId,
         csName: e.c.assignedCsName, lastInboundAt: e.lastInboundAt, touchAts: e.touchAts, lastMessageText: e.lastMessageText,
       };
       (e.stage === 1 ? stage1 : e.stage === 2 ? stage2 : stage3).push(card);
@@ -949,7 +943,6 @@ export const candidacyFor = internalQuery({
     const recap = await ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", c.orgId).eq("orderIdBerdu", c.orderId)).first();
     const lastMsg = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first();
     const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_direction_createdAt", (q) => q.eq("conversationId", c._id).eq("direction", "inbound")).order("desc").first();
-    const order = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", c.orgId).eq("orderId", c.orderId)).first();
     const normName = normalizeCsName(c.assignedCsName);
     let cfg = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", c.orgId).eq("normalizedName", normName)).first();
     if (!cfg || !cfg.providerNumberId) {
@@ -975,7 +968,7 @@ export const candidacyFor = internalQuery({
       customerName: c.customerName,
       customerPhone: c.customerPhone,
       orderId: c.orderId,
-      productName: order?.productName ?? "—",
+      productName: c.followUpProductName ?? "—",
     };
   },
 });

@@ -9,9 +9,7 @@ async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
 }
 
-const DAY = 24 * 60 * 60 * 1_000;
-
-test("new inbound clears an old due follow-up cycle", async () => {
+test("new inbound clears the old cycle, stores its preview, and decrements the ledger", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
   let conversationId: any;
@@ -27,10 +25,21 @@ test("new inbound clears an old due follow-up cycle", async () => {
       note: "",
       followUpCsKey: "aisyah",
       followUpCycleInboundAt: 1_000,
+      followUpCycleId: "cycle:inbound-reset",
+      followUpCycleStartedAt: 1_500,
       followUpNextStage: 2,
       followUpDueAt: 2_000,
       followUpState: "waiting",
       createdAt: 1_000,
+      updatedAt: 2_000,
+    });
+    await ctx.db.insert("followUpCounters", {
+      orgId,
+      csKey: "aisyah",
+      h1: 0,
+      h2: 1,
+      h3: 0,
+      review: 0,
       updatedAt: 2_000,
     });
   });
@@ -40,49 +49,65 @@ test("new inbound clears an old due follow-up cycle", async () => {
     order_id: "FU-INBOUND",
     role: "customer",
     direction: "inbound",
-    content: "Saya balas ya kak",
+    content: `Saya balas ya kak ${"x".repeat(200)}`,
     createdAt: 5_000,
   });
 
   const conversation = await t.run(async (ctx) => (await ctx.db.get(conversationId)) as Doc<"conversations"> | null);
-  expect(conversation).toMatchObject({ followUpCycleInboundAt: 5_000 });
+  expect(conversation).toMatchObject({
+    followUpCycleInboundAt: 5_000,
+    followUpLastInboundAt: 5_000,
+    followUpLastInboundPreview: `Saya balas ya kak ${"x".repeat(162)}`,
+  });
+  expect(conversation?.followUpCycleId).toBeUndefined();
   expect(conversation?.followUpNextStage).toBeUndefined();
   expect(conversation?.followUpDueAt).toBeUndefined();
   expect(conversation?.followUpState).toBeUndefined();
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
+    expect.objectContaining({ csKey: "aisyah", h1: 0, h2: 0, h3: 0, review: 0 }),
+  ]);
+  expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toEqual([
+    expect.objectContaining({
+      cycleId: "cycle:inbound-reset",
+      kind: "customer_replied",
+      fromStage: 2,
+    }),
+  ]);
 });
 
-test("real CS outbound after inbound arms H+1 from the CS reply timestamp", async () => {
+test("CS outbound without a prior inbound arms H+1 and records one lifecycle transition", async () => {
   const t = convexTest(schema);
-  await seedOrg(t);
-  const inboundAt = 10_000;
-  const inbound = await t.mutation(internal.messages.appendMessageFromN8n, {
+  const orgId = await seedOrg(t);
+  const outboundAt = 11_000;
+  const result = await t.run((ctx) => appendMessageCore(ctx, {
+    orgId,
     phone: "628802",
     order_id: "FU-OUTBOUND",
     customerName: "Outbound",
     csName: "CS Aisyah",
-    role: "customer",
-    direction: "inbound",
-    content: "Halo",
-    createdAt: inboundAt,
-  });
-  await t.mutation(internal.messages.appendMessageFromN8n, {
-    phone: "628802",
-    order_id: "FU-OUTBOUND",
-    csName: "CS Aisyah",
     role: "cs",
     direction: "outbound",
     content: "Halo juga",
-    createdAt: inboundAt + 1_000,
-  });
+    createdAt: outboundAt,
+  }));
 
-  const conversation = await t.run(async (ctx) => (await ctx.db.get(inbound.conversationId)) as Doc<"conversations"> | null);
+  const conversation = await t.run(async (ctx) => (await ctx.db.get(result.conversationId)) as Doc<"conversations"> | null);
   expect(conversation).toMatchObject({
     followUpCsKey: "aisyah",
-    followUpCycleInboundAt: inboundAt,
+    followUpCycleInboundAt: outboundAt,
+    followUpCycleStartedAt: outboundAt,
     followUpNextStage: 1,
-    followUpDueAt: inboundAt + 1_000 + DAY,
+    followUpDueAt: 90_000_000,
     followUpState: "waiting",
+    followUpLastOutboundPreview: "Halo juga",
   });
+  expect(conversation?.followUpCycleId).toBe(`cycle:${String(result.conversationId)}:${String(result.messageId)}`);
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
+    expect.objectContaining({ csKey: "aisyah", h1: 1, h2: 0, h3: 0, review: 0 }),
+  ]);
+  expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toEqual([
+    expect.objectContaining({ kind: "cycle_armed", toStage: 1, source: "system" }),
+  ]);
 });
 
 test("system order-notification outbound never arms manual follow-up", async () => {
@@ -113,57 +138,79 @@ test("system order-notification outbound never arms manual follow-up", async () 
   expect(conversation?.followUpDueAt).toBeUndefined();
 });
 
-test("a due KirimDev outbound advances H+1 and records one provider-webhook attempt", async () => {
+test("configured H+1 text advances to H+2 before the due time", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
-  const inboundAt = 30_000;
-  const inbound = await t.mutation(internal.messages.appendMessageFromN8n, {
-    phone: "628804",
-    order_id: "FU-MANUAL-TOUCH",
-    csName: "Aisyah",
-    role: "customer",
-    direction: "inbound",
-    content: "Halo",
-    createdAt: inboundAt,
+  const dueAt = 300_000;
+  let conversationId: any;
+  await t.run(async (ctx) => {
+    conversationId = await ctx.db.insert("conversations", {
+      orgId,
+      orderId: "FU-CONFIGURED-H1",
+      customerPhone: "628804",
+      customerName: "Configured H1",
+      assignedCsName: "Aisyah",
+      status: "active",
+      aiEnabled: false,
+      note: "",
+      followUpCsKey: "aisyah",
+      followUpCycleInboundAt: 30_000,
+      followUpCycleId: "cycle:configured-h1",
+      followUpCycleStartedAt: 31_000,
+      followUpNextStage: 1,
+      followUpDueAt: dueAt,
+      followUpState: "waiting",
+      createdAt: 30_000,
+      updatedAt: 31_000,
+    });
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "aisyah", h1: 1, h2: 0, h3: 0, review: 0, updatedAt: 31_000,
+    });
+    await ctx.db.insert("followUpTemplates", {
+      orgId,
+      stage: 1,
+      label: "H+1",
+      templateName: "follow_up_h1",
+      language: "id",
+      variables: [],
+      matchPatterns: ["masih berminat kak"],
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
   });
-  await t.mutation(internal.messages.appendMessageFromN8n, {
-    phone: "628804",
-    order_id: "FU-MANUAL-TOUCH",
-    csName: "Aisyah",
-    role: "cs",
-    direction: "outbound",
-    content: "Balasan awal",
-    createdAt: inboundAt + 1_000,
-  });
-  const h1At = inboundAt + DAY + 1_000;
+  const h1At = dueAt - 1;
   await t.run((ctx) => appendMessageCore(ctx, {
     orgId,
     phone: "628804",
-    order_id: "FU-MANUAL-TOUCH",
+    order_id: "FU-CONFIGURED-H1",
     csName: "Aisyah",
     role: "cs",
     direction: "outbound",
-    content: "Follow-up manual",
-    externalMessageId: "wamid.phone.h1",
-    source: "ingest",
+    content: "Masih berminat kak!",
+    source: "n8n",
     createdAt: h1At,
   }));
 
-  const conversation = await t.run(async (ctx) => (await ctx.db.get(inbound.conversationId)) as Doc<"conversations"> | null);
+  const conversation = await t.run(async (ctx) => (await ctx.db.get(conversationId)) as Doc<"conversations"> | null);
   expect(conversation).toMatchObject({
     followUpStage: 1,
     followUpNextStage: 2,
-    followUpDueAt: h1At + DAY,
+    followUpDueAt: 90_000_000,
     followUpState: "waiting",
+    followUpLastDetectedStage: 1,
   });
-  const attempts = await t.run((ctx) => ctx.db.query("followUpAttempts").collect());
-  expect(attempts).toHaveLength(1);
-  expect(attempts[0]).toMatchObject({
-    stage: 1,
-    method: "provider_webhook",
-    status: "accepted",
-    providerMessageId: "wamid.phone.h1",
-  });
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
+    expect.objectContaining({ csKey: "aisyah", h1: 0, h2: 1, h3: 0, review: 0 }),
+  ]);
+  expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toEqual([
+    expect.objectContaining({
+      cycleId: "cycle:configured-h1",
+      kind: "stage_completed",
+      fromStage: 1,
+      toStage: 2,
+    }),
+  ]);
 });
 
 test("a KirimDev outbound before due time does not consume the stage", async () => {
@@ -181,11 +228,16 @@ test("a KirimDev outbound before due time does not consume the stage", async () 
     note: "",
     followUpCsKey: "aisyah",
     followUpCycleInboundAt: 30_000,
+    followUpCycleId: "cycle:ordinary-outbound",
+    followUpCycleStartedAt: 31_000,
     followUpNextStage: 1,
     followUpDueAt: dueAt,
     followUpState: "waiting",
     createdAt: 30_000,
     updatedAt: 30_000,
+  }));
+  await t.run((ctx) => ctx.db.insert("followUpCounters", {
+    orgId, csKey: "aisyah", h1: 1, h2: 0, h3: 0, review: 0, updatedAt: 30_000,
   }));
 
   await t.run((ctx) => appendMessageCore(ctx, {
@@ -195,7 +247,7 @@ test("a KirimDev outbound before due time does not consume the stage", async () 
     csName: "Aisyah",
     role: "cs",
     direction: "outbound",
-    content: "Belum waktunya",
+    content: `Belum waktunya ${"x".repeat(200)}`,
     externalMessageId: "wamid.phone.early",
     source: "ingest",
     createdAt: dueAt - 1,
@@ -205,55 +257,95 @@ test("a KirimDev outbound before due time does not consume the stage", async () 
     followUpNextStage: 1,
     followUpDueAt: dueAt,
     followUpState: "waiting",
+    followUpLastOutboundPreview: `Belum waktunya ${"x".repeat(165)}`,
   });
   expect(await t.run((ctx) => ctx.db.query("followUpAttempts").collect())).toHaveLength(0);
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
+    expect.objectContaining({ csKey: "aisyah", h1: 1, h2: 0, h3: 0, review: 0 }),
+  ]);
+  expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toHaveLength(0);
 });
 
-test("a duplicate KirimDev outbound cannot advance the same stage twice", async () => {
+test("configured H+2 provider template catches up directly from H+1", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
   const dueAt = 300_000;
   const conversationId = await t.run((ctx) => ctx.db.insert("conversations", {
     orgId,
-    orderId: "FU-DUPLICATE",
+    orderId: "FU-H2-CATCHUP",
     customerPhone: "6288042",
-    customerName: "Duplicate",
+    customerName: "Catchup",
     assignedCsName: "Aisyah",
     status: "active",
     aiEnabled: false,
     note: "",
     followUpCsKey: "aisyah",
     followUpCycleInboundAt: 40_000,
+    followUpCycleId: "cycle:h2-catchup",
+    followUpCycleStartedAt: 41_000,
     followUpNextStage: 1,
     followUpDueAt: dueAt,
     followUpState: "waiting",
     createdAt: 40_000,
     updatedAt: 40_000,
   }));
+  await t.run(async (ctx) => {
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "aisyah", h1: 1, h2: 0, h3: 0, review: 0, updatedAt: 40_000,
+    });
+    await ctx.db.insert("followUpTemplates", {
+      orgId,
+      stage: 2,
+      label: "H+2",
+      templateName: "follow_up_h2",
+      language: "id",
+      variables: [],
+      matchPatterns: [],
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+  });
   const outbound = {
     orgId,
     phone: "6288042",
-    order_id: "FU-DUPLICATE",
+    order_id: "FU-H2-CATCHUP",
     csName: "Aisyah",
     role: "cs" as const,
     direction: "outbound" as const,
-    content: "Follow-up",
-    externalMessageId: "wamid.phone.duplicate",
+    content: "Template H+2",
+    messageType: "template" as const,
+    providerTemplateName: "follow_up_h2",
+    externalMessageId: "wamid.phone.h2-catchup",
     source: "ingest",
-    createdAt: dueAt + 1,
+    createdAt: dueAt - 1,
   };
 
   await t.run((ctx) => appendMessageCore(ctx, outbound));
-  await t.run((ctx) => appendMessageCore(ctx, outbound));
 
   expect(await t.run((ctx) => ctx.db.get(conversationId))).toMatchObject({
-    followUpStage: 1,
-    followUpNextStage: 2,
+    followUpStage: 2,
+    followUpNextStage: 3,
+    followUpLastDetectedStage: 2,
+    followUpLastDetectedTemplate: "follow_up_h2",
   });
-  expect(await t.run((ctx) => ctx.db.query("followUpAttempts").collect())).toHaveLength(1);
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
+    expect.objectContaining({ csKey: "aisyah", h1: 0, h2: 0, h3: 1, review: 0 }),
+  ]);
+  expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toEqual([
+    expect.objectContaining({
+      cycleId: "cycle:h2-catchup",
+      kind: "stage_completed",
+      source: "provider_webhook",
+      fromStage: 1,
+      toStage: 3,
+      providerMessageId: "wamid.phone.h2-catchup",
+      templateName: "follow_up_h2",
+    }),
+  ]);
 });
 
-test("a due H+3 KirimDev outbound completes the cycle", async () => {
+test("configured H+3 archives lifecycle without changing the sales status", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
   const dueAt = 400_000;
@@ -268,12 +360,31 @@ test("a due H+3 KirimDev outbound completes the cycle", async () => {
     note: "",
     followUpCsKey: "aisyah",
     followUpCycleInboundAt: 50_000,
+    followUpCycleId: "cycle:h3-archive",
+    followUpCycleStartedAt: 51_000,
     followUpNextStage: 3,
     followUpDueAt: dueAt,
     followUpState: "waiting",
     createdAt: 50_000,
     updatedAt: 50_000,
   }));
+  await t.run(async (ctx) => {
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "aisyah", h1: 0, h2: 0, h3: 1, review: 0, updatedAt: 50_000,
+    });
+    await ctx.db.insert("followUpTemplates", {
+      orgId,
+      stage: 3,
+      label: "H+3",
+      templateName: "follow_up_h3",
+      language: "id",
+      variables: [],
+      matchPatterns: [],
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+  });
 
   await t.run((ctx) => appendMessageCore(ctx, {
     orgId,
@@ -283,6 +394,8 @@ test("a due H+3 KirimDev outbound completes the cycle", async () => {
     role: "cs",
     direction: "outbound",
     content: "Follow-up terakhir",
+    messageType: "template",
+    providerTemplateName: "follow_up_h3",
     externalMessageId: "wamid.phone.h3",
     source: "ingest",
     createdAt: dueAt,
@@ -290,9 +403,14 @@ test("a due H+3 KirimDev outbound completes the cycle", async () => {
 
   const conversation = await t.run((ctx) => ctx.db.get(conversationId));
   expect(conversation?.followUpStage).toBe(3);
-  expect(conversation?.followUpState).toBe("complete");
+  expect(conversation?.followUpState).toBe("archived");
+  expect(conversation?.followUpOutcome).toBe("h3_complete");
+  expect(conversation?.status).toBe("active");
   expect(conversation?.followUpNextStage).toBeUndefined();
   expect(conversation?.followUpDueAt).toBeUndefined();
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
+    expect.objectContaining({ csKey: "aisyah", h1: 0, h2: 0, h3: 0, review: 0 }),
+  ]);
 });
 
 test("message history rejects anonymous callers", async () => {
@@ -395,6 +513,14 @@ test("appendMessageFromN8n: outbound closing phrase -> exactly one recap + closi
   const conversation = await t.run(async (ctx) => (await ctx.db.get(r1.conversationId)) as Doc<"conversations"> | null);
   expect(conversation).toMatchObject({ status: "closed", followUpState: "complete" });
   expect(conversation?.followUpDueAt).toBeUndefined();
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
+    expect.objectContaining({ csKey: "aisyah", h1: 0, h2: 0, h3: 0, review: 0 }),
+  ]);
+  const lifecycleClosings = await t.run(async (ctx) => (await ctx.db
+    .query("followUpTransitions")
+    .collect()).filter((transition) => transition.kind === "closing"));
+  expect(lifecycleClosings).toHaveLength(1);
+  expect(lifecycleClosings[0]).toMatchObject({ cycleId: conversation?.followUpCycleId, source: "system" });
 });
 
 test("appendMessageFromN8n: inbound with phrase -> NO recap", async () => {

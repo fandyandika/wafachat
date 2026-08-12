@@ -6,6 +6,7 @@ import { api, internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { windowKeyFor, windowRangeForKey } from "./lib";
 import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
+import { nextJakartaDueAt } from "./followUpModel";
 
 const modules = (import.meta as any).glob("./**/*.{ts,js}");
 
@@ -73,6 +74,7 @@ test("listDueFollowUps enriches only the selected page with decision context", a
       ...convBase,
       orderId: "CONTEXT-1",
       customerPhone: "62890001111",
+      followUpProductName: "Quran Mapping",
       followUpCsKey: "nabila",
       followUpCycleInboundAt: now - 30 * HOUR,
       followUpNextStage: 1,
@@ -710,7 +712,7 @@ test("reserveDueFollowUp fails closed when a CS has no canonical sender claim", 
   })).rejects.toThrow(/Nomor API CS belum dikonfigurasi/);
 });
 
-test("unknown finalization blocks a new request and accepted H+1 advances exactly one day", async () => {
+test("unknown finalization blocks a new request and accepted H+1 advances to the next Jakarta due time", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "manual-admin", role: "admin", name: "Manual Admin", email: "manual@wafachat" });
   const orgId = await seedOrg(t);
@@ -752,7 +754,7 @@ test("unknown finalization blocks a new request and accepted H+1 advances exactl
     const conversation = (await ctx.db.get(acceptedConversationId)) as Doc<"conversations">;
     expect(conversation.followUpState).toBe("waiting");
     expect(conversation.followUpNextStage).toBe(2);
-    expect(conversation.followUpDueAt).toBe(acceptedAt + 24 * HOUR);
+    expect(conversation.followUpDueAt).toBe(nextJakartaDueAt(acceptedAt));
     const messages = await ctx.db
       .query("messages")
       .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", acceptedConversationId))

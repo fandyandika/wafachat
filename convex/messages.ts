@@ -2,7 +2,7 @@ import { mutation, query, internalMutation, internalQuery } from "./_generated/s
 import { requireAdmin, requireAdminOrg, requireMemberOrg, requireScopedMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { normalizePhone, csKey, isInternalTestPhone, windowKeyFor } from "./lib";
+import { normalizePhone, csKey, windowKeyFor } from "./lib";
 import { getCsFeatureConfig } from "./csConfigs";
 import { messageMatchesPhrase, upsertRecapFromMessage } from "./shippingRecaps";
 import { canContainClosingSignal, getActiveClosingPhrases } from "./closingRules";
@@ -11,9 +11,9 @@ import { countFollowUpTouchesBeforeTime } from "./followUp";
 import { businessMinutesBetween, isSlaBreach } from "./responseTimeMath";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
-import { advanceAfterAccepted, armH1AfterOutbound, shouldAdvanceDueOutbound } from "./followUpModel";
-import { recordAcceptedAttempt } from "./followUpAttempts";
-import { getInternalPhoneSet } from "./orgSettings";
+import type { FollowUpStage } from "./followUpModel";
+import { applyInboundReset, applyOutboundLifecycle, terminateCycle } from "./followUpLifecycle";
+import { detectFollowUpStage } from "./followUpTriggers";
 
 async function getConversationForMessage(ctx: { db: any }, args: { orderId?: string; customerPhone: string }, orgId: Id<"organizations">) {
   if (args.orderId) {
@@ -32,6 +32,58 @@ async function getConversationForMessage(ctx: { db: any }, args: { orderId?: str
     .first();
 }
 
+async function getActiveFollowUpRules(ctx: { db: any }, orgId: Id<"organizations">) {
+  const rows = await ctx.db
+    .query("followUpTemplates")
+    .withIndex("by_org_active_stage", (q: any) => q.eq("orgId", orgId).eq("isActive", true))
+    .collect();
+  return rows.map((row: any) => ({
+    stage: row.stage as FollowUpStage,
+    templateName: row.templateName,
+    patterns: row.matchPatterns ?? [],
+  }));
+}
+
+async function applyInsertedMessageLifecycle(ctx: any, input: {
+  conversation: any;
+  messageId: Id<"messages">;
+  content: string;
+  providerTemplateName?: string;
+  externalMessageId?: string;
+  direction: "inbound" | "outbound";
+  role: "customer" | "ai" | "cs" | "system";
+  effectiveCsKey: string;
+  createdAt: number;
+  source?: string;
+}) {
+  if (input.direction === "inbound" && input.role === "customer") {
+    await applyInboundReset(ctx, {
+      conversation: input.conversation,
+      messageId: input.messageId,
+      content: input.content,
+      createdAt: input.createdAt,
+    });
+    return;
+  }
+  if (input.direction !== "outbound" || input.role !== "cs") return;
+  const rules = await getActiveFollowUpRules(ctx, input.conversation.orgId);
+  await applyOutboundLifecycle(ctx, {
+    conversation: input.conversation,
+    messageId: input.messageId,
+    content: input.content,
+    templateName: input.providerTemplateName,
+    providerMessageId: input.externalMessageId,
+    csKey: input.effectiveCsKey,
+    createdAt: input.createdAt,
+    source: input.source === "ingest" ? "provider_webhook" : "system",
+    detectedStage: detectFollowUpStage({
+      content: input.content,
+      templateName: input.providerTemplateName,
+      rules,
+    }),
+  });
+}
+
 export const appendMessage = mutation({
   args: {
     conversationId: v.id("conversations"),
@@ -43,14 +95,31 @@ export const appendMessage = mutation({
     messageType: v.union(v.literal("text"), v.literal("image"), v.literal("template"), v.literal("button")),
     source: v.union(v.literal("kirimchat"), v.literal("panel"), v.literal("n8n")),
     externalMessageId: v.optional(v.string()),
+    providerTemplateName: v.optional(v.string()),
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "messages.appendMessage");
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || String(conversation.orgId) !== String(orgId)) {
+      throw new Error("conversation not found");
+    }
     const createdAt = args.createdAt ?? Date.now();
     const messageId = await ctx.db.insert("messages", { ...args, createdAt, orgId });
 
     await ctx.db.patch(args.conversationId, { lastMessageAt: createdAt, updatedAt: createdAt });
+    await applyInsertedMessageLifecycle(ctx, {
+      conversation,
+      messageId,
+      content: args.content,
+      providerTemplateName: args.providerTemplateName,
+      externalMessageId: args.externalMessageId,
+      direction: args.direction,
+      role: args.role,
+      effectiveCsKey: csKey(conversation.assignedCsName),
+      createdAt,
+      source: args.source,
+    });
     await ctx.db.insert("events", {
       conversationId: args.conversationId,
       orderId: args.orderId,
@@ -90,6 +159,7 @@ export const listMessages = query({
     messageType: v.union(v.literal("text"), v.literal("image"), v.literal("template"), v.literal("button")),
     source: v.union(v.literal("kirimchat"), v.literal("panel"), v.literal("n8n"), v.literal("ingest")),
     externalMessageId: v.optional(v.string()),
+    providerTemplateName: v.optional(v.string()),
     createdAt: v.number(),
   })),
   handler: async (ctx, args) => {
@@ -159,6 +229,7 @@ export type AppendMessageCoreArgs = {
   messageType?: "text" | "image" | "template" | "button";
   closingSignalEligible?: boolean;
   externalMessageId?: string;
+  providerTemplateName?: string;
   createdAt?: number;
   source?: string; // "n8n" (default) | "ingest"
   orgId: Id<"organizations">;
@@ -230,6 +301,7 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
     messageType: args.messageType ?? "text",
     source: args.source ?? "n8n",
     externalMessageId: args.externalMessageId,
+    providerTemplateName: args.providerTemplateName,
     createdAt,
     orgId: args.orgId,
   });
@@ -313,93 +385,22 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   ) {
     convPatch.assignedCsName = args.csName;
   }
-  // Feature #8: clear override on customer reply (customer reply resets the manual pin).
-  if (args.direction === "inbound") {
-    convPatch.followUpStageOverride = undefined;
-    convPatch.followUpCycleInboundAt = createdAt;
-    convPatch.followUpNextStage = undefined;
-    convPatch.followUpDueAt = undefined;
-    convPatch.followUpState = undefined;
-    convPatch.followUpRequestId = undefined;
-    convPatch.followUpProviderMessageId = undefined;
-    convPatch.followUpLastError = undefined;
-  } else if (args.role === "cs") {
-    const lastInbound = await ctx.db
-      .query("messages")
-      .withIndex("by_conversation_direction_createdAt", (q: any) => q
-        .eq("conversationId", conversation._id)
-        .eq("direction", "inbound"))
-      .order("desc")
-      .first();
-    const effectiveCsKey = csKey(
-      (convPatch.assignedCsName as string | undefined) ?? args.csName ?? conversation.assignedCsName,
-    );
-    const possibleProviderContact = args.source === "ingest"
-      && args.direction === "outbound"
-      && Boolean(args.externalMessageId?.trim())
-      && conversation.followUpState === "waiting"
-      && conversation.followUpNextStage !== undefined
-      && conversation.followUpDueAt !== undefined
-      && conversation.followUpCycleInboundAt !== undefined;
-    const internalPhones = possibleProviderContact
-      ? await getInternalPhoneSet(ctx, args.orgId)
-      : new Set<string>();
-    const shouldAdvance = shouldAdvanceDueOutbound({
-      status: conversation.status,
-      followUpState: conversation.followUpState,
-      nextStage: conversation.followUpNextStage,
-      dueAt: conversation.followUpDueAt,
-      cycleInboundAt: conversation.followUpCycleInboundAt,
-      createdAt,
-      role: args.role,
-      direction: args.direction,
-      source: args.source,
-      externalMessageId: args.externalMessageId,
-      isInternal: isInternalTestPhone(conversation.customerPhone, internalPhones),
-    });
-    if (shouldAdvance && effectiveCsKey) {
-      const sentStage = conversation.followUpNextStage!;
-      const accepted = await recordAcceptedAttempt(ctx, {
-        orgId: args.orgId,
-        conversationId: conversation._id,
-        csKey: effectiveCsKey,
-        cycleInboundAt: conversation.followUpCycleInboundAt!,
-        stage: sentStage,
-        method: "provider_webhook",
-        nonce: args.externalMessageId!,
-        providerMessageId: args.externalMessageId!,
-        acceptedAt: createdAt,
-      });
-      if (!accepted.duplicate) {
-        const next = advanceAfterAccepted(sentStage, createdAt);
-        convPatch.followUpStage = sentStage;
-        convPatch.followUpStageAt = createdAt;
-        convPatch.followUpNextStage = next.nextStage ?? undefined;
-        convPatch.followUpDueAt = next.dueAt ?? undefined;
-        convPatch.followUpState = next.state;
-        convPatch.followUpRequestId = undefined;
-        convPatch.followUpProviderMessageId = args.externalMessageId;
-        convPatch.followUpLastError = undefined;
-      }
-    }
-    if (lastInbound && lastInbound.createdAt <= createdAt && effectiveCsKey) {
-      const sameCycle = conversation.followUpCycleInboundAt === lastInbound.createdAt;
-      if (!sameCycle || conversation.followUpState == null) {
-        const armed = armH1AfterOutbound(lastInbound.createdAt, effectiveCsKey, createdAt);
-        convPatch.followUpCsKey = armed.csKey;
-        convPatch.followUpCycleInboundAt = lastInbound.createdAt;
-        convPatch.followUpNextStage = armed.nextStage;
-        convPatch.followUpDueAt = armed.dueAt;
-        convPatch.followUpState = armed.state;
-      }
-      if (!sameCycle || conversation.followUpState == null) {
-        convPatch.followUpRequestId = undefined;
-        convPatch.followUpProviderMessageId = undefined;
-        convPatch.followUpLastError = undefined;
-      }
-    }
-  }
   await ctx.db.patch(conversation._id, convPatch);
+  const effectiveCsKey = csKey(
+    (convPatch.assignedCsName as string | undefined) ?? args.csName ?? conversation.assignedCsName,
+  );
+  await applyInsertedMessageLifecycle(ctx, {
+    conversation,
+    messageId,
+    content: args.content,
+    providerTemplateName: args.providerTemplateName,
+    externalMessageId: args.externalMessageId,
+    direction: args.direction,
+    role: args.role,
+    effectiveCsKey,
+    createdAt,
+    source: args.source,
+  });
   await ctx.db.insert("events", {
     conversationId: conversation._id,
     orderId: conversation.orderId,
@@ -459,6 +460,18 @@ export async function appendMessageCore(ctx: any, args: AppendMessageCoreArgs) {
   // post-sale or handled elsewhere → close it in REAL TIME so it drops out of the follow-up funnel
   // immediately (same idea as closing detection above; the daily sweep is the backstop). Reversible.
   if (closingRecapId || messageHasDoneMarker(args.content, args.direction)) {
+    const latestConversation = await ctx.db.get(conversation._id);
+    if (latestConversation) {
+      await terminateCycle(ctx, {
+        conversation: latestConversation,
+        eventKey: closingRecapId
+          ? `terminal:closing:${String(conversation._id)}:${latestConversation.followUpCycleId ?? "no-cycle"}`
+          : `terminal:done-marker:${String(messageId)}`,
+        kind: "closing",
+        createdAt,
+        source: "system",
+      });
+    }
     await ctx.db.patch(conversation._id, {
       status: "closed",
       followUpNextStage: undefined,
@@ -492,6 +505,7 @@ export const appendMessageFromN8n = internalMutation({
     content: v.string(),
     messageType: v.optional(v.union(v.literal("text"), v.literal("image"), v.literal("template"), v.literal("button"))),
     externalMessageId: v.optional(v.string()),
+    providerTemplateName: v.optional(v.string()),
     createdAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
