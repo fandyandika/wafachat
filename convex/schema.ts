@@ -83,12 +83,28 @@ export default defineSchema({
       v.literal("sending"),
       v.literal("unknown"),
       v.literal("failed"),
+      v.literal("review"),
       v.literal("complete"),
       v.literal("archived"),
     )),
     followUpRequestId: v.optional(v.string()),
     followUpProviderMessageId: v.optional(v.string()),
     followUpLastError: v.optional(v.string()),
+    followUpCycleId: v.optional(v.string()),
+    followUpCycleStartedAt: v.optional(v.number()),
+    followUpLastTransitionAt: v.optional(v.number()),
+    followUpLastInboundPreview: v.optional(v.string()),
+    followUpLastInboundAt: v.optional(v.number()),
+    followUpLastOutboundPreview: v.optional(v.string()),
+    followUpLastOutboundAt: v.optional(v.number()),
+    followUpLastDetectedStage: v.optional(v.union(v.literal(1), v.literal(2), v.literal(3))),
+    followUpLastDetectedTemplate: v.optional(v.string()),
+    followUpProductName: v.optional(v.string()),
+    followUpOutcome: v.optional(v.union(
+      v.literal("h3_complete"), v.literal("closing"),
+      v.literal("cancelled"), v.literal("manual_archive"),
+    )),
+    followUpReviewReason: v.optional(v.string()),
     rtPendingInboundAt: v.optional(v.number()), // response-time pairing state (first inbound of current streak)
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -101,7 +117,9 @@ export default defineSchema({
     .index("by_org_followUpState_dueAt", ["orgId", "followUpState", "followUpDueAt"])
     .index("by_org_followUpStage_state_dueAt", ["orgId", "followUpNextStage", "followUpState", "followUpDueAt"])
     .index("by_org_followUpCsKey_state_dueAt", ["orgId", "followUpCsKey", "followUpState", "followUpDueAt"])
-    .index("by_org_followUpCsKey_stage_state_dueAt", ["orgId", "followUpCsKey", "followUpNextStage", "followUpState", "followUpDueAt"]),
+    .index("by_org_followUpCsKey_stage_state_dueAt", ["orgId", "followUpCsKey", "followUpNextStage", "followUpState", "followUpDueAt"])
+    .index("by_org_followUpState_updatedAt", ["orgId", "followUpState", "updatedAt"])
+    .index("by_org_followUpCsKey_state_updatedAt", ["orgId", "followUpCsKey", "followUpState", "updatedAt"]),
 
   followUpTemplates: defineTable({
     orgId: v.id("organizations"),
@@ -114,6 +132,7 @@ export default defineSchema({
       v.literal("product_name"),
       v.literal("order_id"),
     )),
+    matchPatterns: v.optional(v.array(v.string())),
     isActive: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -126,6 +145,7 @@ export default defineSchema({
     conversationId: v.id("conversations"),
     csKey: v.string(),
     cycleInboundAt: v.number(),
+    cycleId: v.optional(v.string()),
     stage: v.union(v.literal(1), v.literal(2), v.literal(3)),
     method: v.union(
       v.literal("provider_template"),
@@ -160,6 +180,33 @@ export default defineSchema({
     .index("by_org_csKey_bucket_createdAt", ["orgId", "csKey", "bucket", "createdAt"])
     .index("by_org_conversation_createdAt", ["orgId", "conversationId", "createdAt"])
     .index("by_org_providerMessageId", ["orgId", "providerMessageId"]),
+
+  followUpTransitions: defineTable({
+    orgId: v.id("organizations"), conversationId: v.id("conversations"),
+    cycleId: v.string(), eventKey: v.string(),
+    kind: v.union(v.literal("cycle_armed"), v.literal("stage_completed"),
+      v.literal("customer_replied"), v.literal("stage_corrected"),
+      v.literal("closing"), v.literal("cancelled"), v.literal("archived")),
+    source: v.union(v.literal("provider_template"), v.literal("provider_webhook"),
+      v.literal("manual"), v.literal("system")),
+    fromStage: v.optional(v.union(v.literal(1), v.literal(2), v.literal(3))),
+    toStage: v.optional(v.union(v.literal(1), v.literal(2), v.literal(3))),
+    providerMessageId: v.optional(v.string()), templateName: v.optional(v.string()),
+    actorUserId: v.optional(v.id("users")), actorName: v.optional(v.string()), createdAt: v.number(),
+  }).index("by_org_eventKey", ["orgId", "eventKey"])
+    .index("by_org_conversation_createdAt", ["orgId", "conversationId", "createdAt"]),
+
+  followUpCounters: defineTable({
+    orgId: v.id("organizations"), csKey: v.string(),
+    h1: v.number(), h2: v.number(), h3: v.number(), review: v.number(), updatedAt: v.number(),
+  }).index("by_org_csKey", ["orgId", "csKey"]),
+
+  providerChannelHealth: defineTable({
+    orgId: v.id("organizations"), providerNumberId: v.string(), csKey: v.optional(v.string()),
+    channelType: v.union(v.literal("cs"), v.literal("admin"), v.literal("unknown")),
+    lastInboundAt: v.optional(v.number()), lastOutboundAt: v.optional(v.number()),
+    lastError: v.optional(v.string()), errorAt: v.optional(v.number()), updatedAt: v.number(),
+  }).index("by_org_providerNumberId", ["orgId", "providerNumberId"]),
 
   followUpPreparationRuns: defineTable({
     orgId: v.id("organizations"),
@@ -486,6 +533,7 @@ export default defineSchema({
     messageType: v.union(v.literal("text"), v.literal("image"), v.literal("template"), v.literal("button")),
     source: v.union(v.literal("kirimchat"), v.literal("panel"), v.literal("n8n"), v.literal("ingest")),
     externalMessageId: v.optional(v.string()),
+    providerTemplateName: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_conversation_createdAt", ["conversationId", "createdAt"])
