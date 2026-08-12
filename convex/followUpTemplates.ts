@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireAdminOrg, requireMemberOrg } from "./authz";
+import { normalizeFollowUpText } from "./followUpTriggers";
 
 const stageValidator = v.union(v.literal(1), v.literal(2), v.literal(3));
 const variableValidator = v.union(
@@ -16,6 +17,7 @@ const templateResultValidator = v.object({
   templateName: v.string(),
   language: v.string(),
   variables: v.array(variableValidator),
+  matchPatterns: v.array(v.string()),
   isActive: v.boolean(),
 });
 
@@ -49,6 +51,15 @@ function validateVariables(variables: FollowUpVariable[]): FollowUpVariable[] {
   return variables;
 }
 
+function validatePatterns(values: string[]): string[] {
+  if (values.length > 10) throw new Error("Maksimal 10 pola pesan per tahap.");
+  const normalized = [...new Set(values.map(normalizeFollowUpText).filter(Boolean))];
+  if (normalized.some((value) => value.length < 8 || value.length > 200)) {
+    throw new Error("Pola pesan harus 8–200 karakter.");
+  }
+  return normalized;
+}
+
 export const getFollowUpTemplateSetup = query({
   args: {},
   returns: setupResultValidator,
@@ -69,6 +80,7 @@ export const getFollowUpTemplateSetup = query({
         templateName: row.templateName,
         language: row.language,
         variables: row.variables,
+        matchPatterns: row.matchPatterns ?? [],
         isActive: row.isActive,
       }));
     const activeStages = new Set(templates.filter((row) => row.isActive).map((row) => row.stage));
@@ -84,6 +96,7 @@ export const upsertFollowUpTemplate = mutation({
     templateName: v.string(),
     language: v.string(),
     variables: v.array(variableValidator),
+    matchPatterns: v.optional(v.array(v.string())),
     isActive: v.boolean(),
   },
   returns: v.object({ success: v.literal(true), templateId: v.id("followUpTemplates") }),
@@ -101,6 +114,7 @@ export const upsertFollowUpTemplate = mutation({
       templateName: cleanTemplateName(args.templateName),
       language: cleanRequired(args.language, "Bahasa"),
       variables: validateVariables(args.variables),
+      matchPatterns: validatePatterns(args.matchPatterns ?? []),
       isActive: args.isActive,
       updatedAt: now,
     };
