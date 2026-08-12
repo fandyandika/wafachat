@@ -40,3 +40,12 @@ test('unarchive carries signed identity and never sends PANEL_AUTH_SECRET', asyn
   expect(state.setAuth).toHaveBeenCalledWith('unarchive-token');
   expect(state.mutation.mock.calls[0][1]).toEqual({ conversationId: 'conversation-2' });
 });
+
+test('unarchive exposes lifecycle conflicts as actionable JSON', async () => {
+  state.session = { role: 'admin', name: 'Owner', email: 'owner@test' };
+  state.mutation.mockRejectedValue(new Error('Status pengiriman belum diketahui. Periksa riwayat KirimDev.'));
+
+  const response = await POST(request());
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ ok: false, error: expect.stringMatching(/KirimDev/) });
+});

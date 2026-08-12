@@ -455,8 +455,21 @@ export async function correctCurrentStage(
   },
 ): Promise<LifecycleResult> {
   const eventKey = `correction:${input.requestId}`;
-  if (await existingEvent(ctx, input.conversation.orgId, eventKey)) {
-    return { applied: false, duplicate: true, stale: false };
+  const existingTransition = await ctx.db.query("followUpTransitions")
+    .withIndex("by_org_eventKey", (q) => q.eq("orgId", input.conversation.orgId).eq("eventKey", eventKey))
+    .unique();
+  if (existingTransition) {
+    if (String(existingTransition.conversationId) !== String(input.conversation._id)
+      || existingTransition.kind !== "stage_corrected"
+      || existingTransition.toStage !== input.targetStage) {
+      throw new Error("Request ID Follow-up sudah digunakan untuk tindakan lain.");
+    }
+    return { applied: false, duplicate: true, stale: false, cycleId: existingTransition.cycleId };
+  }
+  if (await ctx.db.query("followUpEventReceipts")
+    .withIndex("by_org_eventKey", (q) => q.eq("orgId", input.conversation.orgId).eq("eventKey", eventKey))
+    .unique()) {
+    throw new Error("Request ID Follow-up sudah digunakan untuk tindakan lain.");
   }
   const conversation = await currentConversation(ctx, input.conversation);
   const now = Date.now();

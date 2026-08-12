@@ -15,6 +15,13 @@ export async function POST(req: NextRequest) {
 
   const convex = new ConvexHttpClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
   convex.setAuth(await signConvexToken(session));
-  const result = await convex.mutation(api.followUp.unarchiveFollowUp, { conversationId });
-  return NextResponse.json(result);
+  try {
+    const result = await convex.mutation(api.followUp.unarchiveFollowUp, { conversationId });
+    return NextResponse.json(result);
+  } catch (error) {
+    return NextResponse.json({
+      ok: false,
+      error: error instanceof Error ? error.message : 'Buka arsip Follow-up gagal.',
+    }, { status: 409 });
+  }
 }

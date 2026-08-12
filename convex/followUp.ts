@@ -1289,25 +1289,43 @@ export const getFollowUpCandidatesDiagnostic = internalQuery({
 });
 
 export const archiveFollowUp = mutation({
-  args: { conversationId: v.id("conversations") },
-  returns: v.object({ ok: v.literal(true) }),
+  args: { conversationId: v.id("conversations"), requestId: v.string() },
+  returns: v.object({ ok: v.literal(true), duplicate: v.boolean() }),
   handler: async (ctx, args) => {
+    if (!REQUEST_ID_RE.test(args.requestId)) throw new Error("Request ID Follow-up tidak valid.");
     const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.archiveFollowUp");
     const c = await ctx.db.get(args.conversationId);
     if (!c || String(c.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
     if (viewer.role === "cs" && (!effectiveCsName || csKey(c.assignedCsName) !== csKey(effectiveCsName))) {
       throw new Error("unauthorized: conversation scope mismatch");
     }
+    if (c.followUpState === "unknown") {
+      throw new Error("Status pengiriman belum diketahui. Periksa riwayat KirimDev sebelum mengarsipkan.");
+    }
+    const eventKey = `archive:${args.requestId}`;
+    const existing = await ctx.db.query("followUpTransitions")
+      .withIndex("by_org_eventKey", (q) => q.eq("orgId", orgId).eq("eventKey", eventKey))
+      .unique();
+    if (existing) {
+      if (String(existing.conversationId) !== String(c._id) || existing.kind !== "archived") {
+        throw new Error("Request ID Follow-up sudah digunakan untuk tindakan lain.");
+      }
+      return { ok: true as const, duplicate: true };
+    }
+    if (c.followUpState !== "waiting" && c.followUpState !== "review" && c.followUpState !== "failed") {
+      throw new Error("Follow-up tidak dapat diarsipkan dari status saat ini.");
+    }
     const now = Date.now();
-    await terminateCycle(ctx, {
+    const result = await terminateCycle(ctx, {
       conversation: c,
-      eventKey: `archive:${c.followUpCycleId ?? String(c._id)}`,
+      eventKey,
       kind: "archived",
       createdAt: now,
       actorName: viewer.name,
       source: "manual",
     });
-    return { ok: true as const };
+    if (!result.applied) throw new Error("Follow-up tidak berubah; muat ulang data terbaru.");
+    return { ok: true as const, duplicate: false };
   },
 });
 
@@ -1323,7 +1341,13 @@ export const unarchiveFollowUp = mutation({
       throw new Error("unauthorized: conversation scope mismatch");
     }
     const now = Date.now();
-    await reopenArchivedCycle(ctx, { conversation: c, createdAt: now });
+    const result = await reopenArchivedCycle(ctx, { conversation: c, createdAt: now });
+    if (!result.applied) {
+      if (c.followUpState === "unknown") {
+        throw new Error("Status pengiriman belum diketahui. Periksa riwayat KirimDev sebelum membuka arsip.");
+      }
+      throw new Error("Follow-up belum diarsipkan atau sudah berubah; muat ulang data terbaru.");
+    }
     return { ok: true as const };
   },
 });
@@ -1386,18 +1410,18 @@ export const getArchivedFollowUps = query({
     const since = now - 14 * DAY;
     const csKeyMemo = effectiveCsName ? csKey(effectiveCsName) : null;
 
-    // Manual archive sets status="closed" + followUpArchivedAt, so read only recently-closed
-    // conversations via the index (NOT a full-table .filter().collect() scan) then keep the
-    // ones that were actually archived. Bounds reads to recent closed convs.
-    const archived = await collectExactBounded(ctx.db
-      .query("conversations")
-      .withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", orgId).eq("status", "closed").gte("updatedAt", since))
-      , "followUp archived conversations");
+    const archived = await collectExactBounded(
+      csKeyMemo
+        ? ctx.db.query("conversations").withIndex("by_org_followUpCsKey_state_updatedAt", (q) => q
+            .eq("orgId", orgId).eq("followUpCsKey", csKeyMemo).eq("followUpState", "archived").gte("updatedAt", since))
+        : ctx.db.query("conversations").withIndex("by_org_followUpState_updatedAt", (q) => q
+            .eq("orgId", orgId).eq("followUpState", "archived").gte("updatedAt", since)),
+      "followUp archived conversations",
+    );
 
     const filtered = archived
-      .filter((c) => c.followUpArchivedAt != null)
       .filter((c) => !isInternalTestPhone(c.customerPhone, internalPhones))
-      .filter((c) => (csKeyMemo ? csKey(c.assignedCsName) === csKeyMemo : true));
+      .filter((c) => c.followUpArchivedAt != null);
 
     type ArchivedRow = {
       conversationId: typeof archived[0]["_id"];

@@ -1079,6 +1079,28 @@ test("correctFollowUpStage makes H+3 immediately actionable, audited, and idempo
   })).resolves.toMatchObject({ shouldSend: true, templateName: "follow_up_h3" });
 });
 
+test("correction request IDs bind conversation and target-stage intent", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "intent-admin", role: "admin", name: "Intent Admin", email: "intent@wafachat" });
+  const orgId = await seedOrg(t);
+  const firstId = await seedDueManualFollowUp(t, orgId, "intent-a", 1);
+  const secondId = await seedDueManualFollowUp(t, orgId, "intent-b", 1);
+  const requestId = "bbbbbbbb-cccc-4bbb-8bbb-bbbbbbbbbbbb";
+
+  await expect(asAdmin.mutation(api.followUp.correctFollowUpStage, {
+    conversationId: firstId, targetStage: 2, requestId,
+  })).resolves.toEqual({ ok: true, duplicate: false });
+  await expect(asAdmin.mutation(api.followUp.correctFollowUpStage, {
+    conversationId: firstId, targetStage: 2, requestId,
+  })).resolves.toEqual({ ok: true, duplicate: true });
+  await expect(asAdmin.mutation(api.followUp.correctFollowUpStage, {
+    conversationId: firstId, targetStage: 3, requestId,
+  })).rejects.toThrow(/request id.*digunakan/i);
+  await expect(asAdmin.mutation(api.followUp.correctFollowUpStage, {
+    conversationId: secondId, targetStage: 2, requestId,
+  })).rejects.toThrow(/request id.*digunakan/i);
+});
+
 test("reservation accepts one explicitly selected active template without requiring every stage", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "template-admin", role: "admin", name: "Admin", email: "template@wafachat" });
@@ -1234,6 +1256,45 @@ test("unknown finalization blocks a new request and accepted H+1 advances to the
   });
 });
 
+test("unknown delivery cannot be archived and reopened to bypass the blind-retry block", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "unknown-archive-admin", role: "admin", name: "Unknown Admin", email: "unknown-archive@wafachat" });
+  const orgId = await seedOrg(t);
+  const conversationId = await seedDueManualFollowUp(t, orgId, "unknown-archive");
+  const sendRequestId = "cccccccc-dddd-4ccc-8ccc-cccccccccccc";
+  await asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
+    conversationId, stage: 1, requestId: sendRequestId,
+  });
+  await asAdmin.mutation(internal.followUp.finalizeDueFollowUp, {
+    conversationId,
+    requestId: sendRequestId,
+    expectedCycleId: "cycle-manual-unknown-archive",
+    stage: 1,
+    outcome: "unknown",
+    error: "Timeout provider",
+  });
+
+  await expect(asAdmin.mutation(api.followUp.archiveFollowUp, {
+    conversationId,
+    requestId: "dddddddd-eeee-4ddd-8ddd-dddddddddddd",
+  })).rejects.toThrow(/belum diketahui.*KirimDev/i);
+  await expect(asAdmin.mutation(api.followUp.unarchiveFollowUp, { conversationId }))
+    .rejects.toThrow(/belum diketahui.*KirimDev/i);
+  await expect(asAdmin.mutation(internal.followUp.reserveDueFollowUp, {
+    conversationId,
+    stage: 1,
+    requestId: "eeeeeeee-ffff-4eee-8eee-eeeeeeeeeeee",
+  })).rejects.toThrow(/belum diketahui/i);
+
+  await t.run(async (ctx) => {
+    expect(await ctx.db.get(conversationId)).toMatchObject({
+      followUpState: "unknown",
+      followUpRequestId: sendRequestId,
+      followUpLastError: "Timeout provider",
+    });
+  });
+});
+
 test("accepted H+3 archives only the lifecycle and never invents a sales closing", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "h3-admin", role: "admin", name: "H3 Admin", email: "h3@wafachat" });
@@ -1325,7 +1386,10 @@ test("archiveFollowUp: anonymous caller is rejected and status is unchanged", as
   await t.run(async (ctx) => {
     convId = await ctx.db.insert("conversations", { orgId, ...convBase, orderId: "O-13", customerPhone: "62813b" });
   });
-  await expect(t.mutation(api.followUp.archiveFollowUp, { conversationId: convId }))
+  await expect(t.mutation(api.followUp.archiveFollowUp, {
+    conversationId: convId,
+    requestId: "66666666-8888-4666-8666-666666666666",
+  }))
     .rejects.toThrow(/requires a logged-in user/);
   await t.run(async (ctx) => {
     const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
@@ -1341,7 +1405,10 @@ test("archiveFollowUp: signed admin can archive an own-tenant conversation", asy
   await t.run((ctx) => ctx.db.insert("followUpCounters", {
     orgId, csKey: "nabila", h1: 1, h2: 0, h3: 0, review: 0, updatedAt: now,
   }));
-  const res = await asAdmin.mutation(api.followUp.archiveFollowUp, { conversationId: convId });
+  const res = await asAdmin.mutation(api.followUp.archiveFollowUp, {
+    conversationId: convId,
+    requestId: "ffffffff-1111-4fff-8fff-ffffffffffff",
+  });
   expect(res.ok).toBe(true);
   await t.run(async (ctx) => {
     const c = (await ctx.db.get(convId)) as Doc<"conversations"> | undefined;
@@ -1391,7 +1458,10 @@ test("archiveFollowUp: CS cannot archive another CS conversation", async () => {
     csName: "Aisyah",
   });
 
-  await expect(asAisyah.mutation(api.followUp.archiveFollowUp, { conversationId }))
+  await expect(asAisyah.mutation(api.followUp.archiveFollowUp, {
+    conversationId,
+    requestId: "11111111-3333-4111-8111-111111111111",
+  }))
     .rejects.toThrow(/conversation scope/);
 });
 
@@ -1403,7 +1473,10 @@ test("unarchiveFollowUp enters review without changing sales status or creating 
   await t.run((ctx) => ctx.db.insert("followUpCounters", {
     orgId, csKey: "nabila", h1: 1, h2: 0, h3: 0, review: 0, updatedAt: now,
   }));
-  await asAdmin.mutation(api.followUp.archiveFollowUp, { conversationId: convId });
+  await asAdmin.mutation(api.followUp.archiveFollowUp, {
+    conversationId: convId,
+    requestId: "22222222-4444-4222-8222-222222222222",
+  });
   const res = await asAdmin.mutation(api.followUp.unarchiveFollowUp, { conversationId: convId });
   expect(res.ok).toBe(true);
   await t.run(async (ctx) => {
@@ -1423,12 +1496,43 @@ test("unarchiveFollowUp enters review without changing sales status or creating 
   });
 });
 
-test("unarchiveFollowUp is a no-op after a newer inbound already left the lifecycle idle", async () => {
+test("archive can be repeated after unarchive as a distinct audited action", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "rearchive-admin", role: "admin", name: "Rearchive Admin", email: "rearchive@wafachat" });
+  const orgId = await seedOrg(t);
+  const conversationId = await seedDueManualFollowUp(t, orgId, "rearchive");
+
+  await expect(asAdmin.mutation(api.followUp.archiveFollowUp, {
+    conversationId, requestId: "33333333-5555-4333-8333-333333333333",
+  })).resolves.toEqual({ ok: true, duplicate: false });
+  await asAdmin.mutation(api.followUp.unarchiveFollowUp, { conversationId });
+  await expect(asAdmin.mutation(api.followUp.archiveFollowUp, {
+    conversationId, requestId: "44444444-6666-4444-8444-444444444444",
+  })).resolves.toEqual({ ok: true, duplicate: false });
+  await expect(asAdmin.mutation(api.followUp.archiveFollowUp, {
+    conversationId, requestId: "44444444-6666-4444-8444-444444444444",
+  })).resolves.toEqual({ ok: true, duplicate: true });
+
+  await t.run(async (ctx) => {
+    expect(await ctx.db.get(conversationId)).toMatchObject({ followUpState: "archived" });
+    expect(await ctx.db.query("followUpTransitions")
+      .withIndex("by_org_conversation_createdAt", (q) => q.eq("orgId", orgId).eq("conversationId", conversationId))
+      .collect()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ eventKey: "archive:33333333-5555-4333-8333-333333333333" }),
+        expect.objectContaining({ eventKey: "archive:44444444-6666-4444-8444-444444444444" }),
+      ]));
+  });
+});
+
+test("unarchiveFollowUp reports a stale action after inbound already left the lifecycle idle", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "idle-admin", role: "admin", name: "Idle Admin", email: "idle@wafachat" });
   const orgId = await seedOrg(t);
   const conversationId = await seedDueManualFollowUp(t, orgId, "idle");
-  await asAdmin.mutation(api.followUp.archiveFollowUp, { conversationId });
+  await asAdmin.mutation(api.followUp.archiveFollowUp, {
+    conversationId,
+    requestId: "55555555-7777-4555-8555-555555555555",
+  });
   await t.run((ctx) => ctx.db.patch(conversationId, {
     followUpCycleId: undefined,
     followUpNextStage: undefined,
@@ -1439,8 +1543,8 @@ test("unarchiveFollowUp is a no-op after a newer inbound already left the lifecy
     followUpLastInboundAt: Date.now(),
   }));
 
-  expect(await asAdmin.mutation(api.followUp.unarchiveFollowUp, { conversationId }))
-    .toEqual({ ok: true });
+  await expect(asAdmin.mutation(api.followUp.unarchiveFollowUp, { conversationId }))
+    .rejects.toThrow(/belum diarsipkan|sudah berubah/i);
   await t.run(async (ctx) => {
     const conversation = await ctx.db.get(conversationId) as Doc<"conversations"> | null;
     expect(conversation!.followUpState).toBeUndefined();
@@ -1456,11 +1560,11 @@ test("getArchivedFollowUps: lists recent manual archives, scoped by CS", async (
   await t.run(async (ctx) => {
     convId1 = await ctx.db.insert("conversations", {
       orgId, ...convBase, orderId: "O-19", customerPhone: "62819", assignedCsName: "Nabila",
-      status: "closed", followUpArchivedAt: now - 1 * HOUR
+      status: "active", followUpCsKey: "nabila", followUpState: "archived", followUpArchivedAt: now - 1 * HOUR
     });
     convId2 = await ctx.db.insert("conversations", {
       orgId, ...convBase, orderId: "O-20", customerPhone: "62820", assignedCsName: "Lila",
-      status: "closed", followUpArchivedAt: now - 2 * HOUR
+      status: "active", followUpCsKey: "lila", followUpState: "archived", followUpArchivedAt: now - 2 * HOUR
     });
   });
   const res = await asAdmin.query(api.followUp.getArchivedFollowUps, { csName: "Nabila", nowOverride: now });
@@ -1490,7 +1594,9 @@ test("CS archived list ignores a client request for another CS", async () => {
       orderId: "ARCHIVED-AISYAH",
       customerPhone: "628181",
       assignedCsName: "Aisyah",
-      status: "closed",
+      status: "active",
+      followUpCsKey: "aisyah",
+      followUpState: "archived",
       followUpArchivedAt: now - HOUR,
     });
     await ctx.db.insert("conversations", {
@@ -1499,7 +1605,9 @@ test("CS archived list ignores a client request for another CS", async () => {
       orderId: "ARCHIVED-LILA",
       customerPhone: "628182",
       assignedCsName: "Lila",
-      status: "closed",
+      status: "active",
+      followUpCsKey: "lila",
+      followUpState: "archived",
       followUpArchivedAt: now - HOUR,
     });
   });
