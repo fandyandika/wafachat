@@ -420,10 +420,13 @@ test("review and archive views paginate newest-first through lifecycle state ind
   });
 });
 
-test("closing view skips 31 newer cancellations before paginating valid closings", async () => {
+test("closing view paginates one interleaved counted stream despite newer cancellations", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "closed-pages-admin", role: "admin", name: "Closed Admin", email: "closed-pages@wafachat.test" });
   const orgId = await seedOrg(t);
+  const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", {
+    slug: "other-closing-pages", name: "Other Org", createdAt: 1, updatedAt: 1,
+  }));
   await t.run(async (ctx) => {
     for (let i = 0; i < 31; i++) {
       await ctx.db.insert("shippingRecaps", {
@@ -450,6 +453,7 @@ test("closing view skips 31 newer cancellations before paginating valid closings
       });
     }
     for (let i = 0; i < 35; i++) {
+      const status = (["ready", "needs_review", "exported", "delivered"] as const)[i % 4];
       await ctx.db.insert("shippingRecaps", {
         orgId,
         orderIdBerdu: `CLOSED-${i}`,
@@ -465,7 +469,8 @@ test("closing view skips 31 newer cancellations before paginating valid closings
         recipientCity: "",
         packageContent: "Quran Mapping",
         paymentMethod: "cod",
-        status: "ready",
+        status,
+        closingBucket: "counted",
         flags: [],
         sourceMessageText: "",
         version: 1,
@@ -476,25 +481,49 @@ test("closing view skips 31 newer cancellations before paginating valid closings
     }
     await ctx.db.insert("shippingRecaps", {
       orgId,
-      orderIdBerdu: "EXPORTED-ONLY",
-      customerPhone: "6288200999",
-      customerName: "Exported",
-      csName: "Nabila",
-      csKey: "nabila",
-      closedAt: now - 100,
-      recipientName: "Exported",
-      recipientPhone: "6288200999",
+      orderIdBerdu: "OTHER-CS",
+      customerPhone: "6288200888",
+      customerName: "Other CS",
+      csName: "Lila",
+      csKey: "lila",
+      closedAt: now + 2_000,
+      recipientName: "Other CS",
+      recipientPhone: "6288200888",
       recipientAddress: "",
       recipientDistrict: "",
       recipientCity: "",
       packageContent: "Quran Mapping",
       paymentMethod: "cod",
-      status: "exported",
+      status: "ready",
+      closingBucket: "counted",
       flags: [],
       sourceMessageText: "",
       version: 1,
-      createdAt: now - 100,
-      updatedAt: now - 100,
+      createdAt: now + 2_000,
+      updatedAt: now + 2_000,
+    });
+    await ctx.db.insert("shippingRecaps", {
+      orgId: otherOrgId,
+      orderIdBerdu: "OTHER-ORG",
+      customerPhone: "6288200777",
+      customerName: "Other Org",
+      csName: "Nabila",
+      csKey: "nabila",
+      closedAt: now + 3_000,
+      recipientName: "Other Org",
+      recipientPhone: "6288200777",
+      recipientAddress: "",
+      recipientDistrict: "",
+      recipientCity: "",
+      packageContent: "Quran Mapping",
+      paymentMethod: "cod",
+      status: "delivered",
+      closingBucket: "counted",
+      flags: [],
+      sourceMessageText: "",
+      version: 1,
+      createdAt: now + 3_000,
+      updatedAt: now + 3_000,
     });
   });
 
@@ -509,6 +538,9 @@ test("closing view skips 31 newer cancellations before paginating valid closings
   expect(first.page).toHaveLength(30);
   expect(second.page).toHaveLength(5);
   expect(first.page.every((row) => row.orderId.startsWith("CLOSED-"))).toBe(true);
+  expect(first.page.slice(0, 4).map((row) => row.orderId)).toEqual([
+    "CLOSED-0", "CLOSED-1", "CLOSED-2", "CLOSED-3",
+  ]);
   expect(second.isDone).toBe(true);
   expect(first.page[0]).toMatchObject({
     orderId: "CLOSED-0",
@@ -517,12 +549,6 @@ test("closing view skips 31 newer cancellations before paginating valid closings
     fromFollowUp: false,
   });
   expect(first.page[1]).toMatchObject({ orderId: "CLOSED-1", touches: 1, fromFollowUp: true });
-  const exported = await asAdmin.query(api.followUp.listClosedFollowUpsPage, {
-    csName: "Nabila",
-    status: "exported",
-    paginationOpts: { numItems: 30, cursor: null },
-  });
-  expect(exported.page.map((row) => row.orderId)).toEqual(["EXPORTED-ONLY"]);
 });
 
 test("getFollowUpCandidates: stale conversation (updated >6d ago) excluded by recency bound", async () => {

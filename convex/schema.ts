@@ -637,6 +637,9 @@ export default defineSchema({
       v.literal("cancelled"),
       v.literal("cancelled_after_export"),
     ),
+    // Materialized classification for one indexed Closing stream. Optional
+    // until Task 9's bounded migration classifies legacy rows.
+    closingBucket: v.optional(v.literal("counted")),
     flags: v.array(v.string()),
     sourceMessageId: v.optional(v.string()),
     sourceMessageText: v.string(),
@@ -661,7 +664,8 @@ export default defineSchema({
     .index("by_org_closedAt", ["orgId", "closedAt"])
     .index("by_org_status_closedAt", ["orgId", "status", "closedAt"])
     .index("by_org_csKey_closedAt", ["orgId", "csKey", "closedAt"])
-    .index("by_org_csKey_status_closedAt", ["orgId", "csKey", "status", "closedAt"]),
+    .index("by_org_closingBucket_closedAt", ["orgId", "closingBucket", "closedAt"])
+    .index("by_org_csKey_closingBucket_closedAt", ["orgId", "csKey", "closingBucket", "closedAt"]),
 
   adminChannels: defineTable({
     orgId: v.id("organizations"),

@@ -196,6 +196,17 @@ test("importBerduVerifiedRows: canonicalizes raw csName through the registry (al
   expect(recaps.length).toBe(1);
   expect(recaps[0].csName).toBe("Aisyah");  // canonical form
   expect(recaps[0].csKey).toBe("aisyah");   // immutable key
+  expect(recaps[0].closingBucket).toBe("counted");
+
+  await asAdmin.mutation(api.shippingRecaps.markCancelled, {
+    recapId: recaps[0]._id,
+    reason: "Customer batal",
+  });
+  expect(await t.run(async (ctx: any) => (await ctx.db.get(recaps[0]._id))?.closingBucket))
+    .toBeNull();
+  await asAdmin.mutation(api.shippingRecaps.undoCancelled, { recapId: recaps[0]._id });
+  expect(await t.run(async (ctx: any) => (await ctx.db.get(recaps[0]._id))?.closingBucket))
+    .toBe("counted");
 });
 
 test("cancelling a recap clears any actionable follow-up state", async () => {

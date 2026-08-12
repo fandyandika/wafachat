@@ -532,17 +532,9 @@ const closedPageRowValidator = v.object({
   touches: v.number(),
   fromFollowUp: v.boolean(),
 });
-const validClosingStatusValidator = v.union(
-  v.literal("ready"),
-  v.literal("needs_review"),
-  v.literal("exported"),
-  v.literal("delivered"),
-);
-
 export const listClosedFollowUpsPage = query({
   args: {
     csName: v.optional(v.string()),
-    status: v.optional(validClosingStatusValidator),
     paginationOpts: paginationOptsValidator,
   },
   returns: v.object({
@@ -557,21 +549,23 @@ export const listClosedFollowUpsPage = query({
       args.csName,
     );
     const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
-    const status = args.status ?? "ready";
     const paginationOpts = {
       cursor: args.paginationOpts.cursor,
       numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
     };
+    // New writes maintain this ledger-compatible classification transactionally.
+    // Task 9 must bounded-backfill legacy rows before cutover; missing legacy
+    // classifications intentionally do not trigger a scan fallback here.
     const result = await (effectiveCsKey
       ? ctx.db.query("shippingRecaps")
-          .withIndex("by_org_csKey_status_closedAt", (q) => q
+          .withIndex("by_org_csKey_closingBucket_closedAt", (q) => q
             .eq("orgId", orgId)
             .eq("csKey", effectiveCsKey)
-            .eq("status", status))
+            .eq("closingBucket", "counted"))
       : ctx.db.query("shippingRecaps")
-          .withIndex("by_org_status_closedAt", (q) => q
+          .withIndex("by_org_closingBucket_closedAt", (q) => q
             .eq("orgId", orgId)
-            .eq("status", status)))
+            .eq("closingBucket", "counted")))
       .order("desc")
       .paginate(paginationOpts);
 
