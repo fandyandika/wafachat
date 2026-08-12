@@ -3,12 +3,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
-import { ArrowLeft, Ban, CheckCheck, Clock3, MessageSquareText, Plus, RefreshCw, RotateCcw, Send, Settings2 } from "lucide-react";
+import { ArrowLeft, CheckCheck, Clock3, MessageSquareText, Plus, RefreshCw, Send, Settings2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { filterAdminThreads, type AdminInboxView } from "./admin-expedition-inbox-model";
 import { AdminExpeditionThreadList } from "./admin-expedition-thread-list";
+import { AdminExpeditionContext } from "./admin-expedition-context";
 
 type Feedback = { kind: "ok" | "error"; message: string } | null;
 
@@ -351,7 +352,7 @@ export function AdminExpeditionInbox() {
         <div role={feedback.kind === "error" ? "alert" : "status"} className={cn("rounded-lg border px-3 py-2 text-sm", feedback.kind === "ok" ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-destructive/30 bg-destructive/5 text-destructive")}>{feedback.message}</div>
       )}
 
-      <div className="min-h-[calc(100dvh-12rem)] overflow-hidden rounded-xl border border-ledger-rule bg-card xl:grid xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="min-h-[calc(100dvh-12rem)] overflow-hidden rounded-xl border border-ledger-rule bg-card xl:grid xl:grid-cols-[320px_minmax(0,1fr)_280px]">
         <AdminExpeditionThreadList
           className={selectedThread ? "hidden xl:flex" : undefined}
           threads={visibleThreads}
@@ -379,16 +380,7 @@ export function AdminExpeditionInbox() {
                   <p className="truncate text-sm font-semibold">{selectedThread.customerName || selectedThread.customerPhone}</p>
                   <p className="truncate text-xs text-muted-foreground">{adminThreadMeta(selectedThread)}</p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {linkedOrder && (linkedOrder.status === "cancelled" || linkedOrder.status === "cancelled_after_export" ? linkedOrder.canUndo ? (
-                    <Button size="sm" variant="outline" disabled={busy} onClick={() => void undoCancellation()}><RotateCcw className="size-3.5" /> <span className="hidden sm:inline">Batalkan pembatalan</span></Button>
-                  ) : (
-                    <span className="rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">Order dibatalkan</span>
-                  ) : (
-                    <Button size="sm" variant="destructive" disabled={busy} onClick={() => setCancelOpen(true)}><Ban className="size-3.5" /> <span className="hidden sm:inline">Batalkan order</span></Button>
-                  ))}
-                  <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", selectedThread.windowOpen ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900")}>{selectedThread.windowOpen ? "Balasan bebas aktif" : "Hanya template"}</span>
-                </div>
+                <span className={cn("shrink-0 rounded-md px-2.5 py-1 text-xs font-medium", selectedThread.windowOpen ? "bg-positive-soft text-positive" : "bg-amber-50 text-amber-900")}>{selectedThread.windowOpen ? "Balasan bebas aktif" : "Hanya template"}</span>
               </header>
               <div className="flex-1 space-y-3 overflow-y-auto bg-muted/20 p-4 md:p-6">
                 {messages === undefined ? <p className="text-center text-sm text-muted-foreground">Memuat pesan…</p> : messages.map((message) => (
@@ -411,6 +403,15 @@ export function AdminExpeditionInbox() {
             </div>
           )}
         </main>
+        {selectedThread && (
+          <AdminExpeditionContext
+            thread={selectedThread}
+            linkedOrder={linkedOrder}
+            busy={busy}
+            onCancel={() => setCancelOpen(true)}
+            onUndoCancellation={() => void undoCancellation()}
+          />
+        )}
       </div>
 
       {newOpen && (
