@@ -34,6 +34,7 @@ import type * as followUpTriggers from "../followUpTriggers.js";
 import type * as http from "../http.js";
 import type * as ingest_berduAdapter from "../ingest/berduAdapter.js";
 import type * as ingest_core from "../ingest/core.js";
+import type * as ingest_dispatch from "../ingest/dispatch.js";
 import type * as ingest_events from "../ingest/events.js";
 import type * as ingest_kirimdevAdapter from "../ingest/kirimdevAdapter.js";
 import type * as ingest_monitor from "../ingest/monitor.js";
@@ -93,6 +94,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   "ingest/berduAdapter": typeof ingest_berduAdapter;
   "ingest/core": typeof ingest_core;
+  "ingest/dispatch": typeof ingest_dispatch;
   "ingest/events": typeof ingest_events;
   "ingest/kirimdevAdapter": typeof ingest_kirimdevAdapter;
   "ingest/monitor": typeof ingest_monitor;
