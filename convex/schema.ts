@@ -196,6 +196,11 @@ export default defineSchema({
   }).index("by_org_eventKey", ["orgId", "eventKey"])
     .index("by_org_conversation_createdAt", ["orgId", "conversationId", "createdAt"]),
 
+  followUpEventReceipts: defineTable({
+    orgId: v.id("organizations"), conversationId: v.id("conversations"),
+    cycleId: v.optional(v.string()), eventKey: v.string(), createdAt: v.number(),
+  }).index("by_org_eventKey", ["orgId", "eventKey"]),
+
   followUpCounters: defineTable({
     orgId: v.id("organizations"), csKey: v.string(),
     h1: v.number(), h2: v.number(), h3: v.number(), review: v.number(), updatedAt: v.number(),

@@ -6,7 +6,6 @@ import { csKey as normalizeCsKey } from "./lib";
 
 type LifecycleCtx = Pick<MutationCtx, "db">;
 type CounterBucket = FollowUpStage | "review" | null;
-type TransitionSource = "provider_template" | "provider_webhook" | "manual" | "system";
 
 export type OutboundLifecycleInput = {
   conversation: Doc<"conversations">;
@@ -94,10 +93,27 @@ async function moveCounter(
   await updateCounter(ctx, conversation.orgId, nextCsKey, null, nextBucket, updatedAt);
 }
 
-async function existingTransition(ctx: LifecycleCtx, orgId: Id<"organizations">, eventKey: string) {
-  return ctx.db.query("followUpTransitions")
+async function existingEvent(ctx: LifecycleCtx, orgId: Id<"organizations">, eventKey: string) {
+  const transition = await ctx.db.query("followUpTransitions")
     .withIndex("by_org_eventKey", (q) => q.eq("orgId", orgId).eq("eventKey", eventKey))
     .unique();
+  if (transition) return transition;
+  return ctx.db.query("followUpEventReceipts")
+    .withIndex("by_org_eventKey", (q) => q.eq("orgId", orgId).eq("eventKey", eventKey))
+    .unique();
+}
+
+async function recordEventReceipt(
+  ctx: LifecycleCtx,
+  input: {
+    orgId: Id<"organizations">;
+    conversationId: Id<"conversations">;
+    cycleId?: string;
+    eventKey: string;
+    createdAt: number;
+  },
+): Promise<void> {
+  await ctx.db.insert("followUpEventReceipts", input);
 }
 
 function outboundEventKey(input: OutboundLifecycleInput): string {
@@ -123,13 +139,22 @@ export async function applyOutboundLifecycle(
   input: OutboundLifecycleInput,
 ): Promise<LifecycleResult> {
   const eventKey = outboundEventKey(input);
-  if (await existingTransition(ctx, input.conversation.orgId, eventKey)) {
+  if (await existingEvent(ctx, input.conversation.orgId, eventKey)) {
     return { applied: false, duplicate: true, stale: false };
   }
   const conversation = await currentConversation(ctx, input.conversation);
   if (conversation.status === "closed"
     || conversation.followUpState === "complete"
     || conversation.followUpState === "archived") {
+    if (input.source === "provider_template" || input.source === "provider_webhook") {
+      await recordEventReceipt(ctx, {
+        orgId: conversation.orgId,
+        conversationId: conversation._id,
+        cycleId: conversation.followUpCycleId,
+        eventKey,
+        createdAt: input.createdAt,
+      });
+    }
     return {
       applied: false,
       duplicate: false,
@@ -179,12 +204,22 @@ export async function applyOutboundLifecycle(
   }
 
   if (input.detectedStage === null || input.detectedStage < activeStage) {
+    await moveCounter(ctx, conversation, input.csKey, activeStage, input.createdAt);
     await ctx.db.patch(conversation._id, {
       followUpCsKey: input.csKey,
       followUpLastOutboundPreview: preview(input.content),
       followUpLastOutboundAt: input.createdAt,
       updatedAt: input.createdAt,
     });
+    if (input.source === "provider_template" || input.source === "provider_webhook") {
+      await recordEventReceipt(ctx, {
+        orgId: conversation.orgId,
+        conversationId: conversation._id,
+        cycleId: conversation.followUpCycleId,
+        eventKey,
+        createdAt: input.createdAt,
+      });
+    }
     return { applied: false, duplicate: false, stale: false, cycleId: conversation.followUpCycleId };
   }
 
@@ -236,7 +271,7 @@ export async function applyInboundReset(
   },
 ): Promise<LifecycleResult> {
   const eventKey = `message:${String(input.messageId)}`;
-  if (await existingTransition(ctx, input.conversation.orgId, eventKey)) {
+  if (await existingEvent(ctx, input.conversation.orgId, eventKey)) {
     return { applied: false, duplicate: true, stale: false };
   }
   const conversation = await currentConversation(ctx, input.conversation);
@@ -287,24 +322,35 @@ export async function applyInboundReset(
   return { applied: true, duplicate: false, stale: false, cycleId };
 }
 
+type ConfirmCurrentStageBase = {
+  conversation: Doc<"conversations">;
+  requestId: string;
+  createdAt: number;
+  providerMessageId?: string;
+  templateName?: string;
+  actorUserId?: Id<"users">;
+  actorName?: string;
+};
+
+type ConfirmCurrentStageInput = ConfirmCurrentStageBase & (
+  | {
+    source: "provider_template" | "provider_webhook";
+    expectedCycleId: string;
+  }
+  | {
+    source?: "manual" | "system";
+    expectedCycleId?: string;
+  }
+);
+
 export async function confirmCurrentStage(
   ctx: LifecycleCtx,
-  input: {
-    conversation: Doc<"conversations">;
-    expectedCycleId?: string;
-    requestId: string;
-    createdAt: number;
-    source?: TransitionSource;
-    providerMessageId?: string;
-    templateName?: string;
-    actorUserId?: Id<"users">;
-    actorName?: string;
-  },
+  input: ConfirmCurrentStageInput,
 ): Promise<LifecycleResult> {
   const eventKey = input.providerMessageId
     ? `provider:${input.providerMessageId}`
     : `confirmation:${input.requestId}`;
-  if (await existingTransition(ctx, input.conversation.orgId, eventKey)) {
+  if (await existingEvent(ctx, input.conversation.orgId, eventKey)) {
     return { applied: false, duplicate: true, stale: false };
   }
   const conversation = await currentConversation(ctx, input.conversation);
@@ -313,6 +359,15 @@ export async function confirmCurrentStage(
     || currentStage === undefined
     || bucketFor(conversation) === null
     || (input.expectedCycleId !== undefined && input.expectedCycleId !== conversation.followUpCycleId)) {
+    if (input.source === "provider_template" || input.source === "provider_webhook") {
+      await recordEventReceipt(ctx, {
+        orgId: conversation.orgId,
+        conversationId: conversation._id,
+        cycleId: input.expectedCycleId,
+        eventKey,
+        createdAt: input.createdAt,
+      });
+    }
     return { applied: false, duplicate: false, stale: true };
   }
   const next = nextStageAfterDetected(currentStage, currentStage, input.createdAt);
@@ -364,7 +419,7 @@ export async function correctCurrentStage(
   },
 ): Promise<LifecycleResult> {
   const eventKey = `correction:${input.requestId}`;
-  if (await existingTransition(ctx, input.conversation.orgId, eventKey)) {
+  if (await existingEvent(ctx, input.conversation.orgId, eventKey)) {
     return { applied: false, duplicate: true, stale: false };
   }
   const conversation = await currentConversation(ctx, input.conversation);
@@ -416,7 +471,7 @@ export async function terminateCycle(
     source?: "manual" | "system";
   },
 ): Promise<LifecycleResult> {
-  if (await existingTransition(ctx, input.conversation.orgId, input.eventKey)) {
+  if (await existingEvent(ctx, input.conversation.orgId, input.eventKey)) {
     return { applied: false, duplicate: true, stale: false };
   }
   const conversation = await currentConversation(ctx, input.conversation);

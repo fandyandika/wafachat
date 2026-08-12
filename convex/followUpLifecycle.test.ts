@@ -14,6 +14,18 @@ const HOUR = 60 * 60 * 1_000;
 const sentAt = Date.UTC(2026, 7, 12, 13, 30);
 const nextDayAtEightWib = Date.UTC(2026, 7, 13, 1);
 
+function providerConfirmationTypeContract(conversation: Doc<"conversations">) {
+  // @ts-expect-error Provider finalization must identify the cycle it reserved.
+  const missingCycle: Parameters<typeof confirmCurrentStage>[1] = {
+    conversation,
+    requestId: "provider-without-cycle",
+    createdAt: sentAt,
+    source: "provider_template",
+  };
+  return missingCycle;
+}
+void providerConfirmationTypeContract;
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -190,6 +202,47 @@ test("an early H+1 trigger advances to H+2 on the next Jakarta calendar day", as
   });
   expect(await t.run((ctx) => ctx.db.query("followUpCounters").unique()))
     .toMatchObject({ h1: 0, h2: 1, h3: 0 });
+});
+
+test("ordinary outbound owner transfer moves the active bucket and inbound reset clears the new owner", async () => {
+  const { t, orgId, conversationId } = await fixture({ stage: 2 });
+  const outboundMessageId = await insertMessage(t, orgId, conversationId, "outbound", "Pesan biasa", sentAt);
+  const conversation = await getConversation(t, conversationId);
+
+  await t.run((ctx) => applyOutboundLifecycle(ctx, {
+    conversation,
+    messageId: outboundMessageId,
+    content: "Pesan biasa",
+    providerMessageId: "wamid.transfer",
+    csKey: "budi",
+    detectedStage: null,
+    createdAt: sentAt,
+    source: "provider_webhook",
+  }));
+
+  expect(await getConversation(t, conversationId)).toMatchObject({
+    followUpCsKey: "budi",
+    followUpNextStage: 2,
+  });
+  let counters = await t.run((ctx) => ctx.db.query("followUpCounters").collect());
+  expect(counters.find((row) => row.csKey === "aisyah")).toMatchObject({ h2: 0 });
+  expect(counters.find((row) => row.csKey === "budi")).toMatchObject({ h2: 1 });
+
+  const inboundMessageId = await insertMessage(t, orgId, conversationId, "inbound", "Terima kasih", sentAt + HOUR);
+  await t.run(async (ctx) => {
+    const current = await ctx.db.get(conversationId);
+    if (!current) throw new Error("missing conversation fixture");
+    await applyInboundReset(ctx, {
+      conversation: current,
+      messageId: inboundMessageId,
+      content: "Terima kasih",
+      createdAt: sentAt + HOUR,
+    });
+  });
+
+  counters = await t.run((ctx) => ctx.db.query("followUpCounters").collect());
+  expect(counters.find((row) => row.csKey === "aisyah")).toMatchObject({ h2: 0 });
+  expect(counters.find((row) => row.csKey === "budi")).toMatchObject({ h2: 0 });
 });
 
 test("an H+2 trigger catches up from H+1 and schedules H+3", async () => {
@@ -406,6 +459,72 @@ test("a duplicate provider message ID is a complete no-op", async () => {
   expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toHaveLength(1);
 });
 
+test("a lower-stage provider event remains idempotent after the conversation enters a new cycle", async () => {
+  const { t, orgId, conversationId } = await fixture({ stage: 2 });
+  const lowerMessageId = await insertMessage(t, orgId, conversationId, "outbound", "Old H+1", sentAt);
+  await t.run(async (ctx) => {
+    const conversation = await ctx.db.get(conversationId);
+    if (!conversation) throw new Error("missing conversation fixture");
+    await applyOutboundLifecycle(ctx, {
+      conversation,
+      messageId: lowerMessageId,
+      content: "Old H+1",
+      providerMessageId: "wamid.lower-replay",
+      csKey: "aisyah",
+      detectedStage: 1,
+      createdAt: sentAt,
+      source: "provider_webhook",
+    });
+  });
+  const inboundMessageId = await insertMessage(t, orgId, conversationId, "inbound", "Reset", sentAt + HOUR);
+  await t.run(async (ctx) => {
+    const conversation = await ctx.db.get(conversationId);
+    if (!conversation) throw new Error("missing conversation fixture");
+    await applyInboundReset(ctx, {
+      conversation,
+      messageId: inboundMessageId,
+      content: "Reset",
+      createdAt: sentAt + HOUR,
+    });
+  });
+  const newMessageId = await insertMessage(t, orgId, conversationId, "outbound", "New cycle", sentAt + 2 * HOUR);
+  await t.run(async (ctx) => {
+    const conversation = await ctx.db.get(conversationId);
+    if (!conversation) throw new Error("missing conversation fixture");
+    await applyOutboundLifecycle(ctx, {
+      conversation,
+      messageId: newMessageId,
+      content: "New cycle",
+      csKey: "aisyah",
+      detectedStage: null,
+      createdAt: sentAt + 2 * HOUR,
+      source: "system",
+    });
+  });
+  const beforeReplay = await getConversation(t, conversationId);
+  const replayMessageId = await insertMessage(t, orgId, conversationId, "outbound", "Mutated replay", sentAt + 3 * HOUR);
+
+  const replay = await t.run((ctx) => applyOutboundLifecycle(ctx, {
+    conversation: beforeReplay,
+    messageId: replayMessageId,
+    content: "Mutated replay",
+    providerMessageId: "wamid.lower-replay",
+    csKey: "aisyah",
+    detectedStage: 1,
+    createdAt: sentAt + 3 * HOUR,
+    source: "provider_webhook",
+  }));
+
+  expect(replay.duplicate).toBe(true);
+  expect(await getConversation(t, conversationId)).toMatchObject({
+    followUpCycleId: beforeReplay.followUpCycleId,
+    followUpNextStage: 1,
+    followUpLastOutboundPreview: "New cycle",
+  });
+  expect(await t.run((ctx) => ctx.db.query("followUpEventReceipts").collect()))
+    .toMatchObject([{ eventKey: "provider:wamid.lower-replay", cycleId: "cycle-1" }]);
+});
+
 test("manual H+1 to H+3 correction is immediately actionable and records the actor", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(sentAt);
@@ -513,4 +632,76 @@ test("late send confirmation after a customer reply cannot resurrect the ended c
   expect(await t.run((ctx) => ctx.db.query("followUpCounters").unique()))
     .toMatchObject({ h1: 0, h2: 0, h3: 0 });
   expect(await t.run((ctx) => ctx.db.query("followUpTransitions").collect())).toHaveLength(1);
+});
+
+test("old provider finalization cannot advance a replacement cycle", async () => {
+  const { t, orgId, conversationId } = await fixture({ stage: 1 });
+  const oldCycle = await getConversation(t, conversationId);
+  const inboundMessageId = await insertMessage(t, orgId, conversationId, "inbound", "Reset old cycle", sentAt);
+  await t.run((ctx) => applyInboundReset(ctx, {
+    conversation: oldCycle,
+    messageId: inboundMessageId,
+    content: "Reset old cycle",
+    createdAt: sentAt,
+  }));
+  const newOutboundId = await insertMessage(t, orgId, conversationId, "outbound", "Start replacement", sentAt + HOUR);
+  await t.run(async (ctx) => {
+    const conversation = await ctx.db.get(conversationId);
+    if (!conversation) throw new Error("missing conversation fixture");
+    await applyOutboundLifecycle(ctx, {
+      conversation,
+      messageId: newOutboundId,
+      content: "Start replacement",
+      csKey: "aisyah",
+      detectedStage: null,
+      createdAt: sentAt + HOUR,
+      source: "system",
+    });
+  });
+  const replacement = await getConversation(t, conversationId);
+
+  const result = await t.run((ctx) => confirmCurrentStage(ctx, {
+    conversation: oldCycle,
+    expectedCycleId: "cycle-1",
+    requestId: "old-provider-send",
+    createdAt: sentAt + 2 * HOUR,
+    source: "provider_template",
+    providerMessageId: "wamid.old-finalization",
+  }));
+
+  expect(result).toMatchObject({ applied: false, stale: true });
+  expect(await getConversation(t, conversationId)).toMatchObject({
+    followUpCycleId: replacement.followUpCycleId,
+    followUpNextStage: 1,
+    followUpState: "waiting",
+  });
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").unique()))
+    .toMatchObject({ h1: 1, h2: 0, h3: 0 });
+  expect(await t.run((ctx) => ctx.db.query("followUpEventReceipts").collect()))
+    .toMatchObject([{ eventKey: "provider:wamid.old-finalization", cycleId: "cycle-1" }]);
+});
+
+test.each([
+  ["missing counter row", true],
+  ["zero source bucket", false],
+] as const)("decrementing a %s is clamped at zero", async (_label, deleteCounter) => {
+  const { t, orgId, conversationId } = await fixture({ stage: 1 });
+  await t.run(async (ctx) => {
+    const counter = await ctx.db.query("followUpCounters").unique();
+    if (!counter) throw new Error("missing counter fixture");
+    if (deleteCounter) await ctx.db.delete(counter._id);
+    else await ctx.db.patch(counter._id, { h1: 0 });
+  });
+  const inboundMessageId = await insertMessage(t, orgId, conversationId, "inbound", "Reset", sentAt);
+  const conversation = await getConversation(t, conversationId);
+
+  await t.run((ctx) => applyInboundReset(ctx, {
+    conversation,
+    messageId: inboundMessageId,
+    content: "Reset",
+    createdAt: sentAt,
+  }));
+
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").unique()))
+    .toMatchObject({ h1: 0, h2: 0, h3: 0, review: 0 });
 });
