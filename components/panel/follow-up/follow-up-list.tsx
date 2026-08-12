@@ -16,8 +16,8 @@ function isQueueRow(row: FollowUpListRow): row is FollowUpQueueRow {
   return 'cycleInboundAt' in row;
 }
 
-function hasSnapshot(row: FollowUpListRow): row is FollowUpQueueRow | FollowUpAttentionRow | FollowUpArchivedRow {
-  return 'lastInboundPreview' in row;
+function hasSnapshot(row: FollowUpListRow): row is FollowUpQueueRow | FollowUpAttentionRow | FollowUpArchivedRow | FollowUpClosedRow {
+  return 'lastInboundPreview' in row && (!('contextAvailable' in row) || row.contextAvailable);
 }
 
 function isClosedRow(row: FollowUpListRow): row is FollowUpClosedRow {
@@ -28,7 +28,7 @@ function rowId(row: FollowUpListRow): string {
   return row.conversationId ?? `${row.customerPhone}:${row.orderId}`;
 }
 
-function Preview({ label, preview, at }: { label: string; preview: string; at?: number }) {
+function Preview({ label, preview, at }: { label: string; preview?: string; at?: number }) {
   return <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 text-xs">
     <span className="font-semibold text-foreground">{label}</span>
     <div className="min-w-0">
@@ -47,7 +47,7 @@ export function FollowUpList({ view, rows, loading, error, selectedId, onSelect,
   onSelect: (row: FollowUpListRow) => void;
   onRetry?: () => void;
 }) {
-  if (loading) return <div role="status" className="p-6 text-sm text-muted-foreground">Memuat data follow-upâ€¦</div>;
+  if (loading) return <div role="status" className="p-6 text-sm text-muted-foreground">Memuat data follow-up…</div>;
   if (error) return <div role="alert" className="m-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm">
     <p className="font-medium text-destructive">{error}</p>
     {onRetry ? <button type="button" onClick={onRetry} className="mt-3 min-h-11 rounded-lg border bg-background px-4 font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">Coba lagi</button> : null}
@@ -67,12 +67,12 @@ export function FollowUpList({ view, rows, loading, error, selectedId, onSelect,
     {rows.map((row) => {
       const id = rowId(row);
       const queue = isQueueRow(row) ? row : null;
-      const due = queue ? formatFollowUpDue(queue.dueAt) : null;
+      const due = 'dueAt' in row && row.dueAt !== undefined ? formatFollowUpDue(row.dueAt) : null;
       return <button key={id} type="button" onClick={() => onSelect(row)}
         className={`min-h-11 w-full p-4 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selectedId === id ? 'bg-primary/5 ring-1 ring-inset ring-primary/20' : ''}`}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0"><p className="truncate font-semibold">{row.customerName || row.customerPhone}</p>
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">{row.customerPhone} Â· CS {row.csName}</p></div>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{row.customerPhone} · CS {row.csName}</p></div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             {'stage' in row && row.stage ? <span className="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-800">{FOLLOW_UP_STAGE_LABEL[row.stage]}</span> : null}
             {due ? <span className={`rounded-full border px-2 py-1 text-[11px] font-semibold ${FOLLOW_UP_DUE_CLASS[due.tone]}`}>{due.label}</span> : null}
@@ -86,13 +86,14 @@ export function FollowUpList({ view, rows, loading, error, selectedId, onSelect,
 
         {hasSnapshot(row) ? <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
           <span className="rounded-md bg-muted px-2 py-1 font-medium text-foreground">{row.productName}</span>
-          <span className="rounded-md bg-muted px-2 py-1">Order {row.orderId || 'â€”'}</span>
-          <span className="rounded-md bg-muted px-2 py-1">Trigger terdeteksi: {row.lastDetectedStage ? FOLLOW_UP_STAGE_LABEL[row.lastDetectedStage] : 'Belum ada'}{row.lastDetectedTemplate ? ` Â· ${row.lastDetectedTemplate}` : ''}</span>
+          <span className="rounded-md bg-muted px-2 py-1">Order {row.orderId || '—'}</span>
+          <span className="rounded-md bg-muted px-2 py-1">Trigger terdeteksi: {row.lastDetectedStage ? FOLLOW_UP_STAGE_LABEL[row.lastDetectedStage] : 'Belum ada'}{row.lastDetectedTemplate ? ` · ${row.lastDetectedTemplate}` : ''}</span>
         </div> : null}
 
         {isClosedRow(row) ? <div className="mt-3 text-sm">
-          <p className="font-medium">{row.product || 'Produk tidak tersedia'} Â· Order {row.orderId || 'â€”'}</p>
-          <p className="mt-1 text-xs text-muted-foreground">Closing {formatFollowUpTime(row.closedAt)} Â· {row.touches} sentuhan follow-up</p>
+          <p className="font-medium">{row.product || 'Produk tidak tersedia'} · Order {row.orderId || '—'}</p>
+          <p className="mt-1 text-xs text-muted-foreground">Closing {formatFollowUpTime(row.closedAt)} · {row.touches} sentuhan follow-up</p>
+          {!row.contextAvailable ? <p className="mt-2 rounded-lg bg-muted p-2 text-xs font-medium">Konteks Follow-up tidak tersedia</p> : null}
         </div> : null}
 
         {'lastError' in row && row.lastError ? <p className="mt-3 rounded-lg bg-destructive/10 p-2 text-xs font-medium text-destructive">{row.lastError}</p> : null}

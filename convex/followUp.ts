@@ -20,6 +20,7 @@ import { internal } from "./_generated/api";
 import { buildTemplatePayload, sendKirimDevMessage } from "../lib/kirimdev";
 import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
 import { attemptKey, finalizeAttempt, recordAcceptedAttempt, reserveAttempt } from "./followUpAttempts";
+import { markConversationCancelledCore, markConversationClosingCore } from "./state";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -379,6 +380,7 @@ const attentionPageRowValidator = v.object({
   customerPhone: v.string(),
   orderId: v.string(),
   csName: v.string(),
+  csKey: v.string(),
   stage: v.optional(followUpStageValidator),
   dueAt: v.optional(v.number()),
   state: attentionStateValidator,
@@ -438,6 +440,7 @@ export const listFollowUpAttentionPage = query({
         customerPhone: row.customerPhone,
         orderId: row.orderId,
         csName: row.assignedCsName,
+        csKey: row.followUpCsKey ?? csKey(row.assignedCsName),
         stage: row.followUpNextStage,
         dueAt: row.followUpDueAt,
         state: row.followUpState as "sending" | "failed" | "unknown" | "review",
@@ -458,6 +461,7 @@ const archivedPageRowValidator = v.object({
   customerPhone: v.string(),
   orderId: v.string(),
   csName: v.string(),
+  csKey: v.string(),
   archivedAt: v.number(),
   outcome: v.optional(v.union(
     v.literal("h3_complete"),
@@ -517,6 +521,7 @@ export const listArchivedFollowUpsPage = query({
         customerPhone: row.customerPhone,
         orderId: row.orderId,
         csName: row.assignedCsName,
+        csKey: row.followUpCsKey ?? csKey(row.assignedCsName),
         archivedAt: row.followUpArchivedAt ?? row.updatedAt,
         outcome: row.followUpOutcome,
         ...snapshotContext(row),
@@ -533,11 +538,21 @@ const closedPageRowValidator = v.object({
   customerName: v.string(),
   customerPhone: v.string(),
   csName: v.string(),
+  csKey: v.string(),
   orderId: v.string(),
   closedAt: v.number(),
   product: v.string(),
   touches: v.number(),
   fromFollowUp: v.boolean(),
+  contextAvailable: v.boolean(),
+  stage: v.optional(followUpStageValidator),
+  productName: v.optional(v.string()),
+  lastInboundPreview: v.optional(v.string()),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundPreview: v.optional(v.string()),
+  lastOutboundAt: v.optional(v.number()),
+  lastDetectedStage: v.optional(followUpStageValidator),
+  lastDetectedTemplate: v.optional(v.string()),
 });
 export const listClosedFollowUpsPage = query({
   args: {
@@ -584,11 +599,21 @@ export const listClosedFollowUpsPage = query({
           customerName: row.customerName,
           customerPhone: row.customerPhone,
           csName: row.csName,
+          csKey: row.followUpCsKey ?? row.csKey ?? csKey(row.csName),
           orderId: row.orderIdBerdu ?? "",
           closedAt: row.closedAt,
           product: row.packageContent,
           touches,
           fromFollowUp: touches > 0,
+          contextAvailable: row.followUpCsKey !== undefined,
+          stage: row.followUpStage,
+          productName: row.followUpProductName,
+          lastInboundPreview: row.followUpLastInboundPreview,
+          lastInboundAt: row.followUpLastInboundAt,
+          lastOutboundPreview: row.followUpLastOutboundPreview,
+          lastOutboundAt: row.followUpLastOutboundAt,
+          lastDetectedStage: row.followUpLastDetectedStage,
+          lastDetectedTemplate: row.followUpLastDetectedTemplate,
         };
       }),
       isDone: result.isDone,
@@ -1158,6 +1183,34 @@ export const correctFollowUpStage = mutation({
       actorName: viewer.name,
     });
     return { ok: true as const, duplicate: result.duplicate };
+  },
+});
+
+async function scopedFollowUpConversation(ctx: any, conversationId: Id<"conversations">, functionName: string) {
+  const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, functionName);
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation || String(conversation.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+  if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
+    throw new Error("unauthorized: conversation scope mismatch");
+  }
+  return { orgId, conversation };
+}
+
+export const markFollowUpClosing = mutation({
+  args: { conversationId: v.id("conversations") },
+  handler: async (ctx, args) => {
+    const { orgId, conversation } = await scopedFollowUpConversation(ctx, args.conversationId, "followUp.markFollowUpClosing");
+    return markConversationClosingCore(ctx, { orgId, conversation });
+  },
+});
+
+export const markFollowUpCancelled = mutation({
+  args: { conversationId: v.id("conversations"), reason: v.string() },
+  handler: async (ctx, args) => {
+    const reason = args.reason.trim();
+    if (!reason) throw new Error("Alasan pembatalan wajib diisi.");
+    const { orgId, conversation } = await scopedFollowUpConversation(ctx, args.conversationId, "followUp.markFollowUpCancelled");
+    return markConversationCancelledCore(ctx, { orgId, conversation, note: reason });
   },
 });
 

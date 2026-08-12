@@ -54,6 +54,24 @@ test('only the active lifecycle tab subscribes to a paginated query', () => {
   expect(activeCalls[0][2]).toEqual({ initialNumItems: 30 });
 });
 
+test.each([
+  ['review', 'followUp:listFollowUpAttentionPage'],
+  ['closing', 'followUp:listClosedFollowUpsPage'],
+  ['archived', 'followUp:listArchivedFollowUpsPage'],
+] as const)('activating %s subscribes only to its reactive page', (initialView, functionName) => {
+  renderToStaticMarkup(<FollowUpDashboard initialMe={{ name: 'Owner', role: 'admin' }} initialView={initialView} />);
+  const activeCalls = usePaginatedQueryMock.mock.calls.filter(([, args]) => args !== 'skip');
+  expect(activeCalls).toHaveLength(1);
+  expect(getFunctionName(activeCalls[0][0])).toBe(functionName);
+});
+
+test('active pagination exposes a load-more control without querying inactive tabs', () => {
+  usePaginatedQueryMock.mockReturnValue({ results: [], status: 'CanLoadMore', isLoading: false, loadMore: vi.fn() });
+  const html = renderToStaticMarkup(<FollowUpDashboard initialMe={{ name: 'Owner', role: 'admin' }} initialView="archived" />);
+  expect(html).toContain('Muat berikutnya');
+  expect(usePaginatedQueryMock.mock.calls.filter(([, args]) => args !== 'skip')).toHaveLength(1);
+});
+
 test('counts are reactive and search is an explicit action', () => {
   const html = renderToStaticMarkup(<FollowUpDashboard initialMe={{ name: 'Owner', role: 'admin' }} />);
   expect(useQueryMock).toHaveBeenCalledWith(api.followUp.getFollowUpCounts, { csName: undefined });
@@ -75,4 +93,5 @@ test('workspace makes the manual-only behavior explicit', () => {
   expect(html).toContain('tanpa pengiriman otomatis');
   expect(html).not.toContain('Auto-send');
   expect(html).not.toContain('Kirim massal');
+  expect(html).not.toMatch(/Ã|Â|â|�/);
 });

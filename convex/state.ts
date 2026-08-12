@@ -579,24 +579,19 @@ export const markConversationNotClosing = mutation({
   },
 });
 
-export const markConversationCancelled = mutation({
-  args: {
-    phone: v.string(),
-    order_id: v.optional(v.string()),
-    note: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdminOrg(ctx, "state.markConversationCancelled");
+export async function markConversationCancelledCore(ctx: any, args: {
+  orgId: Id<"organizations">;
+  conversation: any;
+  note?: string;
+  orderId?: string;
+  phone?: string;
+}) {
     const now = Date.now();
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
-
-    if (!conversation) {
-      return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_cancelled" };
-    }
+    const { conversation, orgId } = args;
 
     const transitionKey = makeTransitionKey({
-      orderId: args.order_id,
-      phone: args.phone,
+      orderId: args.orderId ?? conversation.orderId,
+      phone: args.phone ?? conversation.customerPhone,
       conversation,
     });
     const nextNote = args.note ?? "customer cancelled";
@@ -632,7 +627,7 @@ export const markConversationCancelled = mutation({
       actor: "cs",
       metadata: { key: transitionKey, note: nextNote },
       createdAt: now,
-      orgId,
+      orgId: args.orgId,
     });
 
     return {
@@ -643,6 +638,19 @@ export const markConversationCancelled = mutation({
       note: nextNote,
       _action: "mark_cancelled",
     };
+}
+
+export const markConversationCancelled = mutation({
+  args: {
+    phone: v.string(),
+    order_id: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "state.markConversationCancelled");
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
+    if (!conversation) return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_cancelled" };
+    return markConversationCancelledCore(ctx, { orgId, conversation, note: args.note, orderId: args.order_id, phone: args.phone });
   },
 });
 
@@ -702,24 +710,19 @@ export const undoConversationCancelled = mutation({
   },
 });
 
-export const markConversationClosing = mutation({
-  args: {
-    phone: v.string(),
-    order_id: v.optional(v.string()),
-    note: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdminOrg(ctx, "state.markConversationClosing");
+export async function markConversationClosingCore(ctx: any, args: {
+  orgId: Id<"organizations">;
+  conversation: any;
+  note?: string;
+  orderId?: string;
+  phone?: string;
+}) {
     const now = Date.now();
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
-
-    if (!conversation) {
-      return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_closing" };
-    }
+    const { conversation, orgId } = args;
 
     const transitionKey = makeTransitionKey({
-      orderId: args.order_id,
-      phone: args.phone,
+      orderId: args.orderId ?? conversation.orderId,
+      phone: args.phone ?? conversation.customerPhone,
       conversation,
     });
     const nextNote = args.note ?? "manual closing by CS";
@@ -761,6 +764,19 @@ export const markConversationClosing = mutation({
       note: nextNote,
       _action: "mark_closing",
     };
+}
+
+export const markConversationClosing = mutation({
+  args: {
+    phone: v.string(),
+    order_id: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "state.markConversationClosing");
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
+    if (!conversation) return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_closing" };
+    return markConversationClosingCore(ctx, { orgId, conversation, note: args.note, orderId: args.order_id, phone: args.phone });
   },
 });
 

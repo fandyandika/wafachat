@@ -105,3 +105,40 @@ export const listProviderChannelHealth = query({
     };
   },
 });
+
+const channelHealthResult = v.union(v.null(), v.object({
+  _id: v.id("providerChannelHealth"),
+  providerNumberId: v.string(),
+  csKey: v.optional(v.string()),
+  channelType: v.union(v.literal("cs"), v.literal("admin"), v.literal("unknown")),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundAt: v.optional(v.number()),
+  lastError: v.optional(v.string()),
+  errorAt: v.optional(v.number()),
+  updatedAt: v.number(),
+}));
+
+export const getProviderChannelHealthForCs = query({
+  args: { csKey: v.string() },
+  returns: channelHealthResult,
+  handler: async (ctx, args) => {
+    const { orgId } = await requireMemberOrg(ctx, "providerChannelHealth.getProviderChannelHealthForCs");
+    const key = args.csKey.trim();
+    if (!key) throw new Error("CS key wajib tersedia.");
+    const row = await ctx.db.query("providerChannelHealth")
+      .withIndex("by_org_csKey", (q) => q.eq("orgId", orgId).eq("csKey", key))
+      .first();
+    if (!row) return null;
+    return {
+      _id: row._id,
+      providerNumberId: row.providerNumberId,
+      csKey: row.csKey,
+      channelType: row.channelType,
+      lastInboundAt: row.lastInboundAt,
+      lastOutboundAt: row.lastOutboundAt,
+      lastError: row.lastError,
+      errorAt: row.errorAt,
+      updatedAt: row.updatedAt,
+    };
+  },
+});

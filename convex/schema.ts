@@ -212,6 +212,7 @@ export default defineSchema({
     lastInboundAt: v.optional(v.number()), lastOutboundAt: v.optional(v.number()),
     lastError: v.optional(v.string()), errorAt: v.optional(v.number()), updatedAt: v.number(),
   }).index("by_org_providerNumberId", ["orgId", "providerNumberId"])
+    .index("by_org_csKey", ["orgId", "csKey"])
     .index("by_org_updatedAt", ["orgId", "updatedAt"]),
 
   followUpPreparationRuns: defineTable({
@@ -678,6 +679,16 @@ export default defineSchema({
       v.literal("delivered"),
     )),
     followUpTouchesAtClose: v.optional(v.number()), // count of follow-up touches that preceded this closing
+    // Materialized Follow-up context avoids per-row conversation reads in Closing pages.
+    followUpCsKey: v.optional(v.string()),
+    followUpStage: v.optional(v.union(v.literal(1), v.literal(2), v.literal(3))),
+    followUpProductName: v.optional(v.string()),
+    followUpLastInboundPreview: v.optional(v.string()),
+    followUpLastInboundAt: v.optional(v.number()),
+    followUpLastOutboundPreview: v.optional(v.string()),
+    followUpLastOutboundAt: v.optional(v.number()),
+    followUpLastDetectedStage: v.optional(v.union(v.literal(1), v.literal(2), v.literal(3))),
+    followUpLastDetectedTemplate: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })

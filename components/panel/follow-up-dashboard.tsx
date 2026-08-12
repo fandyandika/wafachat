@@ -50,11 +50,11 @@ function stageForView(view: FollowUpView): FollowUpStage | null {
   return null;
 }
 
-export function FollowUpDashboard({ initialMe }: { initialMe?: Me } = {}) {
+export function FollowUpDashboard({ initialMe, initialView = 'h1' }: { initialMe?: Me; initialView?: FollowUpView } = {}) {
   const [me, setMe] = useState<Me | null>(initialMe ?? null);
   const { cs } = usePanelFilters();
   const [csFilter, setCsFilter] = useState(cs && cs !== 'all' ? cs : 'all');
-  const [view, setView] = useState<FollowUpView>('h1');
+  const [view, setView] = useState<FollowUpView>(initialView);
   const [selected, setSelected] = useState<FollowUpListRow | null>(null);
   const [mobileDetail, setMobileDetail] = useState(false);
   const [searchInput, setSearchInput] = useState('');
@@ -179,9 +179,9 @@ export function FollowUpDashboard({ initialMe }: { initialMe?: Me } = {}) {
 
     <div className="flex min-h-0 flex-1">
       <section className={`${mobileDetail ? 'hidden md:block' : 'block'} w-full overflow-y-auto border-r md:w-[27rem] md:shrink-0`}>
-        <div className="border-b px-4 py-3"><p className="font-semibold">{searchRows === null ? activeView.label : 'Hasil pencarian'}</p><p className="text-xs text-muted-foreground">{searchRows === null ? activeView.description : `Hasil untuk â€œ${searchInput.trim()}â€`}</p></div>
+        <div className="border-b px-4 py-3"><p className="font-semibold">{searchRows === null ? activeView.label : 'Hasil pencarian'}</p><p className="text-xs text-muted-foreground">{searchRows === null ? activeView.description : `Hasil untuk “${searchInput.trim()}”`}</p></div>
         <FollowUpList view={listView} rows={rows} loading={loading} error={searchError} selectedId={selected ? rowId(selected) : null} onSelect={selectRow} onRetry={searchError ? runSearch : undefined} />
-        {searchRows === null && (activePage.status === 'CanLoadMore' || activePage.status === 'LoadingMore') ? <div className="p-3"><Button variant="outline" className="min-h-11 w-full" disabled={activePage.status === 'LoadingMore'} onClick={() => activePage.loadMore(30)}>{activePage.status === 'LoadingMore' ? 'Memuatâ€¦' : 'Muat berikutnya'}</Button></div> : null}
+        {searchRows === null && (activePage.status === 'CanLoadMore' || activePage.status === 'LoadingMore') ? <div className="p-3"><Button variant="outline" className="min-h-11 w-full" disabled={activePage.status === 'LoadingMore'} onClick={() => activePage.loadMore(30)}>{activePage.status === 'LoadingMore' ? 'Memuat…' : 'Muat berikutnya'}</Button></div> : null}
       </section>
 
       <main className={`${mobileDetail ? 'block' : 'hidden md:block'} min-w-0 flex-1`}>

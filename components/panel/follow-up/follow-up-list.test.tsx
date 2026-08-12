@@ -50,3 +50,12 @@ test('retry controls are touch sized and visibly focusable', () => {
   expect(html).toContain('min-h-11');
   expect(html).toContain('focus-visible:ring');
 });
+
+test('legacy closing rows state that follow-up context is unavailable', () => {
+  const html = renderToStaticMarkup(<FollowUpList view="closing" loading={false} rows={[{
+    customerName: 'Hasna', customerPhone: '62812', orderId: 'O1', csName: 'Aisyah', csKey: 'aisyah',
+    closedAt: 1, product: 'Quran Mapping', touches: 0, fromFollowUp: false, contextAvailable: false,
+  }]} selectedId={null} onSelect={vi.fn()} />);
+  expect(html).toContain('Konteks Follow-up tidak tersedia');
+  expect(html).not.toContain('Preview belum tersedia');
+});

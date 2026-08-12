@@ -1,6 +1,7 @@
 import type { FollowUpDueTone } from './follow-up-types';
 
 const DAY = 86_400_000;
+const JAKARTA_OFFSET = 7 * 60 * 60 * 1000;
 
 export function formatFollowUpDue(dueAt: number, now = Date.now()): { label: string; tone: FollowUpDueTone } {
   if (now < dueAt) {
@@ -9,7 +10,7 @@ export function formatFollowUpDue(dueAt: number, now = Date.now()): { label: str
       tone: 'scheduled',
     };
   }
-  const overdueDays = Math.floor((now - dueAt) / DAY);
+  const overdueDays = Math.floor((now + JAKARTA_OFFSET) / DAY) - Math.floor((dueAt + JAKARTA_OFFSET) / DAY);
   if (overdueDays < 1) return { label: 'Terlambat hari ini', tone: 'due-today' };
   return { label: `Terlambat ${overdueDays} hari`, tone: 'overdue' };
 }

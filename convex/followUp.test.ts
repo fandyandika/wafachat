@@ -350,6 +350,9 @@ test("review and archive views paginate newest-first through lifecycle state ind
     reviewReason: "Periksa 0",
     lastInboundPreview: "Inbound 0",
     lastOutboundPreview: "Outbound 0",
+    csKey: "nabila",
+    stage: 2,
+    productName: "Quran Mapping",
   });
 
   const archivedFirst = await asAdmin.query(api.followUp.listArchivedFollowUpsPage, {
@@ -364,7 +367,31 @@ test("review and archive views paginate newest-first through lifecycle state ind
     orderId: "ARCHIVED-0",
     outcome: "h3_complete",
     archivedAt: now,
+    csKey: "nabila",
+    productName: "Quran Mapping",
+    lastInboundPreview: "Inbound 0",
+    lastOutboundPreview: "Outbound 0",
   });
+});
+
+test('assigned CS can close or cancel its follow-up while cross-CS and cross-org actions are rejected', async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const otherOrgId = await t.run((ctx) => ctx.db.insert('organizations', { slug: 'other-action-org', name: 'Other', createdAt: 1, updatedAt: 1 }));
+  const userId = await t.run((ctx) => ctx.db.insert('users', {
+    orgId, email: 'siti.nur+fu@wafachat.test', name: 'Siti Nur Aulia', passwordHash: 'x', role: 'cs', csName: 'Siti Nur Aulia', isActive: true, createdAt: 1, updatedAt: 1,
+  }));
+  const ids = await t.run(async (ctx) => ({
+    closing: await ctx.db.insert('conversations', { orgId, ...convBase, assignedCsName: 'Siti Nur Aulia', customerPhone: '628111', orderId: 'CS-CLOSE', followUpCsKey: 'siti-nur-aulia', followUpCycleId: 'cycle-close', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
+    cancel: await ctx.db.insert('conversations', { orgId, ...convBase, assignedCsName: 'Siti Nur Aulia', customerPhone: '628112', orderId: 'CS-CANCEL', followUpCsKey: 'siti-nur-aulia', followUpCycleId: 'cycle-cancel', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
+    otherCs: await ctx.db.insert('conversations', { orgId, ...convBase, assignedCsName: 'Lila', customerPhone: '628113', orderId: 'OTHER-CS-ACTION', followUpCsKey: 'lila', followUpCycleId: 'cycle-other', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
+    otherOrg: await ctx.db.insert('conversations', { orgId: otherOrgId, ...convBase, assignedCsName: 'Siti Nur Aulia', customerPhone: '628114', orderId: 'OTHER-ORG-ACTION', followUpCsKey: 'siti-nur-aulia', followUpCycleId: 'cycle-other-org', followUpCycleInboundAt: now - HOUR, followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting' }),
+  }));
+  const asCs = t.withIdentity({ subject: String(userId), role: 'cs', name: 'Siti Nur Aulia', email: 'siti.nur+fu@wafachat.test', csName: 'Siti Nur Aulia' });
+  await expect(asCs.mutation(api.followUp.markFollowUpClosing, { conversationId: ids.closing })).resolves.toMatchObject({ success: true });
+  await expect(asCs.mutation(api.followUp.markFollowUpCancelled, { conversationId: ids.cancel, reason: 'Customer membatalkan pesanan' })).resolves.toMatchObject({ success: true });
+  await expect(asCs.mutation(api.followUp.markFollowUpClosing, { conversationId: ids.otherCs })).rejects.toThrow(/scope mismatch|unauthorized/i);
+  await expect(asCs.mutation(api.followUp.markFollowUpCancelled, { conversationId: ids.otherOrg, reason: 'Batal' })).rejects.toThrow(/tidak ditemukan|unauthorized/i);
 });
 
 test("closing view paginates one interleaved counted stream despite newer cancellations", async () => {
@@ -422,6 +449,15 @@ test("closing view paginates one interleaved counted stream despite newer cancel
         sourceMessageText: "",
         version: 1,
         followUpTouchesAtClose: i % 4,
+        followUpCsKey: i === 0 ? "nabila" : undefined,
+        followUpStage: i === 0 ? 3 : undefined,
+        followUpProductName: i === 0 ? "Quran Mapping Snapshot" : undefined,
+        followUpLastInboundPreview: i === 0 ? "Customer closing context" : undefined,
+        followUpLastInboundAt: i === 0 ? now - 2 * HOUR : undefined,
+        followUpLastOutboundPreview: i === 0 ? "CS closing context" : undefined,
+        followUpLastOutboundAt: i === 0 ? now - HOUR : undefined,
+        followUpLastDetectedStage: i === 0 ? 3 : undefined,
+        followUpLastDetectedTemplate: i === 0 ? "follow_up_h3" : undefined,
         createdAt: now - i,
         updatedAt: now - i,
       });
@@ -492,10 +528,18 @@ test("closing view paginates one interleaved counted stream despite newer cancel
   expect(first.page[0]).toMatchObject({
     orderId: "CLOSED-0",
     product: "Quran Mapping",
+    csKey: "nabila",
+    contextAvailable: true,
+    stage: 3,
+    productName: "Quran Mapping Snapshot",
+    lastInboundPreview: "Customer closing context",
+    lastOutboundPreview: "CS closing context",
+    lastDetectedTemplate: "follow_up_h3",
     touches: 0,
     fromFollowUp: false,
   });
   expect(first.page[1]).toMatchObject({ orderId: "CLOSED-1", touches: 1, fromFollowUp: true });
+  expect(first.page[1]).toMatchObject({ contextAvailable: false });
 });
 
 test("getFollowUpCandidates: stale conversation (updated >6d ago) excluded by recency bound", async () => {

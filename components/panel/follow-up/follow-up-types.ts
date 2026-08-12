@@ -36,6 +36,7 @@ export type FollowUpAttentionRow = FollowUpSnapshotContext & {
   customerPhone: string;
   orderId: string;
   csName: string;
+  csKey: string;
   stage?: FollowUpStage;
   dueAt?: number;
   state: 'sending' | 'failed' | 'unknown' | 'review';
@@ -50,6 +51,7 @@ export type FollowUpArchivedRow = FollowUpSnapshotContext & {
   customerPhone: string;
   orderId: string;
   csName: string;
+  csKey: string;
   archivedAt: number;
   outcome?: 'h3_complete' | 'closing' | 'cancelled' | 'manual_archive';
   updatedAt: number;
@@ -60,11 +62,21 @@ export type FollowUpClosedRow = {
   customerName: string;
   customerPhone: string;
   csName: string;
+  csKey: string;
   orderId: string;
   closedAt: number;
   product: string;
   touches: number;
   fromFollowUp: boolean;
+  contextAvailable: boolean;
+  stage?: FollowUpStage;
+  productName?: string;
+  lastInboundPreview?: string;
+  lastInboundAt?: number;
+  lastOutboundPreview?: string;
+  lastOutboundAt?: number;
+  lastDetectedStage?: FollowUpStage;
+  lastDetectedTemplate?: string;
 };
 
 export type FollowUpSearchRow = {

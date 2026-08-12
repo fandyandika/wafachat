@@ -35,10 +35,10 @@ beforeEach(() => {
       _id: 'm1', _creationTime: 1, orgId: 'o1', conversationId: 'c1', orderId: 'O1', customerPhone: '62812',
       role: 'customer', direction: 'inbound', content: 'Masih ada kak?', messageType: 'text', source: 'ingest', createdAt: 1,
     }])
-    .mockReturnValueOnce({ page: [{
+    .mockReturnValueOnce({
       _id: 'health1', providerNumberId: 'provider1', csKey: 'aisyah', channelType: 'cs',
       lastError: 'Nomor provider belum dipetakan', errorAt: 3, updatedAt: 3,
-    }], isDone: true, continueCursor: '' });
+    });
   usePaginatedQueryMock.mockReset();
   usePaginatedQueryMock.mockReturnValue({
     results: [{ transitionId: 't1', cycleId: 'cycle-1', kind: 'stage_corrected', source: 'manual', fromStage: 1, toStage: 2, actorName: 'Owner', createdAt: 2 }],
@@ -60,14 +60,27 @@ test('empty detail skips message, transition, and health subscriptions', () => {
   renderToStaticMarkup(<FollowUpDetail candidate={null} />);
   expect(useQueryMock).toHaveBeenCalledWith(api.messages.listMessages, 'skip');
   expect(usePaginatedQueryMock).toHaveBeenCalledWith(api.followUpTransitions.listConversationTransitions, 'skip', { initialNumItems: 50 });
-  expect(useQueryMock).toHaveBeenCalledWith(api.providerChannelHealth.listProviderChannelHealth, 'skip');
+  expect(useQueryMock).toHaveBeenCalledWith(api.providerChannelHealth.getProviderChannelHealthForCs, 'skip');
+});
+
+test('detail requests exact health by backend canonical CS key', () => {
+  renderToStaticMarkup(<FollowUpDetail candidate={{ ...candidate, csName: 'Siti Nur, Aulia', csKey: 'siti-nur-aulia' }} />);
+  expect(useQueryMock).toHaveBeenCalledWith(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'siti-nur-aulia' });
+});
+
+test('missing channel health is unknown rather than falsely healthy', () => {
+  useQueryMock.mockReset();
+  useQueryMock.mockReturnValueOnce([]).mockReturnValueOnce(null);
+  const html = renderToStaticMarkup(<FollowUpDetail candidate={candidate} />);
+  expect(html).toContain('Belum ada sinyal webhook');
+  expect(html).not.toContain('Tidak ada masalah kanal');
 });
 
 test('detail renders timeline, explicit health errors, accessible stage correction, and all actions', () => {
   const html = renderToStaticMarkup(<FollowUpDetail candidate={candidate} onBack={vi.fn()} onChanged={vi.fn()} />);
   expect(html).toContain('Riwayat tahap');
   expect(html).toContain('Tahap diubah');
-  expect(html).toContain('H+1 â†’ H+2');
+  expect(html).toContain('H+1 → H+2');
   expect(html).toContain('Masalah kanal');
   expect(html).toContain('Nomor provider belum dipetakan');
   expect(html).toContain('Ubah tahap');
@@ -79,6 +92,16 @@ test('detail renders timeline, explicit health errors, accessible stage correcti
   expect(html).toContain('Arsip');
 });
 
+test('successful actions close immediately without scheduling a stale callback', async () => {
+  vi.useFakeTimers();
+  const { completeFollowUpAction } = await import('./follow-up-detail');
+  const changed = vi.fn();
+  await expect(completeFollowUpAction(async () => ({ success: true }), changed)).resolves.toEqual({ success: true });
+  expect(changed).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+  vi.useRealTimers();
+});
+
 test('mobile action bar is sticky, opaque, touch sized, and focus visible', () => {
   const html = renderToStaticMarkup(<FollowUpDetail candidate={candidate} />);
   expect(html).toContain('sticky bottom-0');
@@ -86,6 +109,7 @@ test('mobile action bar is sticky, opaque, touch sized, and focus visible', () =
   expect(html).not.toContain('bg-transparent');
   expect(html).toContain('min-h-11');
   expect(html).toContain('focus-visible:ring');
+  expect(html).not.toMatch(/Ã|Â|â|�/);
 });
 
 test('search and closing rows open a useful read-only customer detail', () => {

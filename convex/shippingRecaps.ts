@@ -18,6 +18,21 @@ export const normalizeProductName = normalizeProductNameLib;
 type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
 
+function followUpSnapshotForRecap(conversation?: Doc<"conversations"> | null) {
+  if (!conversation) return {};
+  return {
+    followUpCsKey: conversation.followUpCsKey ?? csKey(conversation.assignedCsName),
+    followUpStage: conversation.followUpNextStage ?? conversation.followUpLastDetectedStage,
+    followUpProductName: conversation.followUpProductName,
+    followUpLastInboundPreview: conversation.followUpLastInboundPreview,
+    followUpLastInboundAt: conversation.followUpLastInboundAt,
+    followUpLastOutboundPreview: conversation.followUpLastOutboundPreview,
+    followUpLastOutboundAt: conversation.followUpLastOutboundAt,
+    followUpLastDetectedStage: conversation.followUpLastDetectedStage,
+    followUpLastDetectedTemplate: conversation.followUpLastDetectedTemplate,
+  };
+}
+
 function closingBucketForStatus(status: RecapStatus): "counted" | undefined {
   return status === "cancelled" || status === "cancelled_after_export" ? undefined : "counted";
 }
@@ -494,6 +509,7 @@ export const upsertFromN8n = internalMutation({
     const baseFlags = existing?.status === "exported" ? unique([...comparison.flags, "UPDATED_AFTER_EXPORT"]) : comparison.flags;
     const flags = resolvedCsName ? baseFlags : unique([...baseFlags, "NO_CS_DATA"]);
     const payload = {
+      ...followUpSnapshotForRecap(conversation),
       orderIdBerdu: args.orderIdBerdu ?? order?.orderId,
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
@@ -593,6 +609,7 @@ export const createFromPanelClosing = mutation({
     const panelFlags: string[] = order ? ["MANUAL_CLOSING"] : ["MANUAL_CLOSING", "NO_ORDER_DATA"];
     if (!resolvedCsName) panelFlags.push("NO_CS_DATA");
     const payload = {
+      ...followUpSnapshotForRecap(conversation),
       orderIdBerdu: args.orderId ?? order?.orderId,
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
@@ -675,6 +692,7 @@ export async function upsertRecapFromMessage(
   const status: RecapStatus = flags.length > 0 ? "needs_review" : parsed.status;
   const sourceMessageId = message.externalMessageId ?? message._id;
   const payload = {
+    ...followUpSnapshotForRecap(conversation),
     orderIdBerdu: message.orderId || order?.orderId,
     conversationId: conversation?._id,
     customerPhone: message.customerPhone,
@@ -1315,6 +1333,7 @@ export const importBerduVerifiedRows = internalMutation({
       const rawImportCsName = row.csName || order?.assignedCsName || conversation?.assignedCsName || "";
       const canonImport = await canonicalizeCs(ctx, orgId, rawImportCsName);
       const payload = {
+        ...followUpSnapshotForRecap(conversation),
         orderIdBerdu,
         conversationId: conversation?._id,
         customerPhone,

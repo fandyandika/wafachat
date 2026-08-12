@@ -119,3 +119,33 @@ test.each([Number.NaN, Number.POSITIVE_INFINITY, 1.5, 0, -1])(
     })).rejects.toThrow(/page size must be a positive finite integer/i);
   },
 );
+
+test('getProviderChannelHealthForCs finds an exact canonical key beyond the newest 50 rows', async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    await touchProviderChannelHealth(ctx, {
+      orgId, providerNumberId: 'pn-exact', channelType: 'cs', csKey: 'siti-nur-aulia', direction: 'inbound', touchedAt: 1,
+    });
+    for (let i = 0; i < 60; i++) {
+      await touchProviderChannelHealth(ctx, {
+        orgId, providerNumberId: `pn-new-${i}`, channelType: 'cs', csKey: `new-${i}`, direction: 'inbound', touchedAt: 100 + i,
+      });
+    }
+  });
+  await expect(asAdmin(t).query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'siti-nur-aulia' }))
+    .resolves.toMatchObject({ providerNumberId: 'pn-exact', csKey: 'siti-nur-aulia' });
+});
+
+test('exact channel health lookup is tenant-scoped and authenticated', async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const otherOrgId = await t.run((ctx) => ctx.db.insert('organizations', { slug: 'other-health', name: 'Other', createdAt: 1, updatedAt: 1 }));
+  await t.run(async (ctx) => {
+    await touchProviderChannelHealth(ctx, { orgId, providerNumberId: 'ours', channelType: 'cs', csKey: 'queen-risma', direction: 'inbound', touchedAt: 1 });
+    await touchProviderChannelHealth(ctx, { orgId: otherOrgId, providerNumberId: 'theirs', channelType: 'cs', csKey: 'queen-risma', direction: 'inbound', touchedAt: 2 });
+  });
+  await expect(t.query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'queen-risma' })).rejects.toThrow(/unauthorized/);
+  await expect(asAdmin(t).query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'queen-risma' }))
+    .resolves.toMatchObject({ providerNumberId: 'ours' });
+});
