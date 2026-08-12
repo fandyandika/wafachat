@@ -3,7 +3,7 @@ import type { MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { requireAdminOrg } from "./authz";
+import { requireAdminOrg, requireMemberOrg } from "./authz";
 import {
   businessDateKeyForWindowKey, csKey, windowKeyFor, windowKeyForBusinessDate,
   windowRangeForKey, windowKeyToday,
@@ -23,8 +23,42 @@ type Award = {
   respMedianMs?: number;
 };
 
+async function computeWindowStanding(ctx: any, orgId: Id<"organizations">, windowKey: string) {
+  const range = windowRangeForKey(windowKey);
+  const [rollups, response] = await Promise.all([
+    ctx.db.query("dailyRollups")
+      .withIndex("by_org_windowKey", (q: any) => q.eq("orgId", orgId).eq("windowKey", windowKey))
+      .collect(),
+    responseTimesFromSamples(ctx, orgId, range),
+  ]);
+  const responseByCs = new Map(response.cs.map((row: any) => [csKey(row.csName), row]));
+  const inputs = rollups.map((row: any) => {
+    const responseRow: any = responseByCs.get(row.csKey);
+    return {
+      csName: row.csName,
+      leads: row.leadsCust,
+      closings: row.closings,
+      cr: row.leadsCust ? Math.round((row.closedCust / row.leadsCust) * 1000) / 10 : 0,
+      respMedianMs: responseRow?.firstReplyMedianMs ?? null,
+      respCount: responseRow?.firstReplyCount ?? 0,
+    };
+  });
+  const scores = computeQueenScores(inputs);
+  return { scores, queen: computeQueenCs(inputs), rollups };
+}
+
 function nextWindowKey(key: string) {
   return windowKeyFor(windowRangeForKey(key).endAt);
+}
+
+function isBusinessDate(value: string) {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function closedWindowKey(now = Date.now()) {
@@ -80,29 +114,11 @@ export const captureWindow = internalMutation({
       .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", args.windowKey)).unique();
     if (!marker && !args.force) return { status: "pending" as const };
 
-    const [rollups, response] = await Promise.all([
-      ctx.db.query("dailyRollups")
-        .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", args.windowKey)).collect(),
-      responseTimesFromSamples(ctx, orgId, range),
-    ]);
-    const responseByCs = new Map(response.cs.map((row) => [csKey(row.csName), row]));
-    const inputs = rollups.map((row) => {
-      const responseRow = responseByCs.get(row.csKey);
-      return {
-        csName: row.csName,
-        leads: row.leadsCust,
-        closings: row.closings,
-        cr: row.leadsCust ? Math.round((row.closedCust / row.leadsCust) * 1000) / 10 : 0,
-        respMedianMs: responseRow?.firstReplyMedianMs ?? null,
-        respCount: responseRow?.firstReplyCount ?? 0,
-      };
-    });
-    const scores = computeQueenScores(inputs);
-    const queen = computeQueenCs(inputs);
+    const { scores, queen, rollups } = await computeWindowStanding(ctx, orgId, args.windowKey);
     const winner = queen ? scores.find((row) => csKey(row.csName) === csKey(queen.csName)) : undefined;
     const value = winner ? {
       status: "won" as const, winnerCsKey: csKey(winner.csName), winnerCsName: winner.csName,
-      score: winner.score, leads: rollups.find((row) => row.csKey === csKey(winner.csName))?.leadsCust,
+      score: winner.score, leads: rollups.find((row: any) => row.csKey === csKey(winner.csName))?.leadsCust,
       closings: winner.closings, cr: winner.cr, respMedianMs: winner.respMedianMs ?? undefined,
     } : {
       status: "no_winner" as const, winnerCsKey: undefined, winnerCsName: undefined,
@@ -114,6 +130,47 @@ export const captureWindow = internalMutation({
     if (existing) await ctx.db.patch(existing._id, record);
     else await ctx.db.insert("queenAwards", { orgId, windowKey: args.windowKey, ...record });
     return { status: value.status, winnerCsName: winner?.csName ?? null };
+  },
+});
+
+const queenScoreValidator = v.object({
+  csName: v.string(),
+  score: v.number(),
+  eligible: v.boolean(),
+  cr: v.number(),
+  closings: v.number(),
+  respMedianMs: v.union(v.number(), v.null()),
+  crWpts: v.number(),
+  closeWpts: v.number(),
+  speedWpts: v.number(),
+});
+
+export const getDailyStanding = query({
+  args: { businessDate: v.string() },
+  returns: v.object({
+    winnerCsName: v.union(v.string(), v.null()),
+    scores: v.array(queenScoreValidator),
+    sealed: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    if (!isBusinessDate(args.businessDate)) {
+      throw new Error("businessDate must be YYYY-MM-DD");
+    }
+    const { orgId } = await requireMemberOrg(ctx, "queens.getDailyStanding");
+    const windowKey = windowKeyForBusinessDate(args.businessDate);
+    const [{ scores, queen }, award] = await Promise.all([
+      computeWindowStanding(ctx, orgId, windowKey),
+      ctx.db.query("queenAwards")
+        .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).eq("windowKey", windowKey))
+        .unique(),
+    ]);
+    return {
+      winnerCsName: award
+        ? award.status === "won" ? award.winnerCsName ?? null : null
+        : queen?.csName ?? null,
+      scores,
+      sealed: award !== null,
+    };
   },
 });
 

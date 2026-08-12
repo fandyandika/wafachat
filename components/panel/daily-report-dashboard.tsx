@@ -24,7 +24,7 @@ import { ReportCard, type ReportCardData, type ReportDelta } from '@/components/
 import {
   JAK_MS, DATA_CUTOFF_MS, clampStartToCutoff, currentReportLabelDate, reportWindowForLabelDate, wibDateParts,
 } from '@/components/panel/report-window';
-import { computeQueenCs, computeQueenScores } from '@/lib/queen';
+import type { QueenScoreRow } from '@/lib/queen';
 
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 const DAYS_SHORT = ['Ahad', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
@@ -75,6 +75,7 @@ export function DailyReportDashboard() {
   const { startAt, clamped } = clampStartToCutoff(rawWindow.startAt);
   const endAt = rawWindow.endAt;
   const isCurrent = current.y === labelDate.y && current.m === labelDate.m && current.d === labelDate.d;
+  const businessDate = `${labelDate.y}-${pad(labelDate.m + 1)}-${pad(labelDate.d)}`;
 
   const reportArgs = useMemo(() => ({ startAt, endAt }), [startAt, endAt]);
   const {
@@ -87,6 +88,15 @@ export function DailyReportDashboard() {
     totals: { leads: number; closings: number; cr: number; revenue: number; discount: number; cpDiscount: number };
     cs: ReportCardData[];
   }>(api.analytics.getDailyReport, reportArgs);
+  const {
+    data: queenStanding,
+    loading: queenLoading,
+    refresh: refreshQueen,
+  } = useConvexSnapshotQuery<{
+    winnerCsName: string | null;
+    scores: QueenScoreRow[];
+    sealed: boolean;
+  }>(api.queens.getDailyStanding, { businessDate });
   const respData = useResponseTimes({ startAt, endAt, refreshKey: respRefreshKey });
   // Previous window (same 24h length, one day earlier) for ▲▼ deltas. Skipped when
   // the prior period falls before the data cutoff (no reliable comparison).
@@ -122,7 +132,7 @@ export function DailyReportDashboard() {
   const label = wibDateParts(rawWindow.endAt);
   const windowLabel = `Dari ${fmtBoundary(startAt)} sampai ${fmtBoundary(endAt)} WIB.`;
   const titleDate = `${DAYS_SHORT[label.dow]} ${label.d} ${MONTHS_SHORT[label.m]} ${label.y}`;
-  const dateInputValue = `${label.y}-${pad(label.m + 1)}-${pad(label.d)}`;
+  const dateInputValue = businessDate;
 
   const goTo = (next: { y: number; m: number; d: number }) => {
     const nextIsCurrent = current.y === next.y && current.m === next.m && current.d === next.d;
@@ -150,7 +160,7 @@ export function DailyReportDashboard() {
   const refreshAll = async () => {
     setRefreshing(true);
     try {
-      await Promise.all([refreshReport(), prevValid ? refreshPrevReport() : Promise.resolve()]);
+      await Promise.all([refreshReport(), refreshQueen(), prevValid ? refreshPrevReport() : Promise.resolve()]);
       setRespRefreshKey((n) => n + 1);
     } finally {
       setRefreshing(false);
@@ -174,22 +184,10 @@ export function DailyReportDashboard() {
       fastestResp = { csName: c.csName, ms: r.firstReplyMedianMs };
     }
   }
-  // Queen scorecard: team view AND the CS-scoped Arena (the crown is one truth
-  // everywhere; the scoped CS races the same score that wins it).
-  const queenRows = allCs.map((c) => {
-    const r = respByCs.get(csKey(c.csName));
-    return {
-      csName: c.csName,
-      closings: c.closings,
-      cr: c.cr,
-      leads: c.leads,
-      respMedianMs: r?.firstReplyMedianMs ?? null,
-      respCount: r?.firstReplyCount ?? 0,
-    };
-  });
-  const queenScores = computeQueenScores(queenRows);
-  const queen = scopedView || !csName ? computeQueenCs(queenRows) : null;
-  const queenName = queen?.csName;
+  // Queen is computed once from organization-wide inputs in Convex. Never recompute it
+  // from the CS-scoped response payload: that made each account see a different winner.
+  const queenScores = queenStanding?.scores ?? [];
+  const queenName = queenStanding?.winnerCsName ?? undefined;
   const queenCard = queenName ? allCs.find((c) => c.csName === queenName) : undefined;
 
   // Rank + card order follow the Queen SCORE (CR+closing+speed), so the #1 card IS the
@@ -297,7 +295,7 @@ export function DailyReportDashboard() {
           variant="outline"
           className="ml-auto h-11 gap-2 sm:h-9"
           onClick={refreshAll}
-          disabled={refreshing || reportLoading || prevReportLoading}
+          disabled={refreshing || reportLoading || queenLoading || prevReportLoading}
         >
           <RefreshCw className={`size-4 ${refreshing ? 'animate-spin' : ''}`} />
           Refresh
@@ -347,7 +345,7 @@ export function DailyReportDashboard() {
           {!scopedView && (
             <GrandStrip totals={report.totals} prev={prevValid ? (prevReport?.totals ?? null) : null} hideRevenue={isCs} />
           )}
-          {!scopedView && queen && queenCard && (
+          {!scopedView && queenName && queenCard && (
             <QueenHero name={queenCard.csName} closings={queenCard.closings} cr={queenCard.cr} avatarByKey={avatarByKey} />
           )}
           {cards.length === 0 ? (
