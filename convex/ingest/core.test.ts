@@ -130,6 +130,39 @@ test("admin provider number routes inbound only to the isolated expedition inbox
     expect(await ctx.db.query("adminThreadMessages").collect()).toHaveLength(1);
     expect(await ctx.db.query("messages").collect()).toHaveLength(0);
     expect(await ctx.db.query("conversations").collect()).toHaveLength(0);
+    expect(await ctx.db.query("providerChannelHealth").unique()).toMatchObject({
+      channelType: "admin",
+      lastError: "Kanal admin tidak aktif",
+      errorAt: 1783427359000,
+    });
+  });
+});
+
+test("active admin status updates outbound health without writing a customer message", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run((ctx) => ctx.db.insert("adminChannels", {
+    orgId, name: "Admin Ekspedisi", provider: "kirimdev", providerNumberId: "485071188032281",
+    isActive: true, createdAt: 1, updatedAt: 1,
+  }));
+  const raw = JSON.stringify({ entry: [{ changes: [{ value: {
+    metadata: { phone_number_id: "485071188032281" },
+    statuses: [{ id: "wamid.admin-out", status: "delivered", timestamp: "1783427400" }],
+  } }] }] });
+  const eventId = await captureKirimdev(t, orgId, raw, JSON.stringify({
+    "x-kirim-event": "message.status", "x-kirim-event-id": "evt-admin-status",
+  }));
+
+  expect(await t.mutation(internal.ingest.core.processEvent, { eventId })).toEqual({
+    status: "skipped", skipReason: "admin inbox: outbound message not found",
+  });
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("messages").collect()).toHaveLength(0);
+    expect(await ctx.db.query("providerChannelHealth").unique()).toMatchObject({
+      channelType: "admin",
+      lastOutboundAt: 1783427400000,
+    });
+    expect((await ctx.db.query("providerChannelHealth").unique())?.lastError).toBeUndefined();
   });
 });
 
@@ -222,6 +255,28 @@ test("unknown provider does not create a conversation for an unresolved customer
       channelType: "unknown",
       lastError: "Nomor provider belum dipetakan",
     });
+  });
+});
+
+test("missing provider number fails safely before appending to an existing conversation", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId, orderId: "existing-order", customerPhone: "6285799533626", customerName: "Kurn",
+    assignedCsName: "CS Lama", status: "active", aiEnabled: false, note: "existing",
+    createdAt: 1, updatedAt: 1,
+  }));
+  const body = JSON.parse(RECEIVED_RAW);
+  delete body.entry[0].changes[0].value.metadata;
+  const eventId = await captureKirimdev(t, orgId, JSON.stringify(body));
+
+  expect(await t.mutation(internal.ingest.core.processEvent, { eventId })).toEqual({
+    status: "skipped",
+    skipReason: "missing provider number id",
+  });
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("messages").collect()).toHaveLength(0);
+    expect(await ctx.db.query("providerChannelHealth").collect()).toHaveLength(0);
   });
 });
 

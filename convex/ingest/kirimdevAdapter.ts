@@ -38,8 +38,12 @@ export function parseKirimdevWebhook(
     const messageType = templateName ? "template" : (m.type === "button" ? "button" : "text");
     if (messageType === "text" && (m.type || "text") !== "text") return skip("outbound not text");
     const phone = String(d.contact?.phone_number || m.to || "").replace(/^\+/, "");
-    const content = m.body || m.button?.text || "";
+    const content = m.body || m.button?.text || templateName || "";
+    const externalMessageId = String(
+      m.provider_id || m.id || d.message_id || headers["x-kirim-event-id"] || "",
+    ).trim();
     if (!phone || !content) return skip("missing phone/content");
+    if (!externalMessageId) return skip("missing external message id");
     const createdAt = d.timestamp ? Date.parse(d.timestamp) : nowMs;
     return {
       kind: "message",
@@ -50,7 +54,7 @@ export function parseKirimdevWebhook(
         role: m.source === "dashboard" ? "cs" : "ai",
         messageType,
         templateName: templateName || undefined,
-        externalMessageId: String(m.provider_id || m.id || ""),
+        externalMessageId,
         createdAt: Number.isFinite(createdAt) ? createdAt : nowMs,
         phoneNumberId: (d.meta?.phone_number_id || d.session || undefined) as string | undefined,
       },
@@ -69,7 +73,11 @@ export function parseKirimdevWebhook(
     const phone = String(
       value.contacts?.[0]?.wa_id || msg.from || kirim.contact?.phone_number || "",
     ).replace(/^\+/, "");
+    const externalMessageId = String(
+      msg.id || headers["x-kirim-event-id"] || kirim.message_id || "",
+    ).trim();
     if (!phone || !content) return skip("missing phone/content");
+    if (!externalMessageId) return skip("missing external message id");
     return {
       kind: "message",
       event: {
@@ -78,7 +86,7 @@ export function parseKirimdevWebhook(
         direction: "inbound",
         role: "customer",
         messageType: msg.type === "button" ? "button" : "text",
-        externalMessageId: String(msg.id || headers["x-kirim-event-id"] || ""),
+        externalMessageId,
         createdAt: msg.timestamp ? Number(msg.timestamp) * 1000 : nowMs,
         phoneNumberId: (value.metadata?.phone_number_id || undefined) as string | undefined,
       },

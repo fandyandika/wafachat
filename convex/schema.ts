@@ -211,7 +211,8 @@ export default defineSchema({
     channelType: v.union(v.literal("cs"), v.literal("admin"), v.literal("unknown")),
     lastInboundAt: v.optional(v.number()), lastOutboundAt: v.optional(v.number()),
     lastError: v.optional(v.string()), errorAt: v.optional(v.number()), updatedAt: v.number(),
-  }).index("by_org_providerNumberId", ["orgId", "providerNumberId"]),
+  }).index("by_org_providerNumberId", ["orgId", "providerNumberId"])
+    .index("by_org_updatedAt", ["orgId", "updatedAt"]),
 
   followUpPreparationRuns: defineTable({
     orgId: v.id("organizations"),

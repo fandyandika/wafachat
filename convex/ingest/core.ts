@@ -55,13 +55,14 @@ export async function processCapturedEvent(
       : null;
     if (adminChannel) {
       const parsedAdmin = parseAdminKirimdevEvent(headers, body, event.receivedAt);
-      if (parsedAdmin.kind === "inbound") {
+      if (parsedAdmin.kind !== "skip") {
         await touchProviderChannelHealth(ctx, {
           orgId: event.orgId,
           providerNumberId: parsedAdmin.providerNumberId,
           channelType: "admin",
-          direction: "inbound",
+          direction: parsedAdmin.kind === "inbound" ? "inbound" : "outbound",
           touchedAt: parsedAdmin.createdAt,
+          diagnostic: adminChannel.isActive ? undefined : "Kanal admin tidak aktif",
         });
       }
       const providerEventId = parsedAdmin.kind === "skip"
@@ -119,31 +120,32 @@ export async function processCapturedEvent(
     }
     const parsed = parseKirimdevWebhook(headers, body, event.receivedAt);
     if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
+    if (!parsed.event.phoneNumberId) {
+      return { status: "skipped", skipReason: "missing provider number id" };
+    }
     const agent = await resolveAgent(ctx, event.orgId, { phoneNumberId: parsed.event.phoneNumberId });
     const csName = agent?.csName;
-    if (parsed.event.phoneNumberId) {
-      await touchProviderChannelHealth(ctx, {
-        orgId: event.orgId,
-        providerNumberId: parsed.event.phoneNumberId,
-        channelType: agent ? "cs" : "unknown",
-        csKey: agent?.key,
-        direction: parsed.event.direction,
-        touchedAt: parsed.event.createdAt,
-      });
-      if (!agent) {
-        const existingConversation = await ctx.db
-          .query("conversations")
-          .withIndex("by_org_customerPhone_updatedAt", (q: any) => q
-            .eq("orgId", event.orgId)
-            .eq("customerPhone", normalizePhone(parsed.event.phone)))
-          .order("desc")
-          .first();
-        if (!existingConversation) {
-          return {
-            status: "skipped",
-            skipReason: "provider number unmapped and customer conversation not found",
-          };
-        }
+    await touchProviderChannelHealth(ctx, {
+      orgId: event.orgId,
+      providerNumberId: parsed.event.phoneNumberId,
+      channelType: agent ? "cs" : "unknown",
+      csKey: agent?.key,
+      direction: parsed.event.direction,
+      touchedAt: parsed.event.createdAt,
+    });
+    if (!agent) {
+      const existingConversation = await ctx.db
+        .query("conversations")
+        .withIndex("by_org_customerPhone_updatedAt", (q: any) => q
+          .eq("orgId", event.orgId)
+          .eq("customerPhone", normalizePhone(parsed.event.phone)))
+        .order("desc")
+        .first();
+      if (!existingConversation) {
+        return {
+          status: "skipped",
+          skipReason: "provider number unmapped and customer conversation not found",
+        };
       }
     }
     const result = await appendMessageCore(ctx, {

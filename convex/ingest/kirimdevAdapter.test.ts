@@ -151,6 +151,38 @@ describe("message.sent", () => {
     }
   });
 
+  test("bodyless template uses its exact name as lifecycle-usable content", () => {
+    const body = structuredClone(SENT_BODY) as any;
+    body.data.message = {
+      provider_id: "wamid.bodyless-h2",
+      to: "+6285799533626",
+      body: "",
+      type: "template",
+      source: "dashboard",
+      template: { name: "follow_up_h2", language: "id" },
+    };
+    const parsed = parseKirimdevWebhook({ "x-kirim-event": "message.sent" }, body, NOW);
+    expect(parsed).toEqual({
+      kind: "message",
+      event: expect.objectContaining({
+        content: "follow_up_h2",
+        messageType: "template",
+        templateName: "follow_up_h2",
+        externalMessageId: "wamid.bodyless-h2",
+        phoneNumberId: "485071188032281",
+      }),
+    });
+  });
+
+  test("repeated outbound payload without any stable identifier fails safely", () => {
+    const body = structuredClone(SENT_BODY) as any;
+    delete body.data.message.id;
+    delete body.data.message.provider_id;
+    const headers = { "x-kirim-event": "message.sent" };
+    expect(parseKirimdevWebhook(headers, body, NOW)).toEqual({ kind: "skip", reason: "missing external message id" });
+    expect(parseKirimdevWebhook(headers, body, NOW)).toEqual({ kind: "skip", reason: "missing external message id" });
+  });
+
   test("non-text outbound skips", () => {
     const body = structuredClone(SENT_BODY) as any;
     body.data.message.type = "image";
