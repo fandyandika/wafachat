@@ -57,7 +57,7 @@ export function AdminExpeditionMessage({
         )}
       >
         {outbound && (actorName || messageType === "template") && (
-          <div className={cn("mb-1.5 flex items-center gap-2 text-[10px] font-medium", failed || unknown ? "text-muted-foreground" : "text-primary-foreground/75")}>
+          <div className={cn("mb-1.5 flex items-center gap-2 text-xs font-medium", failed || unknown ? "text-muted-foreground" : "text-primary-foreground/75")}>
             {actorName && <span>{actorName}</span>}
             {messageType === "template" && <span className="rounded bg-black/10 px-1.5 py-0.5">Template</span>}
           </div>
@@ -78,7 +78,7 @@ export function AdminExpeditionMessage({
           </div>
         )}
 
-        <div className={cn("mt-1.5 flex items-center justify-end gap-1 text-[10px] tabular-nums", outbound && !failed && !unknown ? "text-primary-foreground/75" : "text-muted-foreground")}>
+        <div className={cn("mt-1.5 flex items-center justify-end gap-1 text-xs tabular-nums", outbound && !failed && !unknown ? "text-primary-foreground/75" : "text-muted-foreground")}>
           <time>{messageTime(createdAt)}</time>
           {outbound && <><CheckCheck className="size-3" /><span>{statusLabel(status)}</span></>}
         </div>

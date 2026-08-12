@@ -90,3 +90,12 @@ The right panel displays only known facts: phone number, product, total, order I
 6. No recurring client query or polling is introduced.
 7. Focused component tests, full tests, TypeScript, Convex codegen, and production build pass before deployment.
 
+## Implementation Evidence — 2026-08-12
+
+- Implemented the local thread model, search/view filters, selected/reply-needed states, three-region desktop workspace, customer/order context, and message-level delivery feedback.
+- Kept the existing three Convex readers and cursor pagination; source audit found no timer, polling hook, or additional query.
+- Impeccable detector findings for off-ramp literal font sizes were corrected to the documented type scale.
+- Focused Inbox gate: 5 files, 18 tests passed.
+- Repository gate: 101 files, 762 tests passed.
+- TypeScript, Convex codegen, production build, and diff check passed.
+- Authenticated browser-state inspection was not available in this execution, so live selected-thread states are not claimed as visually verified.

@@ -43,7 +43,7 @@ function linkedOrderStatusLabel(status: LinkedOrderStatus) {
 function Fact({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="grid gap-1 border-b border-ledger-rule py-3 last:border-b-0">
-      <dt className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{label}</dt>
+      <dt className="text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">{label}</dt>
       <dd className="break-words text-sm font-medium text-ledger-ink">{children}</dd>
     </div>
   );

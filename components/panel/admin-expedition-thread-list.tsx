@@ -85,7 +85,7 @@ export function AdminExpeditionThreadList({
               aria-pressed={view === option.value}
               onClick={() => onViewChange(option.value)}
               className={cn(
-                "min-h-9 rounded-lg px-2 text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "min-h-9 rounded-lg px-2 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                 view === option.value
                   ? "bg-card text-ledger-ink shadow-sm"
                   : "text-muted-foreground hover:bg-card/60 hover:text-foreground",
@@ -96,7 +96,7 @@ export function AdminExpeditionThreadList({
           ))}
         </div>
 
-        <p className="text-[11px] leading-4 text-muted-foreground">
+        <p className="text-xs leading-4 text-muted-foreground">
           Pencarian hanya mencakup percakapan yang sudah dimuat.
         </p>
       </div>
@@ -146,12 +146,12 @@ export function AdminExpeditionThreadList({
                   <span className="min-w-0 flex-1">
                     <span className="flex items-start justify-between gap-2">
                       <strong className="truncate text-sm font-semibold">{thread.customerName || thread.customerPhone}</strong>
-                      <time className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{activityLabel(thread.updatedAt)}</time>
+                      <time className="shrink-0 text-xs tabular-nums text-muted-foreground">{activityLabel(thread.updatedAt)}</time>
                     </span>
                     <span className="mt-1 block truncate text-xs text-muted-foreground">{adminThreadPreview(thread)}</span>
                     <span className="mt-2 flex flex-wrap items-center gap-1.5">
-                      {needsReply && <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">Menunggu balasan</span>}
-                      <span className={cn("rounded-md px-1.5 py-0.5 text-[10px] font-medium", thread.windowOpen ? "bg-positive-soft text-positive" : "bg-muted text-muted-foreground")}>
+                      {needsReply && <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-semibold text-primary">Menunggu balasan</span>}
+                      <span className={cn("rounded-md px-1.5 py-0.5 text-xs font-medium", thread.windowOpen ? "bg-positive-soft text-positive" : "bg-muted text-muted-foreground")}>
                         {thread.windowOpen ? "Balasan aktif" : "Perlu template"}
                       </span>
                     </span>
