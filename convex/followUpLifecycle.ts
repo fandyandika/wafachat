@@ -204,7 +204,7 @@ export async function applyOutboundLifecycle(
   }
 
   if (input.detectedStage === null || input.detectedStage < activeStage) {
-    await moveCounter(ctx, conversation, input.csKey, activeStage, input.createdAt);
+    await moveCounter(ctx, conversation, input.csKey, bucketFor(conversation), input.createdAt);
     await ctx.db.patch(conversation._id, {
       followUpCsKey: input.csKey,
       followUpLastOutboundPreview: preview(input.content),

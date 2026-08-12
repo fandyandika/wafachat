@@ -245,6 +245,62 @@ test("ordinary outbound owner transfer moves the active bucket and inbound reset
   expect(counters.find((row) => row.csKey === "budi")).toMatchObject({ h2: 0 });
 });
 
+test("review-state owner transfer moves only the review bucket and inbound reset leaves no stage leak", async () => {
+  const { t, orgId, conversationId } = await fixture({ stage: 2 });
+  await t.run(async (ctx) => {
+    const counter = await ctx.db.query("followUpCounters").unique();
+    if (!counter) throw new Error("missing counter fixture");
+    await ctx.db.patch(conversationId, { followUpState: "review" });
+    await ctx.db.patch(counter._id, { h2: 0, review: 1 });
+  });
+  const outboundMessageId = await insertMessage(t, orgId, conversationId, "outbound", "Pesan biasa", sentAt);
+  const conversation = await getConversation(t, conversationId);
+
+  await t.run((ctx) => applyOutboundLifecycle(ctx, {
+    conversation,
+    messageId: outboundMessageId,
+    content: "Pesan biasa",
+    providerMessageId: "wamid.review-transfer",
+    csKey: "budi",
+    detectedStage: null,
+    createdAt: sentAt,
+    source: "provider_webhook",
+  }));
+
+  expect(await getConversation(t, conversationId)).toMatchObject({
+    followUpCsKey: "budi",
+    followUpNextStage: 2,
+    followUpState: "review",
+  });
+  let counters = await t.run((ctx) => ctx.db.query("followUpCounters").collect());
+  expect(counters.find((row) => row.csKey === "aisyah")).toMatchObject({
+    h1: 0, h2: 0, h3: 0, review: 0,
+  });
+  expect(counters.find((row) => row.csKey === "budi")).toMatchObject({
+    h1: 0, h2: 0, h3: 0, review: 1,
+  });
+
+  const inboundMessageId = await insertMessage(t, orgId, conversationId, "inbound", "Reset review", sentAt + HOUR);
+  await t.run(async (ctx) => {
+    const current = await ctx.db.get(conversationId);
+    if (!current) throw new Error("missing conversation fixture");
+    await applyInboundReset(ctx, {
+      conversation: current,
+      messageId: inboundMessageId,
+      content: "Reset review",
+      createdAt: sentAt + HOUR,
+    });
+  });
+
+  counters = await t.run((ctx) => ctx.db.query("followUpCounters").collect());
+  expect(counters.find((row) => row.csKey === "aisyah")).toMatchObject({
+    h1: 0, h2: 0, h3: 0, review: 0,
+  });
+  expect(counters.find((row) => row.csKey === "budi")).toMatchObject({
+    h1: 0, h2: 0, h3: 0, review: 0,
+  });
+});
+
 test("an H+2 trigger catches up from H+1 and schedules H+3", async () => {
   const { t, orgId, conversationId } = await fixture({ stage: 1 });
   const messageId = await insertMessage(t, orgId, conversationId, "outbound", "Follow up H+2", sentAt);
