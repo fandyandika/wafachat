@@ -74,9 +74,14 @@ export const listProviderChannelHealth = query({
   }),
   handler: async (ctx, args) => {
     const { orgId } = await requireMemberOrg(ctx, "providerChannelHealth.listProviderChannelHealth");
+    if (!Number.isFinite(args.paginationOpts.numItems)
+      || !Number.isInteger(args.paginationOpts.numItems)
+      || args.paginationOpts.numItems <= 0) {
+      throw new Error("Page size must be a positive finite integer.");
+    }
     const paginationOpts = {
       cursor: args.paginationOpts.cursor,
-      numItems: Math.max(1, Math.min(args.paginationOpts.numItems, 50)),
+      numItems: Math.min(args.paginationOpts.numItems, 50),
     };
     const result = await ctx.db
       .query("providerChannelHealth")

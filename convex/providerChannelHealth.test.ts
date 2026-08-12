@@ -108,3 +108,14 @@ test("listProviderChannelHealth is authenticated, tenant-scoped, paginated, and 
   expect(first.page[0]).not.toHaveProperty("rawBody");
   expect(first.page[0]).not.toHaveProperty("rawHeaders");
 });
+
+test.each([Number.NaN, Number.POSITIVE_INFINITY, 1.5, 0, -1])(
+  "listProviderChannelHealth rejects invalid page size %s before pagination",
+  async (numItems) => {
+    const t = convexTest(schema);
+    await seedOrg(t);
+    await expect(asAdmin(t).query(api.providerChannelHealth.listProviderChannelHealth, {
+      paginationOpts: { numItems, cursor: null },
+    })).rejects.toThrow(/page size must be a positive finite integer/i);
+  },
+);
