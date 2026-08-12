@@ -29,6 +29,7 @@ import type * as followUpMath from "../followUpMath.js";
 import type * as followUpMigration from "../followUpMigration.js";
 import type * as followUpModel from "../followUpModel.js";
 import type * as followUpTemplates from "../followUpTemplates.js";
+import type * as followUpTransitions from "../followUpTransitions.js";
 import type * as followUpTriggers from "../followUpTriggers.js";
 import type * as http from "../http.js";
 import type * as ingest_berduAdapter from "../ingest/berduAdapter.js";
@@ -87,6 +88,7 @@ declare const fullApi: ApiFromModules<{
   followUpMigration: typeof followUpMigration;
   followUpModel: typeof followUpModel;
   followUpTemplates: typeof followUpTemplates;
+  followUpTransitions: typeof followUpTransitions;
   followUpTriggers: typeof followUpTriggers;
   http: typeof http;
   "ingest/berduAdapter": typeof ingest_berduAdapter;

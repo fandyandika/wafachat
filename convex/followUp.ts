@@ -15,8 +15,12 @@ import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
 import { attemptKey, finalizeAttempt, recordAcceptedAttempt, reserveAttempt } from "./followUpAttempts";
 
 const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+const JAKARTA_OFFSET_MS = 7 * HOUR;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
 const MAX_FOLLOW_UP_ROWS = 100;
+const MAX_QUEUE_PAGE_SIZE = 30;
+const MAX_COUNTER_ROWS = 100;
 
 const followUpStageValidator = v.union(v.literal(1), v.literal(2), v.literal(3));
 const dueFollowUpValidator = v.object({
@@ -30,6 +34,15 @@ const dueFollowUpValidator = v.object({
   stage: followUpStageValidator,
   dueAt: v.number(),
   productName: v.string(),
+  cycleId: v.optional(v.string()),
+  dueState: v.union(v.literal("overdue"), v.literal("due_today"), v.literal("scheduled")),
+  overdueDays: v.number(),
+  lastInboundPreview: v.string(),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundPreview: v.string(),
+  lastOutboundAt: v.optional(v.number()),
+  lastDetectedStage: v.optional(followUpStageValidator),
+  lastDetectedTemplate: v.optional(v.string()),
   lastMessagePreview: v.string(),
   lastMessageAt: v.number(),
   reason: v.string(),
@@ -42,106 +55,191 @@ const attentionFollowUpValidator = v.object({
   orderId: v.string(),
   csName: v.string(),
   stage: v.optional(followUpStageValidator),
-  state: v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown")),
+  state: v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown"), v.literal("review")),
   lastError: v.optional(v.string()),
   updatedAt: v.number(),
 });
-const attentionStateValidator = v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown"));
+const attentionStateValidator = v.union(
+  v.literal("sending"),
+  v.literal("failed"),
+  v.literal("unknown"),
+  v.literal("review"),
+);
 
-export const listDueFollowUps = query({
+function pageSize(value: number, maximum: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(Math.floor(value), maximum));
+}
+
+function dueMetadata(dueAt: number, now: number) {
+  const dueDay = Math.floor((dueAt + JAKARTA_OFFSET_MS) / DAY);
+  const nowDay = Math.floor((now + JAKARTA_OFFSET_MS) / DAY);
+  const overdueDays = nowDay - dueDay;
+  if (overdueDays > 0) return { dueState: "overdue" as const, overdueDays };
+  if (overdueDays === 0) return { dueState: "due_today" as const, overdueDays: 0 };
+  return { dueState: "scheduled" as const, overdueDays: 0 };
+}
+
+function snapshotContext(row: any) {
+  return {
+    productName: row.followUpProductName ?? "Produk tidak tersedia",
+    cycleId: row.followUpCycleId,
+    lastInboundPreview: row.followUpLastInboundPreview ?? "",
+    lastInboundAt: row.followUpLastInboundAt,
+    lastOutboundPreview: row.followUpLastOutboundPreview ?? "",
+    lastOutboundAt: row.followUpLastOutboundAt,
+    lastDetectedStage: row.followUpLastDetectedStage,
+    lastDetectedTemplate: row.followUpLastDetectedTemplate,
+  };
+}
+
+async function listFollowUpQueueHandler(
+  ctx: any,
   args: {
-    stage: v.optional(followUpStageValidator),
-    csName: v.optional(v.string()),
-    now: v.number(),
-    paginationOpts: paginationOptsValidator,
+    stage?: 1 | 2 | 3;
+    csName?: string;
+    now: number;
+    paginationOpts: { cursor: string | null; numItems: number };
   },
-  returns: v.object({
-    page: v.array(dueFollowUpValidator),
-    isDone: v.boolean(),
-    continueCursor: v.string(),
-  }),
-  handler: async (ctx, args) => {
-    if (!Number.isFinite(args.now) || args.now < 0) throw new Error("Waktu queue tidak valid.");
-    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
-      ctx,
-      "followUp.listDueFollowUps",
-      args.csName,
-    );
-    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
-    const lowerDueAt = args.now - FOLLOW_UP_EXPIRY_MS;
-    const paginationOpts = {
-      cursor: args.paginationOpts.cursor,
-      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 30)),
-    };
+  functionName: string,
+) {
+  if (!Number.isFinite(args.now) || args.now < 0) throw new Error("Waktu queue tidak valid.");
+  const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, functionName, args.csName);
+  const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+  const paginationOpts = {
+    cursor: args.paginationOpts.cursor,
+    numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
+  };
 
-    const result = effectiveCsKey
-      ? args.stage
-        ? await ctx.db
-            .query("conversations")
-            .withIndex("by_org_followUpCsKey_stage_state_dueAt", (q) => q
-              .eq("orgId", orgId)
-              .eq("followUpCsKey", effectiveCsKey)
-              .eq("followUpNextStage", args.stage)
-              .eq("followUpState", "waiting")
-              .gte("followUpDueAt", lowerDueAt)
-              .lte("followUpDueAt", args.now))
-            .paginate(paginationOpts)
-        : await ctx.db
-            .query("conversations")
-            .withIndex("by_org_followUpCsKey_state_dueAt", (q) => q
-              .eq("orgId", orgId)
-              .eq("followUpCsKey", effectiveCsKey)
-              .eq("followUpState", "waiting")
-              .gte("followUpDueAt", lowerDueAt)
-              .lte("followUpDueAt", args.now))
-            .paginate(paginationOpts)
-      : args.stage
-        ? await ctx.db
-            .query("conversations")
-            .withIndex("by_org_followUpStage_state_dueAt", (q) => q
-              .eq("orgId", orgId)
-              .eq("followUpNextStage", args.stage)
-              .eq("followUpState", "waiting")
-              .gte("followUpDueAt", lowerDueAt)
-              .lte("followUpDueAt", args.now))
-            .paginate(paginationOpts)
-        : await ctx.db
-            .query("conversations")
-            .withIndex("by_org_followUpState_dueAt", (q) => q
-              .eq("orgId", orgId)
-              .eq("followUpState", "waiting")
-              .gte("followUpDueAt", lowerDueAt)
-              .lte("followUpDueAt", args.now))
-            .paginate(paginationOpts);
+  const result = effectiveCsKey
+    ? args.stage
+      ? await ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpCsKey_stage_state_dueAt", (q: any) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpNextStage", args.stage)
+            .eq("followUpState", "waiting"))
+          .order("asc")
+          .paginate(paginationOpts)
+      : await ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpCsKey_state_dueAt", (q: any) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpState", "waiting"))
+          .order("asc")
+          .paginate(paginationOpts)
+    : args.stage
+      ? await ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpStage_state_dueAt", (q: any) => q
+            .eq("orgId", orgId)
+            .eq("followUpNextStage", args.stage)
+            .eq("followUpState", "waiting"))
+          .order("asc")
+          .paginate(paginationOpts)
+      : await ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpState_dueAt", (q: any) => q
+            .eq("orgId", orgId)
+            .eq("followUpState", "waiting"))
+          .order("asc")
+          .paginate(paginationOpts);
 
-    const dueRows = result.page.filter((row) => row.followUpCycleInboundAt !== undefined
-      && row.followUpCycleInboundAt >= args.now - FOLLOW_UP_EXPIRY_MS);
-    const page = await Promise.all(dueRows.map(async (row) => {
-      const lastMessage = await ctx.db.query("messages")
-        .withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", row._id))
-        .order("desc")
-        .first();
+  return {
+    page: result.page.map((row: any) => {
+      const cycleInboundAt = row.followUpCycleInboundAt ?? row.followUpCycleStartedAt ?? row.createdAt;
+      const latestInboundAt = row.followUpLastInboundAt ?? Number.NEGATIVE_INFINITY;
+      const latestOutboundAt = row.followUpLastOutboundAt ?? Number.NEGATIVE_INFINITY;
+      const outboundIsLatest = latestOutboundAt >= latestInboundAt;
+      const lastMessagePreview = outboundIsLatest
+        ? row.followUpLastOutboundPreview ?? ""
+        : row.followUpLastInboundPreview ?? "";
+      const lastMessageAt = Math.max(latestInboundAt, latestOutboundAt, cycleInboundAt);
       return {
         conversationId: row._id,
         customerName: row.customerName,
         customerPhone: row.customerPhone,
         orderId: row.orderId,
         csName: row.assignedCsName,
-        csKey: row.followUpCsKey!,
-        cycleInboundAt: row.followUpCycleInboundAt!,
+        csKey: row.followUpCsKey ?? csKey(row.assignedCsName),
+        cycleInboundAt,
         stage: row.followUpNextStage!,
         dueAt: row.followUpDueAt!,
-        productName: row.followUpProductName ?? "Produk tidak tersedia",
-        lastMessagePreview: (lastMessage?.content ?? "").slice(0, 180),
-        lastMessageAt: lastMessage?.createdAt ?? row.followUpCycleInboundAt!,
+        ...snapshotContext(row),
+        ...dueMetadata(row.followUpDueAt!, args.now),
+        lastMessagePreview,
+        lastMessageAt,
         reason: "CS terakhir membalas, customer belum merespons",
       };
-    }));
-    return {
-      page,
-      isDone: result.isDone,
-      continueCursor: result.continueCursor,
-    };
+    }),
+    isDone: result.isDone,
+    continueCursor: result.continueCursor,
+  };
+}
+
+const followUpQueueArgs = {
+  stage: v.optional(followUpStageValidator),
+  csName: v.optional(v.string()),
+  now: v.number(),
+  paginationOpts: paginationOptsValidator,
+};
+const followUpQueueResult = v.object({
+  page: v.array(dueFollowUpValidator),
+  isDone: v.boolean(),
+  continueCursor: v.string(),
+});
+
+export const listFollowUpQueue = query({
+  args: followUpQueueArgs,
+  returns: followUpQueueResult,
+  handler: async (ctx, args) => listFollowUpQueueHandler(ctx, args, "followUp.listFollowUpQueue"),
+});
+
+export const listDueFollowUps = query({
+  args: followUpQueueArgs,
+  returns: followUpQueueResult,
+  handler: async (ctx, args) => listFollowUpQueueHandler(ctx, args, "followUp.listDueFollowUps"),
+});
+
+const followUpCountsValidator = v.object({
+  h1: v.number(),
+  h2: v.number(),
+  h3: v.number(),
+  review: v.number(),
+});
+
+export const getFollowUpCounts = query({
+  args: { csName: v.optional(v.string()) },
+  returns: followUpCountsValidator,
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.getFollowUpCounts",
+      args.csName,
+    );
+    if (effectiveCsName) {
+      const counter = await ctx.db.query("followUpCounters")
+        .withIndex("by_org_csKey", (q) => q.eq("orgId", orgId).eq("csKey", csKey(effectiveCsName)))
+        .unique();
+      return counter
+        ? { h1: counter.h1, h2: counter.h2, h3: counter.h3, review: counter.review }
+        : { h1: 0, h2: 0, h3: 0, review: 0 };
+    }
+
+    const counters = await ctx.db.query("followUpCounters")
+      .withIndex("by_org_csKey", (q) => q.eq("orgId", orgId))
+      .take(MAX_COUNTER_ROWS + 1);
+    if (counters.length > MAX_COUNTER_ROWS) {
+      throw new Error("followUp.getFollowUpCounts: more than 100 CS rows");
+    }
+    return counters.reduce((total, counter) => ({
+      h1: total.h1 + counter.h1,
+      h2: total.h2 + counter.h2,
+      h3: total.h3 + counter.h3,
+      review: total.review + counter.review,
+    }), { h1: 0, h2: 0, h3: 0, review: 0 });
   },
 });
 
@@ -262,6 +360,226 @@ export const listFollowUpAttention = query({
         lastError: row.followUpLastError,
         updatedAt: row.updatedAt,
       })).sort((a, b) => b.updatedAt - a.updatedAt),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+const attentionPageRowValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  stage: v.optional(followUpStageValidator),
+  dueAt: v.optional(v.number()),
+  state: attentionStateValidator,
+  lastError: v.optional(v.string()),
+  reviewReason: v.optional(v.string()),
+  productName: v.string(),
+  cycleId: v.optional(v.string()),
+  lastInboundPreview: v.string(),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundPreview: v.string(),
+  lastOutboundAt: v.optional(v.number()),
+  lastDetectedStage: v.optional(followUpStageValidator),
+  lastDetectedTemplate: v.optional(v.string()),
+  updatedAt: v.number(),
+});
+
+export const listFollowUpAttentionPage = query({
+  args: {
+    csName: v.optional(v.string()),
+    state: v.optional(attentionStateValidator),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(attentionPageRowValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listFollowUpAttentionPage",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const state = args.state ?? "review";
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
+    };
+    const result = await (effectiveCsKey
+      ? ctx.db.query("conversations")
+          .withIndex("by_org_followUpCsKey_state_updatedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpState", state))
+      : ctx.db.query("conversations")
+          .withIndex("by_org_followUpState_updatedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpState", state)))
+      .order("desc")
+      .paginate(paginationOpts);
+
+    return {
+      page: result.page.map((row) => ({
+        conversationId: row._id,
+        customerName: row.customerName,
+        customerPhone: row.customerPhone,
+        orderId: row.orderId,
+        csName: row.assignedCsName,
+        stage: row.followUpNextStage,
+        dueAt: row.followUpDueAt,
+        state: row.followUpState as "sending" | "failed" | "unknown" | "review",
+        lastError: row.followUpLastError,
+        reviewReason: row.followUpReviewReason,
+        ...snapshotContext(row),
+        updatedAt: row.updatedAt,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+const archivedPageRowValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  archivedAt: v.number(),
+  outcome: v.optional(v.union(
+    v.literal("h3_complete"),
+    v.literal("closing"),
+    v.literal("cancelled"),
+    v.literal("manual_archive"),
+  )),
+  productName: v.string(),
+  cycleId: v.optional(v.string()),
+  lastInboundPreview: v.string(),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundPreview: v.string(),
+  lastOutboundAt: v.optional(v.number()),
+  lastDetectedStage: v.optional(followUpStageValidator),
+  lastDetectedTemplate: v.optional(v.string()),
+  updatedAt: v.number(),
+});
+
+export const listArchivedFollowUpsPage = query({
+  args: {
+    csName: v.optional(v.string()),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(archivedPageRowValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listArchivedFollowUpsPage",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
+    };
+    const result = await (effectiveCsKey
+      ? ctx.db.query("conversations")
+          .withIndex("by_org_followUpCsKey_state_updatedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpState", "archived"))
+      : ctx.db.query("conversations")
+          .withIndex("by_org_followUpState_updatedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpState", "archived")))
+      .order("desc")
+      .paginate(paginationOpts);
+
+    return {
+      page: result.page.map((row) => ({
+        conversationId: row._id,
+        customerName: row.customerName,
+        customerPhone: row.customerPhone,
+        orderId: row.orderId,
+        csName: row.assignedCsName,
+        archivedAt: row.followUpArchivedAt ?? row.updatedAt,
+        outcome: row.followUpOutcome,
+        ...snapshotContext(row),
+        updatedAt: row.updatedAt,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+const closedPageRowValidator = v.object({
+  conversationId: v.optional(v.id("conversations")),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  csName: v.string(),
+  orderId: v.string(),
+  closedAt: v.number(),
+  product: v.string(),
+  touches: v.number(),
+  fromFollowUp: v.boolean(),
+});
+
+export const listClosedFollowUpsPage = query({
+  args: {
+    csName: v.optional(v.string()),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(closedPageRowValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listClosedFollowUpsPage",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
+    };
+    const result = await (effectiveCsKey
+      ? ctx.db.query("shippingRecaps")
+          .withIndex("by_org_csKey_closedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("csKey", effectiveCsKey))
+      : ctx.db.query("shippingRecaps")
+          .withIndex("by_org_closedAt", (q) => q.eq("orgId", orgId)))
+      .order("desc")
+      .paginate(paginationOpts);
+
+    return {
+      page: result.page.flatMap((row) => {
+        if (row.status === "cancelled" || row.status === "cancelled_after_export") return [];
+        const touches = row.followUpTouchesAtClose ?? 0;
+        return [{
+          conversationId: row.conversationId,
+          customerName: row.customerName,
+          customerPhone: row.customerPhone,
+          csName: row.csName,
+          orderId: row.orderIdBerdu ?? "",
+          closedAt: row.closedAt,
+          product: row.packageContent,
+          touches,
+          fromFollowUp: touches > 0,
+        }];
+      }),
       isDone: result.isDone,
       continueCursor: result.continueCursor,
     };

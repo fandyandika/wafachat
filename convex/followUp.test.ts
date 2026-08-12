@@ -16,6 +16,17 @@ async function seedOrg(t: any) {
 
 const HOUR = 3_600_000;
 const now = Date.UTC(2026, 5, 26, 5, 0, 0); // fixed reference
+type QueueTestRow = {
+  conversationId: unknown;
+  orderId: string;
+  dueState: "overdue" | "due_today" | "scheduled";
+  [key: string]: unknown;
+};
+type QueueTestPage = {
+  page: QueueTestRow[];
+  isDone: boolean;
+  continueCursor: string;
+};
 const convBase = {
   customerName: "Budi", assignedCsName: "Nabila", status: "active" as const,
   aiEnabled: false, note: "", createdAt: now - 50 * HOUR, updatedAt: now,
@@ -30,7 +41,7 @@ const msg = (conversationId: any, orderId: string, phone: string, direction: "in
   ({ conversationId, orderId, customerPhone: phone, role: direction === "inbound" ? "customer" as const : "cs" as const,
      direction, content: "x", messageType: "text" as const, source: "n8n" as const, createdAt });
 
-test("listDueFollowUps caps high-volume pages at 30 rows", async () => {
+test("listFollowUpQueue paginates all 901 snapshot rows in oldest-due 30-row pages", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "queue-admin", role: "admin", name: "Queue Admin", email: "queue@wafachat.test" });
   const orgId = await seedOrg(t);
@@ -50,56 +61,88 @@ test("listDueFollowUps caps high-volume pages at 30 rows", async () => {
     }
   });
 
-  const first = await asAdmin.query(api.followUp.listDueFollowUps, {
-    now,
-    paginationOpts: { numItems: 100, cursor: null },
-  });
-  const second = await asAdmin.query(api.followUp.listDueFollowUps, {
-    now,
-    paginationOpts: { numItems: 100, cursor: first.continueCursor },
-  });
-  expect(first.page).toHaveLength(30);
-  expect(second.page).toHaveLength(30);
-  expect(first.isDone).toBe(false);
-  expect(new Set([...first.page, ...second.page].map((row) => String(row.conversationId))).size).toBe(60);
+  const rows: QueueTestRow[] = [];
+  let cursor: string | null = null;
+  let isDone = false;
+  while (!isDone) {
+    const result: QueueTestPage = await asAdmin.query(api.followUp.listFollowUpQueue, {
+      stage: 1,
+      now,
+      paginationOpts: { numItems: 100, cursor },
+    });
+    expect(result.page.length).toBeLessThanOrEqual(30);
+    rows.push(...result.page);
+    cursor = result.continueCursor || null;
+    isDone = result.isDone;
+  }
+  expect(rows).toHaveLength(901);
+  expect(rows.map((row) => row.orderId)).toEqual(
+    Array.from({ length: 901 }, (_, i) => `QUEUE-${i}`),
+  );
+  expect(new Set(rows.map((row) => String(row.conversationId))).size).toBe(901);
 });
 
-test("listDueFollowUps enriches only the selected page with decision context", async () => {
+test("listFollowUpQueue keeps old, due-today, and future rows ordered from conversation snapshots", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "context-admin", role: "admin", name: "Admin", email: "context@wafachat.test" });
   const orgId = await seedOrg(t);
+  const DAY = 24 * HOUR;
   const conversationId = await t.run(async (ctx) => {
-    const conversationId = await ctx.db.insert("conversations", {
-      orgId,
-      ...convBase,
-      orderId: "CONTEXT-1",
-      customerPhone: "62890001111",
-      followUpProductName: "Quran Mapping",
-      followUpCsKey: "nabila",
-      followUpCycleInboundAt: now - 30 * HOUR,
-      followUpNextStage: 1,
-      followUpDueAt: now - HOUR,
-      followUpState: "waiting",
-    });
-    await ctx.db.insert("orders", { orgId, ...orderBase, orderId: "CONTEXT-1", customerPhone: "62890001111" });
-    await ctx.db.insert("messages", {
-      orgId,
-      ...msg(conversationId, "CONTEXT-1", "62890001111", "outbound", now - 25 * HOUR),
-      content: "Baik kak, kami tunggu kabarnya.",
-    });
-    return conversationId;
+    let oldId: any;
+    for (const [orderId, dueAt, suffix] of [
+      ["CONTEXT-OLD", now - 60 * DAY, "1111"],
+      ["CONTEXT-TODAY", now - HOUR, "2222"],
+      ["CONTEXT-FUTURE", now + DAY, "3333"],
+    ] as const) {
+      const id = await ctx.db.insert("conversations", {
+        orgId,
+        ...convBase,
+        orderId,
+        customerPhone: `6289000${suffix}`,
+        followUpProductName: "Quran Mapping",
+        followUpCsKey: "nabila",
+        followUpCycleInboundAt: now - 61 * DAY,
+        followUpCycleId: `cycle-${suffix}`,
+        followUpNextStage: 1,
+        followUpDueAt: dueAt,
+        followUpState: "waiting",
+        followUpLastInboundPreview: "Masih ada kak?",
+        followUpLastInboundAt: now - 62 * DAY,
+        followUpLastOutboundPreview: "Kami tunggu kabarnya",
+        followUpLastOutboundAt: now - 61 * DAY,
+        followUpLastDetectedStage: 1,
+        followUpLastDetectedTemplate: "follow_up_h1",
+      });
+      if (orderId === "CONTEXT-OLD") oldId = id;
+    }
+    return oldId;
   });
 
-  const result = await asAdmin.query(api.followUp.listDueFollowUps, {
+  const result: QueueTestPage = await asAdmin.query(api.followUp.listFollowUpQueue, {
+    stage: 1,
     now,
     paginationOpts: { numItems: 30, cursor: null },
   });
+  expect(result.page.map((row) => row.orderId)).toEqual([
+    "CONTEXT-OLD",
+    "CONTEXT-TODAY",
+    "CONTEXT-FUTURE",
+  ]);
+  expect(result.page.map((row) => row.dueState)).toEqual([
+    "overdue",
+    "due_today",
+    "scheduled",
+  ]);
   expect(result.page[0]).toMatchObject({
     conversationId,
+    stage: 1,
+    dueState: "overdue",
+    overdueDays: 60,
     productName: "Quran Mapping",
-    lastMessagePreview: "Baik kak, kami tunggu kabarnya.",
-    lastMessageAt: now - 25 * HOUR,
-    reason: "CS terakhir membalas, customer belum merespons",
+    lastInboundPreview: "Masih ada kak?",
+    lastOutboundPreview: "Kami tunggu kabarnya",
+    lastDetectedStage: 1,
+    lastDetectedTemplate: "follow_up_h1",
   });
 });
 
@@ -132,7 +175,7 @@ test("searchFollowUpCustomers is on-demand, scoped, and capped", async () => {
   expect(result.every((row) => row.customerName.startsWith("Hasna"))).toBe(true);
 });
 
-test("listDueFollowUps excludes an inbound cycle older than seven days even when dueAt is recent", async () => {
+test("listDueFollowUps compatibility query no longer expires old waiting cycles", async () => {
   const t = convexTest(schema, modules);
   const asAdmin = t.withIdentity({ subject: "expiry-admin", role: "admin", name: "Admin", email: "expiry@wafachat.test" });
   const orgId = await seedOrg(t);
@@ -148,11 +191,11 @@ test("listDueFollowUps excludes an inbound cycle older than seven days even when
     followUpState: "waiting",
   }));
 
-  const result = await asAdmin.query(api.followUp.listDueFollowUps, {
+  const result: QueueTestPage = await asAdmin.query(api.followUp.listDueFollowUps, {
     now,
     paginationOpts: { numItems: 100, cursor: null },
   });
-  expect(result.page).toEqual([]);
+  expect(result.page.map((row) => row.orderId)).toEqual(["STALE-CYCLE"]);
 });
 
 test("recent follow-up backfill materializes at most 25 conversations per page", async () => {
@@ -257,7 +300,7 @@ test("listDueFollowUps enforces tenant, CS, and stage scope before pagination", 
     email: "queue-aisyah@wafachat.test",
     csName: "Aisyah",
   });
-  const csPage = await asCs.query(api.followUp.listDueFollowUps, {
+  const csPage: QueueTestPage = await asCs.query(api.followUp.listDueFollowUps, {
     csName: "Lila",
     stage: 1,
     now,
@@ -266,12 +309,164 @@ test("listDueFollowUps enforces tenant, CS, and stage scope before pagination", 
   expect(csPage.page.map((row) => row.orderId)).toEqual(["SCOPE-AISYAH"]);
 
   const asAdmin = t.withIdentity({ subject: "scope-admin", role: "admin", name: "Scope Admin", email: "scope-admin@wafachat.test" });
-  const adminPage = await asAdmin.query(api.followUp.listDueFollowUps, {
+  const adminPage: QueueTestPage = await asAdmin.query(api.followUp.listDueFollowUps, {
     stage: 2,
     now,
     paginationOpts: { numItems: 20, cursor: null },
   });
   expect(adminPage.page.map((row) => row.orderId)).toEqual(["SCOPE-AISYAH-H2"]);
+});
+
+test("getFollowUpCounts reads an exact CS counter and sums bounded owner counters", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "counts-admin", role: "admin", name: "Counts Admin", email: "counts@wafachat.test" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "nabila", h1: 11, h2: 7, h3: 3, review: 2, updatedAt: now,
+    });
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "lila", h1: 5, h2: 4, h3: 2, review: 1, updatedAt: now,
+    });
+  });
+
+  await expect(asAdmin.query(api.followUp.getFollowUpCounts, { csName: "Nabila" }))
+    .resolves.toEqual({ h1: 11, h2: 7, h3: 3, review: 2 });
+  await expect(asAdmin.query(api.followUp.getFollowUpCounts, {}))
+    .resolves.toEqual({ h1: 16, h2: 11, h3: 5, review: 3 });
+});
+
+test("getFollowUpCounts rejects an owner total above 100 CS rows", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "bounded-counts-admin", role: "admin", name: "Counts Admin", email: "bounded-counts@wafachat.test" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 101; i++) {
+      await ctx.db.insert("followUpCounters", {
+        orgId,
+        csKey: `cs-${String(i).padStart(3, "0")}`,
+        h1: 1,
+        h2: 0,
+        h3: 0,
+        review: 0,
+        updatedAt: now,
+      });
+    }
+  });
+
+  await expect(asAdmin.query(api.followUp.getFollowUpCounts, {}))
+    .rejects.toThrow(/more than 100 CS rows/i);
+});
+
+test("review and archive views paginate newest-first through lifecycle state indexes", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "state-pages-admin", role: "admin", name: "State Admin", email: "state-pages@wafachat.test" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 35; i++) {
+      for (const state of ["review", "archived"] as const) {
+        await ctx.db.insert("conversations", {
+          orgId,
+          ...convBase,
+          orderId: `${state.toUpperCase()}-${i}`,
+          customerPhone: `62881${state === "review" ? "1" : "2"}${String(i).padStart(3, "0")}`,
+          followUpCsKey: "nabila",
+          followUpCycleId: `${state}-cycle-${i}`,
+          followUpCycleInboundAt: now - 10 * HOUR,
+          followUpNextStage: 2,
+          followUpState: state,
+          followUpReviewReason: state === "review" ? `Periksa ${i}` : undefined,
+          followUpOutcome: state === "archived" ? "h3_complete" : undefined,
+          followUpArchivedAt: state === "archived" ? now - i : undefined,
+          followUpLastInboundPreview: `Inbound ${i}`,
+          followUpLastInboundAt: now - 2 * HOUR,
+          followUpLastOutboundPreview: `Outbound ${i}`,
+          followUpLastOutboundAt: now - HOUR,
+          followUpProductName: "Quran Mapping",
+          updatedAt: now - i,
+        });
+      }
+    }
+  });
+
+  const reviewFirst = await asAdmin.query(api.followUp.listFollowUpAttentionPage, {
+    paginationOpts: { numItems: 100, cursor: null },
+  });
+  const reviewSecond = await asAdmin.query(api.followUp.listFollowUpAttentionPage, {
+    paginationOpts: { numItems: 100, cursor: reviewFirst.continueCursor },
+  });
+  expect(reviewFirst.page).toHaveLength(30);
+  expect(reviewSecond.page).toHaveLength(5);
+  expect(reviewFirst.page[0]).toMatchObject({
+    orderId: "REVIEW-0",
+    state: "review",
+    reviewReason: "Periksa 0",
+    lastInboundPreview: "Inbound 0",
+    lastOutboundPreview: "Outbound 0",
+  });
+
+  const archivedFirst = await asAdmin.query(api.followUp.listArchivedFollowUpsPage, {
+    paginationOpts: { numItems: 100, cursor: null },
+  });
+  const archivedSecond = await asAdmin.query(api.followUp.listArchivedFollowUpsPage, {
+    paginationOpts: { numItems: 100, cursor: archivedFirst.continueCursor },
+  });
+  expect(archivedFirst.page).toHaveLength(30);
+  expect(archivedSecond.page).toHaveLength(5);
+  expect(archivedFirst.page[0]).toMatchObject({
+    orderId: "ARCHIVED-0",
+    outcome: "h3_complete",
+    archivedAt: now,
+  });
+});
+
+test("closing view paginates newest-first through recap closedAt indexes", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({ subject: "closed-pages-admin", role: "admin", name: "Closed Admin", email: "closed-pages@wafachat.test" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 35; i++) {
+      await ctx.db.insert("shippingRecaps", {
+        orgId,
+        orderIdBerdu: `CLOSED-${i}`,
+        customerPhone: `6288200${String(i).padStart(3, "0")}`,
+        customerName: `Closed ${i}`,
+        csName: "Nabila",
+        csKey: "nabila",
+        closedAt: now - i,
+        recipientName: `Closed ${i}`,
+        recipientPhone: `6288200${String(i).padStart(3, "0")}`,
+        recipientAddress: "",
+        recipientDistrict: "",
+        recipientCity: "",
+        packageContent: "Quran Mapping",
+        paymentMethod: "cod",
+        status: "ready",
+        flags: [],
+        sourceMessageText: "",
+        version: 1,
+        followUpTouchesAtClose: i % 4,
+        createdAt: now - i,
+        updatedAt: now - i,
+      });
+    }
+  });
+
+  const first = await asAdmin.query(api.followUp.listClosedFollowUpsPage, {
+    paginationOpts: { numItems: 100, cursor: null },
+  });
+  const second = await asAdmin.query(api.followUp.listClosedFollowUpsPage, {
+    paginationOpts: { numItems: 100, cursor: first.continueCursor },
+  });
+  expect(first.page).toHaveLength(30);
+  expect(second.page).toHaveLength(5);
+  expect(first.page[0]).toMatchObject({
+    orderId: "CLOSED-0",
+    product: "Quran Mapping",
+    touches: 0,
+    fromFollowUp: false,
+  });
+  expect(first.page[1]).toMatchObject({ orderId: "CLOSED-1", touches: 1, fromFollowUp: true });
 });
 
 test("getFollowUpCandidates: stale conversation (updated >6d ago) excluded by recency bound", async () => {
