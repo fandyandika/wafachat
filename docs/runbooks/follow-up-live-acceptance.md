@@ -10,7 +10,7 @@
 - Dry-run cutover run ID: `qd7csw3jgg7gxj4rqnmqb7wx2x8caet8`
 - Apply cutover run ID: `qd7cv2jm4anen36v8h3zdpsfvn8cakmh`
 - Vercel production deployment/URL: `dpl_9krMP3J578TRNeWpii88ejGPo5tw` / `https://wafachat-csqotsrwg-vnd-company.vercel.app` (alias `https://wafachat.vercel.app`)
-- Acceptance status: **BLOCKED — automated rollout and unauthenticated smoke complete; authenticated and controlled every-number evidence remain**
+- Acceptance status: **BLOCKED — automated rollout and authenticated smoke complete; controlled every-number evidence remains**
 
 Never record API keys, webhook secrets, session cookies, raw webhook bodies, customer message content, or other credentials in this runbook. Provider and ingest identifiers may be recorded only when needed for a failed controlled test.
 
@@ -96,10 +96,10 @@ The indexed `ingestEvents` query for `status = failed` returned six historical r
 - Production alias: `https://wafachat.vercel.app`
 - Result: PASS — Vercel reports production deployment `Ready`; remote build generated 36 pages with the same existing `jose` Edge Runtime CompressionStream/DecompressionStream warning.
 - Login smoke: PASS — `/login` returned HTTP `200`.
-- Dashboard smoke: PASS for unauthenticated guard — `/panel` returned HTTP `307` to `/login`; authenticated content not inspected.
-- Follow-up smoke: PASS for unauthenticated guard — `/panel/follow-up` returned HTTP `307` to `/login`; authenticated workspace not inspected.
-- Settings → Template Follow-up smoke: PASS for unauthenticated guard — `/panel/settings` returned HTTP `307` to `/login`; authenticated template controls not inspected.
-- Authentication/browser limitation: no authenticated production browser session or credentials were available. Smoke commands recorded status and redirect only and did not read bodies, cookies, or secrets.
+- Dashboard smoke: PASS — authenticated production Dashboard rendered current KPI data without a client/server exception.
+- Follow-up smoke: PASS — authenticated workspace rendered all stage tabs, CS filter, search, empty state, and detail placeholder without a client/server exception.
+- Settings → Template Follow-up smoke: PASS — authenticated H+1/H+2/H+3 configuration controls rendered without a client/server exception. All three provider templates are currently unconfigured/inactive, which is an operational setup item rather than a deployment defect.
+- Console smoke: PASS — no new application console error was emitted during the three authenticated page checks. One older browser-extension listener error preceded this smoke and was not attributed to WafaChat.
 
 ## Every-number controlled live gate
 
@@ -148,6 +148,6 @@ Static evidence may establish query shape and absence of polling; production I/O
 - Automated gates: PASS (targeted 283, full 744, TypeScript, codegen, and build).
 - Deployments: Convex PASS; Vercel production PASS (`Ready`).
 - Cutover: PASS — dry-run and apply completed with `failed = 0`; Dashboard internal runner resolved the CLI credential scope issue without public exposure.
-- UI smoke: unauthenticated route/guard checks PASS; authenticated Dashboard, Follow-up, and Settings → Template Follow-up remain unverified because no authenticated browser session was available.
+- UI smoke: PASS — unauthenticated route guards and authenticated Dashboard, Follow-up, and Settings → Template Follow-up were verified on production.
 - Every-number controlled live gate: **BLOCKED pending real controlled evidence**
 - Production acceptance: **NOT COMPLETE**
