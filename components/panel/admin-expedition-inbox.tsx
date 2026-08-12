@@ -3,11 +3,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
-import { ArrowLeft, Ban, CheckCheck, Clock3, Inbox, MessageSquareText, Plus, RefreshCw, RotateCcw, Search, Send, Settings2 } from "lucide-react";
+import { ArrowLeft, Ban, CheckCheck, Clock3, MessageSquareText, Plus, RefreshCw, RotateCcw, Send, Settings2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { filterAdminThreads, type AdminInboxView } from "./admin-expedition-inbox-model";
+import { AdminExpeditionThreadList } from "./admin-expedition-thread-list";
 
 type Feedback = { kind: "ok" | "error"; message: string } | null;
 
@@ -350,72 +351,30 @@ export function AdminExpeditionInbox() {
         <div role={feedback.kind === "error" ? "alert" : "status"} className={cn("rounded-lg border px-3 py-2 text-sm", feedback.kind === "ok" ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-destructive/30 bg-destructive/5 text-destructive")}>{feedback.message}</div>
       )}
 
-      <div className="min-h-[calc(100dvh-12rem)] overflow-hidden rounded-xl border border-ledger-rule bg-card lg:grid lg:grid-cols-[340px_minmax(0,1fr)]">
-        <aside aria-label="Daftar percakapan ekspedisi" className={cn("border-ledger-rule lg:border-r", selectedThread && "hidden lg:block")}>
-          <div className="space-y-3 border-b border-ledger-rule p-3">
-            <div>
-              <p className="text-sm font-semibold">Percakapan</p>
-              <p className="text-xs text-muted-foreground">{threads.results.length} customer yang sudah dimuat</p>
-            </div>
-            <label className="relative block">
-              <span className="sr-only">Cari customer atau order</span>
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Cari customer atau order"
-                className="min-h-11 w-full rounded-lg border border-input bg-background pl-9 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-            </label>
-            <div className="grid grid-cols-3 rounded-lg border border-ledger-rule bg-muted/30 p-0.5" aria-label="Filter percakapan">
-              {([
-                ["all", "Semua"],
-                ["needs_reply", "Belum dibalas"],
-                ["window_open", "24 jam aktif"],
-              ] as const).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={view === value}
-                  onClick={() => setView(value)}
-                  className={cn("min-h-9 rounded-md px-2 text-[11px] font-medium transition-colors", view === value ? "bg-card text-ledger-ink shadow-sm" : "text-muted-foreground hover:text-foreground")}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <p className="text-[11px] leading-4 text-muted-foreground">Pencarian mencakup percakapan yang sudah dimuat.</p>
-          </div>
-          {threads.status === "LoadingFirstPage" ? (
-            <p className="p-4 text-sm text-muted-foreground">Memuat percakapan…</p>
-          ) : threads.results.length === 0 ? (
-            <div className="px-6 py-14 text-center"><Inbox className="mx-auto size-6 text-muted-foreground" /><p className="mt-3 text-sm font-medium">Belum ada percakapan</p><p className="mt-1 text-xs text-muted-foreground">Mulai dengan template approved.</p></div>
-          ) : visibleThreads.length === 0 ? (
-            <div className="px-6 py-14 text-center"><Search className="mx-auto size-6 text-muted-foreground" /><p className="mt-3 text-sm font-medium">Tidak ada hasil</p><p className="mt-1 text-xs text-muted-foreground">Ubah pencarian atau filter percakapan.</p></div>
-          ) : (
-            <div className="divide-y divide-ledger-rule">
-              {visibleThreads.map((thread) => (
-                <button key={String(thread.id)} type="button" onClick={() => setSelectedId(String(thread.id))} className="flex min-h-20 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/60">
-                  <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold">{(thread.customerName || thread.customerPhone).slice(0, 2).toUpperCase()}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center justify-between gap-2"><strong className="truncate text-sm">{thread.customerName || thread.customerPhone}</strong><span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel(thread.updatedAt)}</span></span>
-                    <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{adminThreadListSubtitle(thread)}</span><span className={cn("shrink-0 rounded-full px-2 py-0.5", thread.windowOpen ? "bg-emerald-100 text-emerald-800" : "bg-muted")}>{thread.windowOpen ? "24 jam aktif" : "Template"}</span></span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-          {threads.status === "CanLoadMore" && <div className="p-3"><Button variant="outline" className="w-full" onClick={() => threads.loadMore(30)}>Muat lainnya</Button></div>}
-        </aside>
+      <div className="min-h-[calc(100dvh-12rem)] overflow-hidden rounded-xl border border-ledger-rule bg-card xl:grid xl:grid-cols-[320px_minmax(0,1fr)]">
+        <AdminExpeditionThreadList
+          className={selectedThread ? "hidden xl:flex" : undefined}
+          threads={visibleThreads}
+          totalLoaded={threads.results.length}
+          selectedId={selectedId}
+          search={search}
+          view={view}
+          loadingFirstPage={threads.status === "LoadingFirstPage"}
+          canLoadMore={threads.status === "CanLoadMore"}
+          loadingMore={threads.status === "LoadingMore"}
+          onSearchChange={setSearch}
+          onViewChange={setView}
+          onSelect={setSelectedId}
+          onLoadMore={() => threads.loadMore(30)}
+        />
 
-        <main className={cn("min-w-0", !selectedThread && "hidden lg:block")}>
+        <main className={cn("min-w-0", !selectedThread && "hidden xl:block")}>
           {!selectedThread ? (
             <div className="flex min-h-[60vh] flex-col items-center justify-center p-6 text-center"><MessageSquareText className="size-7 text-muted-foreground" /><p className="mt-3 font-semibold">Pilih percakapan</p><p className="mt-1 text-sm text-muted-foreground">Riwayat pesan dan tindakan tampil di sini.</p></div>
           ) : (
             <div className="flex min-h-[calc(100dvh-12rem)] flex-col">
               <header className="flex items-center gap-3 border-b border-ledger-rule px-3 py-3 md:px-5">
-                <Button variant="ghost" size="icon" className="lg:hidden" aria-label="Kembali ke daftar" onClick={() => setSelectedId(null)}><ArrowLeft className="size-5" /></Button>
+                <Button variant="ghost" size="icon" className="xl:hidden" aria-label="Kembali ke daftar" onClick={() => setSelectedId(null)}><ArrowLeft className="size-5" /></Button>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{selectedThread.customerName || selectedThread.customerPhone}</p>
                   <p className="truncate text-xs text-muted-foreground">{adminThreadMeta(selectedThread)}</p>

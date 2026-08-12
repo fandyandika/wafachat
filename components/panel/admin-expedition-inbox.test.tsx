@@ -35,7 +35,7 @@ test("admin expedition inbox exposes a lean two-pane workflow and labelled actio
   expect(html).toContain("Semua");
   expect(html).toContain("Belum dibalas");
   expect(html).toContain("24 jam aktif");
-  expect(html).toContain("Pencarian mencakup percakapan yang sudah dimuat");
+  expect(html).toContain("Pencarian hanya mencakup percakapan yang sudah dimuat");
 });
 
 test("new admin chat uses lean optional context and supports a template without variables", () => {
