@@ -3,6 +3,7 @@ import {
   adminThreadNeedsReply,
   adminThreadPreview,
   filterAdminThreads,
+  sendFailureNeedsPageFeedback,
   type AdminInboxThreadView,
 } from "./admin-expedition-inbox-model";
 
@@ -62,5 +63,10 @@ describe("admin expedition inbox thread model", () => {
     expect(adminThreadPreview(threads[0])).toBe("Quran Mapping");
     expect(adminThreadPreview(threads[1])).toBe("Order ORD-102");
     expect(adminThreadPreview(threads[2])).toBe("087738293725");
+  });
+
+  test("keeps persisted delivery failures on the message instead of a stale page banner", () => {
+    expect(sendFailureNeedsPageFeedback({ ok: false, error: "Ditolak", messageId: "message-1" })).toBe(false);
+    expect(sendFailureNeedsPageFeedback({ ok: false, error: "Data pesan tidak lengkap" })).toBe(true);
   });
 });

@@ -50,3 +50,7 @@ export function filterAdminThreads(
       || (searchDigits.length > 0 && phoneDigits.includes(searchDigits));
   });
 }
+
+export function sendFailureNeedsPageFeedback(result: { messageId?: unknown; [key: string]: unknown }): boolean {
+  return result.messageId === undefined || result.messageId === null;
+}
