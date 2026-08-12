@@ -1505,7 +1505,13 @@ test("archive can be repeated after unarchive as a distinct audited action", asy
   await expect(asAdmin.mutation(api.followUp.archiveFollowUp, {
     conversationId, requestId: "33333333-5555-4333-8333-333333333333",
   })).resolves.toEqual({ ok: true, duplicate: false });
+  await expect(asAdmin.mutation(api.followUp.archiveFollowUp, {
+    conversationId, requestId: "33333333-5555-4333-8333-333333333333",
+  })).resolves.toEqual({ ok: true, duplicate: true });
   await asAdmin.mutation(api.followUp.unarchiveFollowUp, { conversationId });
+  await expect(asAdmin.mutation(api.followUp.archiveFollowUp, {
+    conversationId, requestId: "33333333-5555-4333-8333-333333333333",
+  })).rejects.toThrow(/request id.*tidak lagi|sudah berubah/i);
   await expect(asAdmin.mutation(api.followUp.archiveFollowUp, {
     conversationId, requestId: "44444444-6666-4444-8444-444444444444",
   })).resolves.toEqual({ ok: true, duplicate: false });

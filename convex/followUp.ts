@@ -1310,6 +1310,11 @@ export const archiveFollowUp = mutation({
       if (String(existing.conversationId) !== String(c._id) || existing.kind !== "archived") {
         throw new Error("Request ID Follow-up sudah digunakan untuk tindakan lain.");
       }
+      if (c.followUpState !== "archived"
+        || c.followUpCycleId !== existing.cycleId
+        || c.followUpRequestId !== args.requestId) {
+        throw new Error("Request ID archive tidak lagi mewakili status saat ini; gunakan request ID baru.");
+      }
       return { ok: true as const, duplicate: true };
     }
     if (c.followUpState !== "waiting" && c.followUpState !== "review" && c.followUpState !== "failed") {
@@ -1325,6 +1330,7 @@ export const archiveFollowUp = mutation({
       source: "manual",
     });
     if (!result.applied) throw new Error("Follow-up tidak berubah; muat ulang data terbaru.");
+    await ctx.db.patch(c._id, { followUpRequestId: args.requestId });
     return { ok: true as const, duplicate: false };
   },
 });
