@@ -103,7 +103,8 @@ test("a cutover rejection rolls back message writes and leaves the failed raw ev
     return { orgId, rawBody, eventId };
   });
 
-  await t.action(internal.ingest.dispatch.processScheduledEvent, { eventId });
+  expect(await t.action(internal.ingest.dispatch.processScheduledEvent, { eventId }))
+    .toBeNull();
 
   await t.run(async (ctx) => {
     expect(await ctx.db.query("messages").collect()).toHaveLength(0);

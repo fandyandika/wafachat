@@ -36,6 +36,7 @@ const SAFE_PROCESSING_ERROR =
 
 export const processScheduledEvent = internalAction({
   args: { eventId: v.id("ingestEvents") },
+  returns: v.null(),
   handler: async (ctx, args) => {
     try {
       await ctx.runMutation(internal.ingest.core.processEvent, {
@@ -47,5 +48,6 @@ export const processScheduledEvent = internalAction({
         error: SAFE_PROCESSING_ERROR,
       });
     }
+    return null;
   },
 });
