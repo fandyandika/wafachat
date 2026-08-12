@@ -600,7 +600,7 @@ export async function markConversationCancelledCore(ctx: any, args: {
     });
     const nextNote = args.note ?? "customer cancelled";
 
-    if (args.requiredCycleId && conversation.followUpCycleId !== args.requiredCycleId) {
+    if (args.requiredCycleId !== undefined && (!args.requiredCycleId.trim() || conversation.followUpCycleId !== args.requiredCycleId)) {
       throw new Error("Siklus follow-up sudah berubah.");
     }
     const lifecycle = await terminateCycle(ctx, {
@@ -610,7 +610,7 @@ export async function markConversationCancelledCore(ctx: any, args: {
       createdAt: now,
       source: "manual",
     });
-    if (args.requiredCycleId && !lifecycle.applied) throw new Error("Siklus follow-up tidak aktif atau sudah berubah.");
+    if (args.requiredCycleId !== undefined && !lifecycle.applied) throw new Error("Siklus follow-up tidak aktif atau sudah berubah.");
 
     await patchClosingStatsWithKey(ctx, {
       key: transitionKey,
@@ -736,7 +736,7 @@ export async function markConversationClosingCore(ctx: any, args: {
     });
     const nextNote = args.note ?? "manual closing by CS";
 
-    if (args.requiredCycleId && conversation.followUpCycleId !== args.requiredCycleId) {
+    if (args.requiredCycleId !== undefined && (!args.requiredCycleId.trim() || conversation.followUpCycleId !== args.requiredCycleId)) {
       throw new Error("Siklus follow-up sudah berubah.");
     }
     const lifecycle = await terminateCycle(ctx, {
@@ -746,7 +746,7 @@ export async function markConversationClosingCore(ctx: any, args: {
       createdAt: now,
       source: "manual",
     });
-    if (args.requiredCycleId && !lifecycle.applied) throw new Error("Siklus follow-up tidak aktif atau sudah berubah.");
+    if (args.requiredCycleId !== undefined && !lifecycle.applied) throw new Error("Siklus follow-up tidak aktif atau sudah berubah.");
 
     await patchClosingStatsWithKey(ctx, {
       key: transitionKey,

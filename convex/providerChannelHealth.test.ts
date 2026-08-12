@@ -174,3 +174,15 @@ test('exact health deterministically returns the newest error across multiple pr
   await expect(asAdmin(t).query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'CS Aisyah' }))
     .resolves.toMatchObject({ providerNumberId: 'error-new', lastError: 'Newest error' });
 });
+
+test('health lookup surfaces a conservative diagnostic at the bounded provider cap', async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (let index = 0; index < 101; index++) {
+      await touchProviderChannelHealth(ctx, { orgId, providerNumberId: `cap-${String(index).padStart(3, '0')}`, channelType: 'cs', csKey: 'aisyah', direction: 'inbound', touchedAt: index + 1 });
+    }
+  });
+  const result = await asAdmin(t).query(api.providerChannelHealth.getProviderChannelHealthForCs, { csKey: 'aisyah' });
+  expect(result?.lastError).toMatch(/melebihi batas pemeriksaan/i);
+});

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { Component, useEffect, useRef, useState, type ReactNode } from 'react';
 import { usePaginatedQuery, useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { Button } from '@/components/ui/button';
@@ -51,6 +51,24 @@ export function loadActiveFollowUpPage(page: { loadMore: (count: number) => void
   page.loadMore(30);
 }
 
+export class FollowUpQueryErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null; retryKey: number }> {
+  state = { error: null as Error | null, retryKey: 0 };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error, retryKey: 0 };
+  }
+
+  private retry = () => this.setState((state) => ({ error: null, retryKey: state.retryKey + 1 }));
+
+  render() {
+    if (this.state.error) return <div role="alert" className="m-4 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm">
+      <p className="font-medium text-destructive">{this.state.error.message || 'Data follow-up gagal dimuat.'}</p>
+      <Button type="button" variant="outline" className="mt-3 min-h-11" onClick={this.retry}>Coba lagi</Button>
+    </div>;
+    return <React.Fragment key={this.state.retryKey}>{this.props.children}</React.Fragment>;
+  }
+}
+
 function stageForView(view: FollowUpView): FollowUpStage | null {
   if (view === 'h1') return 1;
   if (view === 'h2') return 2;
@@ -58,7 +76,7 @@ function stageForView(view: FollowUpView): FollowUpStage | null {
   return null;
 }
 
-export function FollowUpDashboard({ initialMe, initialView = 'h1' }: { initialMe?: Me; initialView?: FollowUpView } = {}) {
+function FollowUpDashboardWorkspace({ initialMe, initialView = 'h1' }: { initialMe?: Me; initialView?: FollowUpView } = {}) {
   const [me, setMe] = useState<Me | null>(initialMe ?? null);
   const { cs } = usePanelFilters();
   const [csFilter, setCsFilter] = useState(cs && cs !== 'all' ? cs : 'all');
@@ -114,9 +132,6 @@ export function FollowUpDashboard({ initialMe, initialView = 'h1' }: { initialMe
   const templateSetup = useQuery(api.followUpTemplates.getFollowUpTemplateSetup, templateCandidate ? {} : 'skip');
 
   const activePage = activeStage ? stagePage : view === 'review' ? reviewPage : view === 'closing' ? closingPage : archivePage;
-  const reactiveError = activePage.status === ('Error' as typeof activePage.status)
-    ? ((activePage as unknown as { error?: Error }).error?.message ?? 'Data follow-up gagal dimuat.')
-    : null;
   const reactiveRows = activePage.results as FollowUpListRow[];
   const rows = searchRows ?? reactiveRows;
   const loading = searchRows === null && activePage.status === 'LoadingFirstPage' || searchLoading;
@@ -193,7 +208,7 @@ export function FollowUpDashboard({ initialMe, initialView = 'h1' }: { initialMe
     <div className="flex min-h-0 flex-1">
       <section className={`${mobileDetail ? 'hidden md:block' : 'block'} w-full overflow-y-auto border-r md:w-[27rem] md:shrink-0`}>
         <div className="border-b px-4 py-3"><p className="font-semibold">{searchRows === null ? activeView.label : 'Hasil pencarian'}</p><p className="text-xs text-muted-foreground">{searchRows === null ? activeView.description : `Hasil untuk “${searchInput.trim()}”`}</p></div>
-        <FollowUpList view={listView} rows={rows} loading={loading} error={searchError ?? reactiveError} selectedId={selected ? rowId(selected) : null} onSelect={selectRow} onRetry={searchError ? runSearch : reactiveError ? () => loadActiveFollowUpPage(activePage) : undefined} />
+        <FollowUpList view={listView} rows={rows} loading={loading} error={searchError} selectedId={selected ? rowId(selected) : null} onSelect={selectRow} onRetry={searchError ? runSearch : undefined} />
         {searchRows === null && (activePage.status === 'CanLoadMore' || activePage.status === 'LoadingMore') ? <div className="p-3"><Button variant="outline" className="min-h-11 w-full" disabled={activePage.status === 'LoadingMore'} onClick={() => loadActiveFollowUpPage(activePage)}>{activePage.status === 'LoadingMore' ? 'Memuat…' : 'Muat berikutnya'}</Button></div> : null}
       </section>
 
@@ -219,4 +234,8 @@ export function FollowUpDashboard({ initialMe, initialView = 'h1' }: { initialMe
       onAccepted={() => { setTemplateCandidate(null); setSelected(null); setMobileDetail(false); }}
     />
   </div>;
+}
+
+export function FollowUpDashboard(props: { initialMe?: Me; initialView?: FollowUpView } = {}) {
+  return <FollowUpQueryErrorBoundary><FollowUpDashboardWorkspace {...props} /></FollowUpQueryErrorBoundary>;
 }

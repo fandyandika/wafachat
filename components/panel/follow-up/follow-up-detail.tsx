@@ -67,6 +67,7 @@ export function FollowUpDetail({ candidate, onBack, onChanged, onSendTemplate }:
 
   const currentCandidate = candidate;
   const queue = isQueueRow(candidate) ? candidate : null;
+  const hasActiveCycle = Boolean(candidate.cycleId?.trim());
 
   async function runAction(label: string, action: () => Promise<unknown>, success: string) {
     if (busyAction) return;
@@ -142,13 +143,14 @@ export function FollowUpDetail({ candidate, onBack, onChanged, onSendTemplate }:
     </div>
 
     {feedback ? <div role={feedback.tone === 'error' ? 'alert' : 'status'} className={`border-t px-4 py-2 text-sm ${feedback.tone === 'error' ? 'bg-destructive/10 text-destructive' : 'bg-emerald-50 text-emerald-900'}`}>{feedback.message}</div> : null}
+    {!hasActiveCycle ? <p role="note" className="border-t bg-amber-50 px-4 py-2 text-sm text-amber-900">Closing dan Batal tidak tersedia karena siklus follow-up tidak aktif.</p> : null}
 
     <footer className="sticky bottom-0 z-10 grid grid-cols-2 gap-2 border-t bg-card p-3 shadow-[0_-8px_24px_rgba(0,0,0,0.08)] sm:grid-cols-3 lg:grid-cols-4">
       <a href={`https://wa.me/${waNumber(candidate.customerPhone)}`} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center justify-center rounded-lg border bg-background px-3 text-center text-sm font-semibold outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">Buka WhatsApp</a>
       {queue ? <Button type="button" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => onSendTemplate?.(queue)}>Kirim template</Button> : null}
       <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('contact', () => confirmContact({ conversationId: candidate.conversationId, requestId: crypto.randomUUID() }), 'Kontak manual berhasil dicatat.')}>{busyAction === 'contact' ? 'Mencatat…' : 'Sudah dihubungi'}</Button>
-      <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('closing', () => markClosing({ conversationId: candidate.conversationId as Id<'conversations'>, expectedCycleId: candidate.cycleId ?? '' }), 'Closing berhasil dicatat.')}>Closing</Button>
-      <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('cancel', () => markCancelled({ conversationId: candidate.conversationId as Id<'conversations'>, expectedCycleId: candidate.cycleId ?? '', reason: 'Customer membatalkan pesanan' }), 'Pembatalan berhasil dicatat.')}>Batal</Button>
+      <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction) || !hasActiveCycle} onClick={() => void runAction('closing', () => markClosing({ conversationId: candidate.conversationId as Id<'conversations'>, expectedCycleId: candidate.cycleId! }), 'Closing berhasil dicatat.')}>Closing</Button>
+      <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction) || !hasActiveCycle} onClick={() => void runAction('cancel', () => markCancelled({ conversationId: candidate.conversationId as Id<'conversations'>, expectedCycleId: candidate.cycleId!, reason: 'Customer membatalkan pesanan' }), 'Pembatalan berhasil dicatat.')}>Batal</Button>
       <Button type="button" variant="outline" className="min-h-11" disabled={Boolean(busyAction)} onClick={() => void runAction('archive', () => archiveFollowUp(candidate.conversationId), 'Follow-up diarsipkan.')}>{busyAction === 'archive' ? 'Mengarsipkan…' : 'Arsip'}</Button>
     </footer>
   </div>;

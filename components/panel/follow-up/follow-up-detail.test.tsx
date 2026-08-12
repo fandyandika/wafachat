@@ -92,6 +92,13 @@ test('detail renders timeline, explicit health errors, accessible stage correcti
   expect(html).toContain('Arsip');
 });
 
+test('terminal actions are unavailable with an explicit reason when cycle identity is absent', () => {
+  const html = renderToStaticMarkup(<FollowUpDetail candidate={{ ...candidate, cycleId: undefined }} />);
+  expect(html).toContain('Closing dan Batal tidak tersedia karena siklus follow-up tidak aktif.');
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Closing<\/button>/);
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Batal<\/button>/);
+});
+
 test('successful actions close immediately without scheduling a stale callback', async () => {
   vi.useFakeTimers();
   const { completeFollowUpAction } = await import('./follow-up-detail');

@@ -412,6 +412,27 @@ test('terminal ownership follows the active cycle owner rather than stale assign
 });
 
 test.each([
+  ['closing', (admin: any, conversationId: any, args: any) => admin.mutation(api.followUp.markFollowUpClosing, { conversationId, ...args })],
+  ['cancelled', (admin: any, conversationId: any, args: any) => admin.mutation(api.followUp.markFollowUpCancelled, { conversationId, reason: 'Batal', ...args })],
+] as const)('%s requires a non-empty expected cycle before all terminal writes', async (_kind, invoke) => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const conversationId = await t.run((ctx) => ctx.db.insert('conversations', {
+    orgId, ...convBase, orderId: `EMPTY-CYCLE-${_kind}`, customerPhone: `628-empty-${_kind}`,
+    followUpCsKey: 'nabila', followUpCycleId: '   ', followUpNextStage: 1, followUpDueAt: now, followUpState: 'waiting', note: 'unchanged',
+  }));
+  const admin = t.withIdentity({ subject: 'empty-cycle-admin', role: 'admin', name: 'Admin', email: 'empty-cycle@w' });
+  await expect(invoke(admin, conversationId, { expectedCycleId: '   ' })).rejects.toThrow(/cycle|siklus/i);
+  await expect(invoke(admin, conversationId, {})).rejects.toThrow(/expectedCycleId|validator/i);
+  await t.run(async (ctx) => {
+    expect(await ctx.db.get(conversationId)).toMatchObject({ followUpCycleId: '   ', followUpState: 'waiting', note: 'unchanged' });
+    expect(await ctx.db.query('events').collect()).toHaveLength(0);
+    expect(await ctx.db.query('dailyStats').collect()).toHaveLength(0);
+    expect(await ctx.db.query('followUpTransitions').collect()).toHaveLength(0);
+  });
+});
+
+test.each([
   ['idle', { followUpCycleId: undefined, followUpNextStage: undefined, followUpState: undefined }],
   ['replied', { followUpCycleId: undefined, followUpNextStage: undefined, followUpState: undefined, followUpLastInboundAt: now + 1 }],
   ['archived', { followUpCycleId: 'archived-cycle', followUpNextStage: undefined, followUpState: 'archived' }],

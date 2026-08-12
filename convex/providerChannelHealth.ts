@@ -6,6 +6,8 @@ import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 
 const UNKNOWN_PROVIDER_ERROR = "Nomor provider belum dipetakan";
+const MAX_PROVIDER_CHANNELS_PER_CS = 100;
+const PROVIDER_CAP_DIAGNOSTIC = "Sinyal webhook belum dapat dipastikan: kanal melebihi batas pemeriksaan.";
 
 export type ProviderChannelHealthTouch = {
   orgId: Id<"organizations">;
@@ -129,7 +131,7 @@ export const getProviderChannelHealthForCs = query({
     if (!key) throw new Error("CS key wajib tersedia.");
     const rows = await ctx.db.query("providerChannelHealth")
       .withIndex("by_org_csKey", (q) => q.eq("orgId", orgId).eq("csKey", key))
-      .collect();
+      .take(MAX_PROVIDER_CHANNELS_PER_CS);
     const row = rows.sort((left, right) => {
       const errorDifference = Number(Boolean(right.lastError)) - Number(Boolean(left.lastError));
       if (errorDifference !== 0) return errorDifference;
@@ -144,8 +146,8 @@ export const getProviderChannelHealthForCs = query({
       channelType: row.channelType,
       lastInboundAt: row.lastInboundAt,
       lastOutboundAt: row.lastOutboundAt,
-      lastError: row.lastError,
-      errorAt: row.errorAt,
+      lastError: rows.length === MAX_PROVIDER_CHANNELS_PER_CS ? PROVIDER_CAP_DIAGNOSTIC : row.lastError,
+      errorAt: rows.length === MAX_PROVIDER_CHANNELS_PER_CS ? row.errorAt ?? row.updatedAt : row.errorAt,
       updatedAt: row.updatedAt,
     };
   },

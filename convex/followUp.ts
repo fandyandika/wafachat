@@ -1206,6 +1206,7 @@ async function scopedFollowUpConversation(ctx: any, conversationId: Id<"conversa
 export const markFollowUpClosing = mutation({
   args: { conversationId: v.id("conversations"), expectedCycleId: v.string() },
   handler: async (ctx, args) => {
+    if (!args.expectedCycleId.trim()) throw new Error("Identitas siklus follow-up wajib tersedia.");
     const { orgId, conversation } = await scopedFollowUpConversation(ctx, args.conversationId, "followUp.markFollowUpClosing");
     return markConversationClosingCore(ctx, { orgId, conversation, requiredCycleId: args.expectedCycleId });
   },
@@ -1214,6 +1215,7 @@ export const markFollowUpClosing = mutation({
 export const markFollowUpCancelled = mutation({
   args: { conversationId: v.id("conversations"), expectedCycleId: v.string(), reason: v.string() },
   handler: async (ctx, args) => {
+    if (!args.expectedCycleId.trim()) throw new Error("Identitas siklus follow-up wajib tersedia.");
     const reason = args.reason.trim();
     if (!reason) throw new Error("Alasan pembatalan wajib diisi.");
     const { orgId, conversation } = await scopedFollowUpConversation(ctx, args.conversationId, "followUp.markFollowUpCancelled");

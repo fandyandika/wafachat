@@ -24,7 +24,7 @@ vi.mock('@/components/ui/button', () => ({
 }));
 
 import { api } from '@/convex/_generated/api';
-import { FollowUpDashboard, getNextFollowUpTabIndex, selectionAfterCompletedAction, loadActiveFollowUpPage } from './follow-up-dashboard';
+import { FollowUpDashboard, FollowUpQueryErrorBoundary, getNextFollowUpTabIndex, selectionAfterCompletedAction } from './follow-up-dashboard';
 
 beforeEach(() => {
   useQueryMock.mockReset();
@@ -84,14 +84,19 @@ test('active pagination exposes a load-more control without querying inactive ta
   expect(pagers.slice(0, 3).every((pager) => pager.mock.calls.length === 0)).toBe(true);
 });
 
-test('reactive page failure exposes retry wired to the active pager', () => {
-  const retry = vi.fn();
-  usePaginatedQueryMock.mockReturnValue({ results: [], status: 'Error', error: new Error('Query gagal'), isLoading: false, loadMore: retry });
-  const html = renderToStaticMarkup(<FollowUpDashboard initialMe={{ name: 'Owner', role: 'admin' }} initialView="review" />);
-  expect(html).toContain('Query gagal');
-  expect(html).toContain('Coba lagi');
-  loadActiveFollowUpPage({ loadMore: retry });
-  expect(retry).toHaveBeenCalledWith(30);
+test('real thrown query error shows retry and retry remounts the workspace', () => {
+  const boundary = new FollowUpQueryErrorBoundary({ children: <div>Workspace pulih</div> });
+  boundary.state = FollowUpQueryErrorBoundary.getDerivedStateFromError(new Error('Query Convex gagal'));
+  boundary.setState = ((update: any) => {
+    const next = typeof update === 'function' ? update(boundary.state) : update;
+    boundary.state = { ...boundary.state, ...next };
+  }) as any;
+  const failed = renderToStaticMarkup(boundary.render());
+  expect(failed).toContain('Query Convex gagal');
+  expect(failed).toContain('Coba lagi');
+  buttonClicks.get('Coba lagi')?.();
+  expect(boundary.state).toEqual({ error: null, retryKey: 1 });
+  expect(renderToStaticMarkup(boundary.render())).toContain('Workspace pulih');
 });
 
 test('deferred completion from customer A cannot clear newly selected customer B', async () => {
