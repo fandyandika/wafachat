@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   ConversationStatus,
+  canonicalizeProduct,
   csKey,
   getJakartaDate,
   makeOrderKey,
@@ -16,6 +17,7 @@ import { getCsFeatureConfig } from "./csConfigs";
 import { bumpForOrderDoc } from "./rollups";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
+import { assertFollowUpCutoverUnlocked, terminateCycle } from "./followUpLifecycle";
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.literal("closed"));
 
@@ -161,6 +163,7 @@ export const createTestConversation = mutation({
       status: "active",
       aiEnabled: aiEligible,
       note: "",
+      followUpProductName: canonicalizeProduct(productName),
       createdAt: now,
       updatedAt: now,
       orgId,
@@ -246,6 +249,7 @@ export async function upsertOrderCore(
     orgId: Id<"organizations">;
   },
 ) {
+  await assertFollowUpCutoverUnlocked(ctx, args.orgId);
   const canon = await canonicalizeCs(ctx, args.orgId, args.csName);
   const now = Date.now();
   const phone = normalizePhone(args.phone);
@@ -254,6 +258,7 @@ export async function upsertOrderCore(
   const csConfig = await getCsFeatureConfig(ctx, args.orgId, args.csName);
   const reportable = csConfig.isActive && csConfig.reportingEnabled;
   const aiEligible = reportable && csConfig.aiAssistantEnabled;
+  const followUpProductName = canonicalizeProduct(args.productName);
 
   const existingCustomer = await ctx.db
     .query("customers")
@@ -326,10 +331,14 @@ export async function upsertOrderCore(
       await ctx.db.patch(existingConversation._id, {
         customerName,
         assignedCsName: canon.csName,
+        followUpCsKey: existingConversation.followUpCycleId
+          ? existingConversation.followUpCsKey ?? csKey(existingConversation.assignedCsName)
+          : canon.key,
         status: existingConversation.status === "active" ? "active"
           : existingConversation.status === "closed" || aiEligible ? "active"
           : existingConversation.status,
         aiEnabled: aiEligible,
+        followUpProductName,
         ...(args.createdAt !== undefined ? { createdAt: args.createdAt } : {}),
         updatedAt: now,
       });
@@ -342,6 +351,7 @@ export async function upsertOrderCore(
         status: "active",
         aiEnabled: aiEligible,
         note: "",
+        followUpProductName,
         createdAt: args.createdAt ?? now,
         updatedAt: now,
         orgId: args.orgId,
@@ -411,6 +421,7 @@ export const setConversationStatusFromN8n = internalMutation({
     const now = Date.now();
     // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
+    await assertFollowUpCutoverUnlocked(ctx, orgId);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
@@ -430,6 +441,16 @@ export const setConversationStatusFromN8n = internalMutation({
       customerName: args.customerName ?? conversation.customerName,
       updatedAt: now,
     });
+
+    if (args.status === "closed") {
+      await terminateCycle(ctx, {
+        conversation,
+        eventKey: `terminal:closing:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+        kind: "closing",
+        createdAt: now,
+        source: "system",
+      });
+    }
 
     if (args.status === "handover" && previousStatus !== "handover" && conversation.aiEnabled) {
       await patchStatsWithKey(ctx, {
@@ -498,6 +519,7 @@ export const markConversationNotClosing = mutation({
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "state.markConversationNotClosing");
+    await assertFollowUpCutoverUnlocked(ctx, orgId);
     const now = Date.now();
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
@@ -560,27 +582,35 @@ export const markConversationNotClosing = mutation({
   },
 });
 
-export const markConversationCancelled = mutation({
-  args: {
-    phone: v.string(),
-    order_id: v.optional(v.string()),
-    note: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdminOrg(ctx, "state.markConversationCancelled");
+export async function markConversationCancelledCore(ctx: any, args: {
+  orgId: Id<"organizations">;
+  conversation: any;
+  note?: string;
+  orderId?: string;
+  phone?: string;
+  requiredCycleId?: string;
+}) {
     const now = Date.now();
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
-
-    if (!conversation) {
-      return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_cancelled" };
-    }
+    const { conversation, orgId } = args;
 
     const transitionKey = makeTransitionKey({
-      orderId: args.order_id,
-      phone: args.phone,
+      orderId: args.orderId ?? conversation.orderId,
+      phone: args.phone ?? conversation.customerPhone,
       conversation,
     });
     const nextNote = args.note ?? "customer cancelled";
+
+    if (args.requiredCycleId !== undefined && (!args.requiredCycleId.trim() || conversation.followUpCycleId !== args.requiredCycleId)) {
+      throw new Error("Siklus follow-up sudah berubah.");
+    }
+    const lifecycle = await terminateCycle(ctx, {
+      conversation,
+      eventKey: `terminal:cancelled:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+      kind: "cancelled",
+      createdAt: now,
+      source: "manual",
+    });
+    if (args.requiredCycleId !== undefined && !lifecycle.applied) throw new Error("Siklus follow-up tidak aktif atau sudah berubah.");
 
     await patchClosingStatsWithKey(ctx, {
       key: transitionKey,
@@ -605,7 +635,7 @@ export const markConversationCancelled = mutation({
       actor: "cs",
       metadata: { key: transitionKey, note: nextNote },
       createdAt: now,
-      orgId,
+      orgId: args.orgId,
     });
 
     return {
@@ -616,6 +646,19 @@ export const markConversationCancelled = mutation({
       note: nextNote,
       _action: "mark_cancelled",
     };
+}
+
+export const markConversationCancelled = mutation({
+  args: {
+    phone: v.string(),
+    order_id: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "state.markConversationCancelled");
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
+    if (!conversation) return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_cancelled" };
+    return markConversationCancelledCore(ctx, { orgId, conversation, note: args.note, orderId: args.order_id, phone: args.phone });
   },
 });
 
@@ -675,27 +718,35 @@ export const undoConversationCancelled = mutation({
   },
 });
 
-export const markConversationClosing = mutation({
-  args: {
-    phone: v.string(),
-    order_id: v.optional(v.string()),
-    note: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { orgId } = await requireAdminOrg(ctx, "state.markConversationClosing");
+export async function markConversationClosingCore(ctx: any, args: {
+  orgId: Id<"organizations">;
+  conversation: any;
+  note?: string;
+  orderId?: string;
+  phone?: string;
+  requiredCycleId?: string;
+}) {
     const now = Date.now();
-    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
-
-    if (!conversation) {
-      return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_closing" };
-    }
+    const { conversation, orgId } = args;
 
     const transitionKey = makeTransitionKey({
-      orderId: args.order_id,
-      phone: args.phone,
+      orderId: args.orderId ?? conversation.orderId,
+      phone: args.phone ?? conversation.customerPhone,
       conversation,
     });
     const nextNote = args.note ?? "manual closing by CS";
+
+    if (args.requiredCycleId !== undefined && (!args.requiredCycleId.trim() || conversation.followUpCycleId !== args.requiredCycleId)) {
+      throw new Error("Siklus follow-up sudah berubah.");
+    }
+    const lifecycle = await terminateCycle(ctx, {
+      conversation,
+      eventKey: `terminal:closing:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+      kind: "closing",
+      createdAt: now,
+      source: "manual",
+    });
+    if (args.requiredCycleId !== undefined && !lifecycle.applied) throw new Error("Siklus follow-up tidak aktif atau sudah berubah.");
 
     await patchClosingStatsWithKey(ctx, {
       key: transitionKey,
@@ -726,6 +777,19 @@ export const markConversationClosing = mutation({
       note: nextNote,
       _action: "mark_closing",
     };
+}
+
+export const markConversationClosing = mutation({
+  args: {
+    phone: v.string(),
+    order_id: v.optional(v.string()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "state.markConversationClosing");
+    const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
+    if (!conversation) return { success: false, error: "conversation not found", phone: args.phone, _action: "mark_closing" };
+    return markConversationClosingCore(ctx, { orgId, conversation, note: args.note, orderId: args.order_id, phone: args.phone });
   },
 });
 
@@ -736,6 +800,7 @@ export const deleteConversationOrder = mutation({
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "state.deleteConversationOrder");
+    await assertFollowUpCutoverUnlocked(ctx, orgId);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
@@ -856,6 +921,13 @@ export const recordStatEventFromN8n = internalMutation({
       });
 
       if (conversation) {
+        await terminateCycle(ctx, {
+          conversation,
+          eventKey: `terminal:closing:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+          kind: "closing",
+          createdAt: Date.now(),
+          source: "system",
+        });
         await ctx.db.insert("events", {
           conversationId: conversation._id,
           orderId: conversation.orderId,

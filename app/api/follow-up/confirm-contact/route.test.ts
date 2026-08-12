@@ -34,14 +34,14 @@ beforeEach(() => {
 test("manual confirmation requires a session and valid request UUID", async () => {
   expect((await POST(request({}))).status).toBe(401);
   state.session = { userId: "admin", role: "admin", name: "Admin", email: "admin@test" };
-  expect((await POST(request({ conversationId: "conv1", stage: 1, requestId: "bad" }))).status).toBe(400);
+  expect((await POST(request({ conversationId: "conv1", requestId: "bad" }))).status).toBe(400);
 });
 
-test("manual confirmation delegates to the signed Convex mutation", async () => {
+test("manual confirmation ignores a client stage claim and delegates only server-owned inputs", async () => {
   state.session = { userId: "admin", role: "admin", name: "Admin", email: "admin@test" };
   state.mutation.mockResolvedValue({ ok: true, duplicate: false });
-  const response = await POST(request({ conversationId: "conv1", stage: 1, requestId }));
+  const response = await POST(request({ conversationId: "conv1", stage: 3, requestId }));
   expect(response.status).toBe(200);
   expect(state.setAuth).toHaveBeenCalledWith("signed-token");
-  expect(state.mutation.mock.calls[0][1]).toEqual({ conversationId: "conv1", stage: 1, requestId });
+  expect(state.mutation.mock.calls[0][1]).toEqual({ conversationId: "conv1", requestId });
 });

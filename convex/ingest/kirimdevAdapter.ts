@@ -8,7 +8,8 @@ export type UniversalMessageEvent = {
   content: string;
   direction: "inbound" | "outbound";
   role: "customer" | "cs" | "ai";
-  messageType: "text";
+  messageType: "text" | "template" | "button";
+  templateName?: string;
   externalMessageId: string;
   createdAt: number;
   phoneNumberId?: string;
@@ -33,10 +34,16 @@ export function parseKirimdevWebhook(
   if (event === "message.sent") {
     const d = b.data ?? {};
     const m = d.message ?? {};
-    if ((m.type || "text") !== "text") return skip("outbound not text");
+    const templateName = m.template?.name ?? m.template_name ?? d.template?.name;
+    const messageType = templateName ? "template" : (m.type === "button" ? "button" : "text");
+    if (messageType === "text" && (m.type || "text") !== "text") return skip("outbound not text");
     const phone = String(d.contact?.phone_number || m.to || "").replace(/^\+/, "");
-    const content = m.body || "";
+    const content = m.body || m.button?.text || templateName || "";
+    const externalMessageId = String(
+      m.provider_id || m.id || d.message_id || headers["x-kirim-event-id"] || "",
+    ).trim();
     if (!phone || !content) return skip("missing phone/content");
+    if (!externalMessageId) return skip("missing external message id");
     const createdAt = d.timestamp ? Date.parse(d.timestamp) : nowMs;
     return {
       kind: "message",
@@ -44,9 +51,10 @@ export function parseKirimdevWebhook(
         phone,
         content,
         direction: "outbound",
-        role: m.source === "dashboard" ? "cs" : "ai",
-        messageType: "text",
-        externalMessageId: String(m.provider_id || m.id || ""),
+        role: m.source === "dashboard" || m.source === "app" ? "cs" : "ai",
+        messageType,
+        templateName: templateName || undefined,
+        externalMessageId,
         createdAt: Number.isFinite(createdAt) ? createdAt : nowMs,
         phoneNumberId: (d.meta?.phone_number_id || d.session || undefined) as string | undefined,
       },
@@ -65,7 +73,11 @@ export function parseKirimdevWebhook(
     const phone = String(
       value.contacts?.[0]?.wa_id || msg.from || kirim.contact?.phone_number || "",
     ).replace(/^\+/, "");
+    const externalMessageId = String(
+      msg.id || headers["x-kirim-event-id"] || kirim.message_id || "",
+    ).trim();
     if (!phone || !content) return skip("missing phone/content");
+    if (!externalMessageId) return skip("missing external message id");
     return {
       kind: "message",
       event: {
@@ -73,8 +85,8 @@ export function parseKirimdevWebhook(
         content,
         direction: "inbound",
         role: "customer",
-        messageType: "text",
-        externalMessageId: String(msg.id || headers["x-kirim-event-id"] || ""),
+        messageType: msg.type === "button" ? "button" : "text",
+        externalMessageId,
         createdAt: msg.timestamp ? Number(msg.timestamp) * 1000 : nowMs,
         phoneNumberId: (value.metadata?.phone_number_id || undefined) as string | undefined,
       },

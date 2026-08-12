@@ -6,7 +6,9 @@ import { TemplateSendDialog } from './template-send-dialog';
 
 const candidate = {
   conversationId: 'c1', customerName: 'Hasna', customerPhone: '6281287497002', orderId: 'O1', csName: 'Aisyah', csKey: 'aisyah',
-  cycleInboundAt: 1, stage: 1 as const, dueAt: 2, productName: 'Quran Mapping', lastMessagePreview: 'Halo', lastMessageAt: 1,
+  cycleInboundAt: 1, stage: 1 as const, dueAt: 2, dueState: 'overdue' as const, overdueDays: 1, productName: 'Quran Mapping',
+  lastInboundPreview: 'Masih ada?', lastInboundAt: 1, lastOutboundPreview: 'Halo', lastOutboundAt: 2,
+  lastMessagePreview: 'Halo', lastMessageAt: 1,
   reason: 'CS terakhir membalas, customer belum merespons',
 };
 

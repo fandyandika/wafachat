@@ -1,0 +1,154 @@
+import { query } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { requireMemberOrg, requireScopedMemberOrg } from "./authz";
+import { csKey } from "./lib";
+import { paginationOptsValidator } from "convex/server";
+import { v } from "convex/values";
+
+const UNKNOWN_PROVIDER_ERROR = "Nomor provider belum dipetakan";
+const MAX_PROVIDER_CHANNELS_PER_CS = 100;
+const PROVIDER_CAP_DIAGNOSTIC = "Sinyal webhook belum dapat dipastikan: kanal melebihi batas pemeriksaan.";
+
+export type ProviderChannelHealthTouch = {
+  orgId: Id<"organizations">;
+  providerNumberId: string;
+  channelType: "cs" | "admin" | "unknown";
+  csKey?: string;
+  direction: "inbound" | "outbound";
+  touchedAt: number;
+  diagnostic?: string;
+};
+
+export async function touchProviderChannelHealth(ctx: { db: any }, args: ProviderChannelHealthTouch) {
+  const canonicalCsKey = args.csKey ? csKey(args.csKey) : undefined;
+  const existing = await ctx.db
+    .query("providerChannelHealth")
+    .withIndex("by_org_providerNumberId", (q: any) => q
+      .eq("orgId", args.orgId)
+      .eq("providerNumberId", args.providerNumberId))
+    .unique();
+  const directionPatch = args.direction === "inbound"
+    ? { lastInboundAt: Math.max(existing?.lastInboundAt ?? 0, args.touchedAt) }
+    : { lastOutboundAt: Math.max(existing?.lastOutboundAt ?? 0, args.touchedAt) };
+  const isLatest = args.touchedAt >= (existing?.updatedAt ?? 0);
+  const diagnostic = args.channelType === "unknown" ? UNKNOWN_PROVIDER_ERROR : args.diagnostic;
+  const diagnosticPatch = !isLatest
+    ? {}
+    : diagnostic
+      ? {
+          csKey: args.channelType === "unknown" ? undefined : canonicalCsKey,
+          lastError: diagnostic,
+          errorAt: Math.max(existing?.errorAt ?? 0, args.touchedAt),
+        }
+      : { csKey: canonicalCsKey, lastError: undefined, errorAt: undefined };
+  const value = {
+    channelType: isLatest || !existing ? args.channelType : existing.channelType,
+    ...directionPatch,
+    ...diagnosticPatch,
+    updatedAt: Math.max(existing?.updatedAt ?? 0, args.touchedAt),
+  };
+
+  if (existing) {
+    await ctx.db.patch(existing._id, value);
+    return existing._id;
+  }
+  return ctx.db.insert("providerChannelHealth", {
+    orgId: args.orgId,
+    providerNumberId: args.providerNumberId,
+    ...value,
+  });
+}
+
+export const listProviderChannelHealth = query({
+  args: { paginationOpts: paginationOptsValidator },
+  returns: v.object({
+    page: v.array(v.object({
+      _id: v.id("providerChannelHealth"),
+      providerNumberId: v.string(),
+      csKey: v.optional(v.string()),
+      channelType: v.union(v.literal("cs"), v.literal("admin"), v.literal("unknown")),
+      lastInboundAt: v.optional(v.number()),
+      lastOutboundAt: v.optional(v.number()),
+      lastError: v.optional(v.string()),
+      errorAt: v.optional(v.number()),
+      updatedAt: v.number(),
+    })),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId } = await requireMemberOrg(ctx, "providerChannelHealth.listProviderChannelHealth");
+    if (!Number.isFinite(args.paginationOpts.numItems)
+      || !Number.isInteger(args.paginationOpts.numItems)
+      || args.paginationOpts.numItems <= 0) {
+      throw new Error("Page size must be a positive finite integer.");
+    }
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: Math.min(args.paginationOpts.numItems, 50),
+    };
+    const result = await ctx.db
+      .query("providerChannelHealth")
+      .withIndex("by_org_updatedAt", (q) => q.eq("orgId", orgId))
+      .order("desc")
+      .paginate(paginationOpts);
+    return {
+      page: result.page.map((row) => ({
+        _id: row._id,
+        providerNumberId: row.providerNumberId,
+        csKey: row.csKey,
+        channelType: row.channelType,
+        lastInboundAt: row.lastInboundAt,
+        lastOutboundAt: row.lastOutboundAt,
+        lastError: row.lastError,
+        errorAt: row.errorAt,
+        updatedAt: row.updatedAt,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+const channelHealthResult = v.union(v.null(), v.object({
+  _id: v.id("providerChannelHealth"),
+  providerNumberId: v.string(),
+  csKey: v.optional(v.string()),
+  channelType: v.union(v.literal("cs"), v.literal("admin"), v.literal("unknown")),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundAt: v.optional(v.number()),
+  lastError: v.optional(v.string()),
+  errorAt: v.optional(v.number()),
+  updatedAt: v.number(),
+}));
+
+export const getProviderChannelHealthForCs = query({
+  args: { csKey: v.string() },
+  returns: channelHealthResult,
+  handler: async (ctx, args) => {
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "providerChannelHealth.getProviderChannelHealthForCs");
+    const key = csKey(viewer.role === "cs" ? effectiveCsName ?? "" : args.csKey);
+    if (!key) throw new Error("CS key wajib tersedia.");
+    const rows = await ctx.db.query("providerChannelHealth")
+      .withIndex("by_org_csKey", (q) => q.eq("orgId", orgId).eq("csKey", key))
+      .take(MAX_PROVIDER_CHANNELS_PER_CS);
+    const row = rows.sort((left, right) => {
+      const errorDifference = Number(Boolean(right.lastError)) - Number(Boolean(left.lastError));
+      if (errorDifference !== 0) return errorDifference;
+      const timeDifference = (right.errorAt ?? right.updatedAt) - (left.errorAt ?? left.updatedAt);
+      return timeDifference || left.providerNumberId.localeCompare(right.providerNumberId);
+    })[0];
+    if (!row) return null;
+    return {
+      _id: row._id,
+      providerNumberId: row.providerNumberId,
+      csKey: row.csKey,
+      channelType: row.channelType,
+      lastInboundAt: row.lastInboundAt,
+      lastOutboundAt: row.lastOutboundAt,
+      lastError: rows.length === MAX_PROVIDER_CHANNELS_PER_CS ? PROVIDER_CAP_DIAGNOSTIC : row.lastError,
+      errorAt: rows.length === MAX_PROVIDER_CHANNELS_PER_CS ? row.errorAt ?? row.updatedAt : row.errorAt,
+      updatedAt: row.updatedAt,
+    };
+  },
+});

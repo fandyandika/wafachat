@@ -1,240 +1,603 @@
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { internalMutation, mutation, query } from "./_generated/server";
+import { internalAction, internalMutation, mutation, query } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
 import { requireAdminOrg } from "./authz";
-import { csKey, isInternalTestPhone } from "./lib";
-import { getInternalPhoneSet } from "./orgSettings";
-import { FOLLOW_UP_DAY_MS, FOLLOW_UP_EXPIRY_MS } from "./followUpModel";
-import { messageHasDoneMarker } from "./followUpMath";
+import { canonicalizeProduct, csKey } from "./lib";
+import { nextJakartaDueAt, type FollowUpStage } from "./followUpModel";
+
+const PAGE_SIZE = 25;
+const UNASSIGNED_CS_KEY = "unassigned";
+const SAFE_ERROR_LENGTH = 240;
+const CUTOVER_LEASE_MS = 15 * 60 * 1_000;
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"));
-const pageResultValidator = v.object({
-  processed: v.number(),
-  done: v.boolean(),
-  continueCursor: v.string(),
-  nextStatus: v.optional(statusValidator),
-});
-
-function clearedPatch(cycleInboundAt?: number, state?: "complete" | "archived") {
-  return {
-    followUpCycleInboundAt: cycleInboundAt,
-    followUpNextStage: undefined,
-    followUpDueAt: undefined,
-    followUpState: state,
-    followUpRequestId: undefined,
-    followUpProviderMessageId: undefined,
-    followUpLastError: undefined,
-  } as const;
-}
-
-async function deriveConversationPatch(ctx: any, conversation: any, now: number, internalPhones: ReadonlySet<string>) {
-  if (isInternalTestPhone(conversation.customerPhone, internalPhones)) {
-    return clearedPatch(undefined, "archived");
-  }
-
-  const [lastMessage, lastInbound, recap] = await Promise.all([
-    ctx.db
-      .query("messages")
-      .withIndex("by_conversation_createdAt", (q: any) => q.eq("conversationId", conversation._id))
-      .order("desc")
-      .first(),
-    ctx.db
-      .query("messages")
-      .withIndex("by_conversation_direction_createdAt", (q: any) => q
-        .eq("conversationId", conversation._id)
-        .eq("direction", "inbound"))
-      .order("desc")
-      .first(),
-    ctx.db
-      .query("shippingRecaps")
-      .withIndex("by_org_orderIdBerdu", (q: any) => q
-        .eq("orgId", conversation.orgId)
-        .eq("orderIdBerdu", conversation.orderId))
-      .first(),
-  ]);
-
-  if (recap || !lastInbound || now - lastInbound.createdAt >= FOLLOW_UP_EXPIRY_MS) {
-    return clearedPatch(lastInbound?.createdAt, recap ? "complete" : "archived");
-  }
-  if (!lastMessage || lastMessage.direction !== "outbound" || lastMessage.role !== "cs") {
-    return clearedPatch(lastInbound.createdAt);
-  }
-  if (messageHasDoneMarker(lastMessage.content, "outbound")) {
-    return clearedPatch(lastInbound.createdAt, "complete");
-  }
-
-  const followUpCsKey = csKey(conversation.assignedCsName);
-  if (!followUpCsKey) {
-    return clearedPatch(lastInbound.createdAt, "archived");
-  }
-
-  const windowClose = lastInbound.createdAt + FOLLOW_UP_DAY_MS;
-  const touches = await ctx.db
-    .query("messages")
-    .withIndex("by_conversation_direction_createdAt", (q: any) => q
-      .eq("conversationId", conversation._id)
-      .eq("direction", "outbound")
-      .gt("createdAt", windowClose))
-    .take(4);
-  if (touches.length >= 3) {
-    return {
-      ...clearedPatch(lastInbound.createdAt, "complete"),
-      followUpCsKey,
-    };
-  }
-
-  const followUpNextStage = (touches.length + 1) as 1 | 2 | 3;
-  const followUpDueAt = touches.length === 0
-    ? lastMessage.createdAt + FOLLOW_UP_DAY_MS
-    : touches[touches.length - 1].createdAt + FOLLOW_UP_DAY_MS;
-  return {
-    followUpCsKey,
-    followUpCycleInboundAt: lastInbound.createdAt,
-    followUpNextStage,
-    followUpDueAt,
-    followUpState: "waiting",
-    followUpRequestId: undefined,
-    followUpProviderMessageId: undefined,
-    followUpLastError: undefined,
-  } as const;
-}
-
-async function materializeConversation(ctx: any, conversation: any, now: number, internalPhones: ReadonlySet<string>) {
-  const patch = await deriveConversationPatch(ctx, conversation, now, internalPhones);
-  await ctx.db.patch(conversation._id, patch);
-}
-
-const preparationResultValidator = v.object({
-  processed: v.number(), eligible: v.number(), updated: v.number(), skipped: v.number(), failed: v.number(),
-  done: v.boolean(), continueCursor: v.string(), nextStatus: v.optional(statusValidator),
-});
-
-export const preparePage = internalMutation({
-  args: {
-    runId: v.id("followUpPreparationRuns"), orgId: v.id("organizations"), status: statusValidator,
-    now: v.number(), cursor: v.optional(v.string()), scheduleNext: v.optional(v.boolean()),
-  },
-  returns: preparationResultValidator,
-  handler: async (ctx, args) => {
-    const run = await ctx.db.get(args.runId);
-    if (!run || String(run.orgId) !== String(args.orgId) || run.status !== "running") {
-      throw new Error("Preparation run tidak aktif.");
-    }
-    const page = await ctx.db.query("conversations")
-      .withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", args.orgId).eq("status", args.status)
-        .gte("updatedAt", args.now - FOLLOW_UP_EXPIRY_MS))
-      .paginate({ cursor: args.cursor ?? null, numItems: 25 });
-    const internalPhones = await getInternalPhoneSet(ctx, args.orgId);
-    let eligible = 0, updated = 0, skipped = 0, failed = 0;
-    for (const conversation of page.page) {
-      try {
-        const patch = await deriveConversationPatch(ctx, conversation, args.now, internalPhones);
-        const isEligible = patch.followUpState === "waiting";
-        if (isEligible) eligible += 1;
-        else skipped += 1;
-        if (run.mode === "apply" && isEligible) {
-          await ctx.db.patch(conversation._id, patch);
-          updated += 1;
-        }
-      } catch {
-        failed += 1;
-      }
-    }
-    const nextStatus = page.isDone && args.status === "active" ? "handover" as const : undefined;
-    const complete = page.isDone && args.status === "handover";
-    await ctx.db.patch(run._id, {
-      cursor: page.isDone ? undefined : page.continueCursor,
-      nextConversationStatus: nextStatus ?? args.status,
-      scanned: run.scanned + page.page.length,
-      eligible: run.eligible + eligible,
-      updated: run.updated + updated,
-      skipped: run.skipped + skipped,
-      failed: run.failed + failed,
-      status: complete ? "complete" : "running",
-      updatedAt: Date.now(),
-      completedAt: complete ? Date.now() : undefined,
-    });
-    if (args.scheduleNext !== false && (!page.isDone || nextStatus)) {
-      await ctx.scheduler.runAfter(0, internal.followUpMigration.preparePage, {
-        runId: run._id, orgId: args.orgId, status: nextStatus ?? args.status, now: args.now,
-        cursor: page.isDone ? undefined : page.continueCursor,
-      });
-    }
-    return { processed: page.page.length, eligible, updated, skipped, failed,
-      done: page.isDone, continueCursor: page.continueCursor, nextStatus };
-  },
-});
-
-export const backfillPage = internalMutation({
-  args: {
-    orgId: v.id("organizations"),
-    status: statusValidator,
-    now: v.number(),
-    cursor: v.optional(v.string()),
-    scheduleNext: v.optional(v.boolean()),
-  },
-  returns: pageResultValidator,
-  handler: async (ctx, args) => {
-    if (!Number.isFinite(args.now) || args.now < 0) throw new Error("Waktu backfill tidak valid.");
-    const page = await ctx.db
-      .query("conversations")
-      .withIndex("by_org_status_updatedAt", (q) => q
-        .eq("orgId", args.orgId)
-        .eq("status", args.status)
-        .gte("updatedAt", args.now - FOLLOW_UP_EXPIRY_MS))
-      .paginate({ cursor: args.cursor ?? null, numItems: 25 });
-    const internalPhones = await getInternalPhoneSet(ctx, args.orgId);
-    for (const conversation of page.page) {
-      await materializeConversation(ctx, conversation, args.now, internalPhones);
-    }
-
-    const nextStatus = page.isDone && args.status === "active" ? "handover" as const : undefined;
-    if (args.scheduleNext !== false && !page.isDone) {
-      await ctx.scheduler.runAfter(0, internal.followUpMigration.backfillPage, {
-        orgId: args.orgId,
-        status: args.status,
-        now: args.now,
-        cursor: page.continueCursor,
-      });
-    } else if (args.scheduleNext !== false && nextStatus) {
-      await ctx.scheduler.runAfter(0, internal.followUpMigration.backfillPage, {
-        orgId: args.orgId,
-        status: nextStatus,
-        now: args.now,
-      });
-    }
-
-    return {
-      processed: page.page.length,
-      done: page.isDone,
-      continueCursor: page.continueCursor,
-      nextStatus,
-    };
-  },
-});
-
-export const startRecentFollowUpBackfill = mutation({
-  args: {},
-  returns: v.object({ scheduled: v.literal(true) }),
-  handler: async (ctx) => {
-    const { orgId } = await requireAdminOrg(ctx, "followUpMigration.startRecentFollowUpBackfill");
-    await ctx.scheduler.runAfter(0, internal.followUpMigration.backfillPage, {
-      orgId,
-      status: "active",
-      now: Date.now(),
-    });
-    return { scheduled: true as const };
-  },
-});
-
 const preparationModeValidator = v.union(v.literal("dry_run"), v.literal("apply"));
 const preparationStatusValidator = v.union(v.literal("running"), v.literal("complete"), v.literal("failed"));
+const preparationPhaseValidator = v.union(
+  v.literal("products_orders"),
+  v.literal("products_recaps"),
+  v.literal("recap_closing_buckets"),
+  v.literal("normalize_active"),
+  v.literal("normalize_handover"),
+  v.literal("counters_delete"),
+  v.literal("counters_waiting"),
+  v.literal("counters_sending"),
+  v.literal("counters_unknown"),
+  v.literal("counters_failed"),
+  v.literal("counters_review"),
+);
+
+type PreparationPhase =
+  | "products_orders"
+  | "products_recaps"
+  | "recap_closing_buckets"
+  | "normalize_active"
+  | "normalize_handover"
+  | "counters_delete"
+  | "counters_waiting"
+  | "counters_sending"
+  | "counters_unknown"
+  | "counters_failed"
+  | "counters_review";
+
+type ActiveFollowUpState = "waiting" | "sending" | "unknown" | "failed" | "review";
+type CounterValues = { h1: number; h2: number; h3: number; review: number };
+
+const NEXT_PHASE: Record<PreparationPhase, PreparationPhase | undefined> = {
+  products_orders: "products_recaps",
+  products_recaps: "recap_closing_buckets",
+  recap_closing_buckets: "normalize_active",
+  normalize_active: "normalize_handover",
+  normalize_handover: "counters_delete",
+  counters_delete: "counters_waiting",
+  counters_waiting: "counters_sending",
+  counters_sending: "counters_unknown",
+  counters_unknown: "counters_failed",
+  counters_failed: "counters_review",
+  counters_review: undefined,
+};
+
+const COUNTER_STATE: Partial<Record<PreparationPhase, ActiveFollowUpState>> = {
+  counters_waiting: "waiting",
+  counters_sending: "sending",
+  counters_unknown: "unknown",
+  counters_failed: "failed",
+  counters_review: "review",
+};
+
+const preparationResultValidator = v.object({
+  phase: preparationPhaseValidator,
+  processed: v.number(),
+  eligible: v.number(),
+  updated: v.number(),
+  skipped: v.number(),
+  failed: v.number(),
+  done: v.boolean(),
+  continueCursor: v.string(),
+  nextPhase: v.optional(preparationPhaseValidator),
+  runComplete: v.boolean(),
+});
+
 const preparationRunResultValidator = v.object({
   runId: v.id("followUpPreparationRuns"),
   mode: preparationModeValidator,
   status: preparationStatusValidator,
-  scanned: v.number(), eligible: v.number(), updated: v.number(), skipped: v.number(), failed: v.number(),
-  startedAt: v.number(), updatedAt: v.number(), completedAt: v.optional(v.number()),
+  scanned: v.number(),
+  eligible: v.number(),
+  updated: v.number(),
+  skipped: v.number(),
+  failed: v.number(),
+  startedAt: v.number(),
+  updatedAt: v.number(),
+  completedAt: v.optional(v.number()),
+  lastError: v.optional(v.string()),
+});
+
+function finiteTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function stageFromSnapshot(conversation: Doc<"conversations">): FollowUpStage | undefined {
+  if (conversation.followUpNextStage === 1
+    || conversation.followUpNextStage === 2
+    || conversation.followUpNextStage === 3) {
+    return conversation.followUpNextStage;
+  }
+  if (conversation.followUpStageOverride === 1
+    || conversation.followUpStageOverride === 2
+    || conversation.followUpStageOverride === 3) {
+    return conversation.followUpStageOverride;
+  }
+  if (conversation.followUpStage === 1) return 2;
+  if (conversation.followUpStage === 2) return 3;
+  return undefined;
+}
+
+function anchorFromSnapshot(conversation: Doc<"conversations">) {
+  if (finiteTimestamp(conversation.followUpStageAt)) {
+    return { at: conversation.followUpStageAt, keepExistingDueAt: false };
+  }
+  if (finiteTimestamp(conversation.lastMessageAt)) {
+    return { at: conversation.lastMessageAt, keepExistingDueAt: false };
+  }
+  if (finiteTimestamp(conversation.followUpDueAt)) {
+    return { at: conversation.followUpDueAt, keepExistingDueAt: true };
+  }
+  return undefined;
+}
+
+function hasChanged(conversation: Doc<"conversations">, patch: Record<string, unknown>): boolean {
+  return Object.entries(patch).some(([key, value]) => (conversation as any)[key] !== value);
+}
+
+function reviewReason(missing: string[]): string {
+  return `Migrasi memerlukan tinjauan: ${missing.join(", ")} tidak tersedia.`;
+}
+
+function normalizeConversation(conversation: Doc<"conversations">, migrationAt: number) {
+  if (conversation.followUpState === "complete" || conversation.followUpState === "archived") {
+    return { patch: undefined, eligible: false, skipped: true };
+  }
+
+  const hasLegacySnapshot = conversation.followUpState !== undefined
+    || conversation.followUpStage !== undefined
+    || conversation.followUpStageAt !== undefined
+    || conversation.followUpStageOverride !== undefined
+    || conversation.followUpCycleId !== undefined
+    || conversation.followUpDueAt !== undefined;
+  if (!hasLegacySnapshot) return { patch: undefined, eligible: false, skipped: true };
+
+  const derivedCsKey = csKey(conversation.followUpCsKey ?? conversation.assignedCsName);
+  const missingCs = !derivedCsKey;
+  const ownerKey = derivedCsKey || UNASSIGNED_CS_KEY;
+  const stage = stageFromSnapshot(conversation);
+  const anchor = anchorFromSnapshot(conversation);
+  const hasMaterializedCycle = Boolean(conversation.followUpCycleId);
+  const missingAnchor = !anchor;
+
+  if (conversation.followUpState === "review") {
+    const patch = {
+      followUpCsKey: ownerKey,
+      followUpReviewReason: conversation.followUpReviewReason
+        ?? reviewReason([
+          ...(missingCs ? ["CS"] : []),
+          ...(missingAnchor ? ["waktu acuan"] : []),
+          ...(!missingCs && !missingAnchor ? ["detail tahap"] : []),
+        ]),
+    };
+    return { patch: hasChanged(conversation, patch) ? patch : undefined, eligible: true, skipped: false };
+  }
+
+  if ((conversation.followUpState === "sending"
+      || conversation.followUpState === "unknown"
+      || conversation.followUpState === "failed")
+    && hasMaterializedCycle && stage && !missingCs && !missingAnchor) {
+    const patch = { followUpCsKey: ownerKey };
+    return { patch: hasChanged(conversation, patch) ? patch : undefined, eligible: true, skipped: false };
+  }
+
+  if (conversation.followUpState === "waiting"
+    && hasMaterializedCycle
+    && stage
+    && finiteTimestamp(conversation.followUpDueAt)
+    && !missingCs) {
+    const patch = { followUpCsKey: ownerKey };
+    return { patch: hasChanged(conversation, patch) ? patch : undefined, eligible: true, skipped: false };
+  }
+
+  const missing: string[] = [];
+  if (!stage) missing.push("tahap");
+  if (missingCs) missing.push("CS");
+  if (!anchor) missing.push("waktu acuan");
+  if ((conversation.followUpState === "sending"
+      || conversation.followUpState === "unknown"
+      || conversation.followUpState === "failed")
+    && !hasMaterializedCycle) {
+    missing.push("siklus aktif");
+  }
+
+  if (missing.length > 0) {
+    const patch = {
+      followUpCsKey: ownerKey,
+      followUpCycleId: conversation.followUpCycleId
+        ?? (anchor ? `cycle:${String(conversation._id)}:${anchor.at}` : undefined),
+      followUpCycleInboundAt: conversation.followUpCycleInboundAt ?? anchor?.at,
+      followUpCycleStartedAt: conversation.followUpCycleStartedAt ?? anchor?.at,
+      followUpNextStage: stage,
+      followUpDueAt: undefined,
+      followUpState: "review" as const,
+      followUpLastTransitionAt: conversation.followUpLastTransitionAt ?? anchor?.at ?? migrationAt,
+      followUpReviewReason: reviewReason(missing),
+    };
+    return { patch: hasChanged(conversation, patch) ? patch : undefined, eligible: true, skipped: false };
+  }
+
+  const anchorAt = anchor!.at;
+  const patch = {
+    followUpCsKey: ownerKey,
+    followUpCycleInboundAt: conversation.followUpCycleInboundAt ?? anchorAt,
+    followUpCycleId: conversation.followUpCycleId ?? `cycle:${String(conversation._id)}:${anchorAt}`,
+    followUpCycleStartedAt: conversation.followUpCycleStartedAt ?? anchorAt,
+    followUpNextStage: stage,
+    followUpDueAt: anchor!.keepExistingDueAt ? anchorAt : nextJakartaDueAt(anchorAt),
+    followUpState: "waiting" as const,
+    followUpRequestId: undefined,
+    followUpProviderMessageId: undefined,
+    followUpLastError: undefined,
+    followUpLastTransitionAt: conversation.followUpLastTransitionAt ?? anchorAt,
+    followUpOutcome: undefined,
+    followUpReviewReason: undefined,
+    followUpArchivedAt: undefined,
+  };
+  return { patch: hasChanged(conversation, patch) ? patch : undefined, eligible: true, skipped: false };
+}
+
+function emptyCounter(): CounterValues {
+  return { h1: 0, h2: 0, h3: 0, review: 0 };
+}
+
+function counterField(conversation: Doc<"conversations">): keyof CounterValues | undefined {
+  if (conversation.followUpState === "waiting") {
+    if (conversation.followUpNextStage === 1) return "h1";
+    if (conversation.followUpNextStage === 2) return "h2";
+    if (conversation.followUpNextStage === 3) return "h3";
+    return undefined;
+  }
+  if (conversation.followUpState === "sending"
+    || conversation.followUpState === "unknown"
+    || conversation.followUpState === "failed"
+    || conversation.followUpState === "review") {
+    return "review";
+  }
+  return undefined;
+}
+
+async function applyCounterPage(
+  ctx: MutationCtx,
+  run: Doc<"followUpPreparationRuns">,
+  rows: Doc<"conversations">[],
+): Promise<void> {
+  if (run.mode !== "apply") return;
+  const increments = new Map<string, CounterValues>();
+  for (const conversation of rows) {
+    if (conversation.status === "closed") continue;
+    const field = counterField(conversation);
+    if (!field) continue;
+    const ownerKey = conversation.followUpCsKey || csKey(conversation.assignedCsName) || UNASSIGNED_CS_KEY;
+    const values = increments.get(ownerKey) ?? emptyCounter();
+    values[field] += 1;
+    increments.set(ownerKey, values);
+  }
+  for (const [ownerKey, increment] of increments) {
+    const existing = await ctx.db.query("followUpCounters")
+      .withIndex("by_org_csKey", (q) => q.eq("orgId", run.orgId).eq("csKey", ownerKey))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        h1: existing.h1 + increment.h1,
+        h2: existing.h2 + increment.h2,
+        h3: existing.h3 + increment.h3,
+        review: existing.review + increment.review,
+        updatedAt: run.startedAt,
+      });
+    } else {
+      await ctx.db.insert("followUpCounters", {
+        orgId: run.orgId,
+        csKey: ownerKey,
+        ...increment,
+        updatedAt: run.startedAt,
+      });
+    }
+  }
+}
+
+async function conversationForSnapshot(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  orderId: string | undefined,
+  conversationId?: Id<"conversations">,
+) {
+  if (conversationId) {
+    const conversation = await ctx.db.get(conversationId);
+    return conversation && String(conversation.orgId) === String(orgId) ? conversation : undefined;
+  }
+  if (!orderId) return undefined;
+  const matches = await ctx.db.query("conversations")
+    .withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", orderId))
+    .take(2);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+async function processProductOrders(
+  ctx: MutationCtx,
+  run: Doc<"followUpPreparationRuns">,
+  cursor: string | null,
+) {
+  const page = await ctx.db.query("orders")
+    .withIndex("by_org_createdAt", (q) => q.eq("orgId", run.orgId))
+    .paginate({ cursor, numItems: PAGE_SIZE });
+  let updated = 0;
+  for (const row of page.page) {
+    const product = canonicalizeProduct(row.productName || row.products);
+    if (!product) continue;
+    const conversation = await conversationForSnapshot(ctx, run.orgId, row.orderId);
+    if (!conversation || conversation.followUpProductName) continue;
+    if (run.mode === "apply") {
+      await ctx.db.patch(conversation._id, { followUpProductName: product });
+      updated += 1;
+    }
+  }
+  return { page, eligible: 0, updated, skipped: 0, scanned: 0 };
+}
+
+async function processProductRecaps(
+  ctx: MutationCtx,
+  run: Doc<"followUpPreparationRuns">,
+  cursor: string | null,
+) {
+  const page = await ctx.db.query("shippingRecaps")
+    .withIndex("by_org_closedAt", (q) => q.eq("orgId", run.orgId))
+    .paginate({ cursor, numItems: PAGE_SIZE });
+  let updated = 0;
+  for (const row of page.page) {
+    const product = canonicalizeProduct(row.packageContent);
+    if (!product) continue;
+    const conversation = await conversationForSnapshot(ctx, run.orgId, row.orderIdBerdu, row.conversationId);
+    if (!conversation || conversation.followUpProductName) continue;
+    if (run.mode === "apply") {
+      await ctx.db.patch(conversation._id, { followUpProductName: product });
+      updated += 1;
+    }
+  }
+  return { page, eligible: 0, updated, skipped: 0, scanned: 0 };
+}
+
+async function processRecapBuckets(
+  ctx: MutationCtx,
+  run: Doc<"followUpPreparationRuns">,
+  cursor: string | null,
+) {
+  const page = await ctx.db.query("shippingRecaps")
+    .withIndex("by_org_closedAt", (q) => q.eq("orgId", run.orgId))
+    .paginate({ cursor, numItems: PAGE_SIZE });
+  let updated = 0;
+  for (const row of page.page) {
+    const closingBucket = row.status === "cancelled" || row.status === "cancelled_after_export"
+      ? undefined
+      : "counted" as const;
+    if (row.closingBucket === closingBucket) continue;
+    if (run.mode === "apply") {
+      await ctx.db.patch(row._id, { closingBucket });
+      updated += 1;
+    }
+  }
+  return { page, eligible: 0, updated, skipped: 0, scanned: 0 };
+}
+
+async function processConversations(
+  ctx: MutationCtx,
+  run: Doc<"followUpPreparationRuns">,
+  status: "active" | "handover",
+  cursor: string | null,
+) {
+  const page = await ctx.db.query("conversations")
+    .withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", run.orgId).eq("status", status))
+    .paginate({ cursor, numItems: PAGE_SIZE });
+  let eligible = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const conversation of page.page) {
+    const normalized = normalizeConversation(conversation, run.startedAt);
+    if (normalized.eligible) eligible += 1;
+    if (normalized.skipped) skipped += 1;
+    if (run.mode === "apply" && normalized.patch) {
+      await ctx.db.patch(conversation._id, normalized.patch);
+      updated += 1;
+    }
+  }
+  return { page, eligible, updated, skipped, scanned: page.page.length };
+}
+
+async function processCounterDeletion(
+  ctx: MutationCtx,
+  run: Doc<"followUpPreparationRuns">,
+  cursor: string | null,
+) {
+  const query = ctx.db.query("followUpCounters")
+    .withIndex("by_org_csKey", (q) => q.eq("orgId", run.orgId));
+  const page = run.mode === "apply"
+    ? await (async () => {
+      const rows = await query.take(PAGE_SIZE);
+      return {
+        page: rows,
+        isDone: rows.length < PAGE_SIZE,
+        continueCursor: rows.length === PAGE_SIZE ? "remaining" : "",
+      };
+    })()
+    : await query.paginate({ cursor, numItems: PAGE_SIZE });
+  if (run.mode === "apply") for (const row of page.page) await ctx.db.delete(row._id);
+  return { page, eligible: 0, updated: 0, skipped: 0, scanned: 0 };
+}
+
+async function processCounterState(
+  ctx: MutationCtx,
+  run: Doc<"followUpPreparationRuns">,
+  state: ActiveFollowUpState,
+  cursor: string | null,
+) {
+  const page = await ctx.db.query("conversations")
+    .withIndex("by_org_followUpState_updatedAt", (q) => q.eq("orgId", run.orgId).eq("followUpState", state))
+    .paginate({ cursor, numItems: PAGE_SIZE });
+  await applyCounterPage(ctx, run, page.page);
+  return { page, eligible: 0, updated: 0, skipped: 0, scanned: 0 };
+}
+
+async function startPreparationRun(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  mode: "dry_run" | "apply",
+) {
+  const running = await ctx.db.query("followUpPreparationRuns")
+    .withIndex("by_org_status_startedAt", (q) => q.eq("orgId", orgId).eq("status", "running"))
+    .first();
+  if (running) throw new Error("Preparation Follow-up masih berjalan.");
+  const startedAt = Date.now();
+  const runId = await ctx.db.insert("followUpPreparationRuns", {
+    orgId,
+    mode,
+    status: "running",
+    phase: "products_orders",
+    nextConversationStatus: "active",
+    scanned: 0,
+    eligible: 0,
+    updated: 0,
+    skipped: 0,
+    failed: 0,
+    startedAt,
+    updatedAt: startedAt,
+  });
+  await ctx.scheduler.runAfter(0, internal.followUpMigration.runPreparationStep, { runId });
+  return { runId };
+}
+
+function isCounterPhase(phase: PreparationPhase): boolean {
+  return phase === "counters_delete" || phase.startsWith("counters_");
+}
+
+async function ensureCutoverLock(ctx: MutationCtx, run: Doc<"followUpPreparationRuns">): Promise<void> {
+  if (run.mode !== "apply") return;
+  const existing = await ctx.db.query("followUpCutoverLocks")
+    .withIndex("by_org", (q) => q.eq("orgId", run.orgId))
+    .unique();
+  if (existing) {
+    if (String(existing.runId) !== String(run._id)) throw new Error("Organisasi dikunci oleh cutover lain.");
+    await ctx.db.patch(existing._id, { lockedAt: Date.now() });
+    return;
+  }
+  await ctx.db.insert("followUpCutoverLocks", {
+    orgId: run.orgId,
+    runId: run._id,
+    lockedAt: Date.now(),
+  });
+}
+
+async function clearCutoverLock(ctx: MutationCtx, run: Doc<"followUpPreparationRuns">): Promise<void> {
+  const lock = await ctx.db.query("followUpCutoverLocks")
+    .withIndex("by_org", (q) => q.eq("orgId", run.orgId))
+    .unique();
+  if (lock && String(lock.runId) === String(run._id)) await ctx.db.delete(lock._id);
+}
+
+export const preparePage = internalMutation({
+  args: {
+    runId: v.id("followUpPreparationRuns"),
+    scheduleNext: v.optional(v.boolean()),
+    // Compatibility accepts already-scheduled arguments from the superseded worker.
+    orgId: v.optional(v.id("organizations")),
+    status: v.optional(statusValidator),
+    now: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+  },
+  returns: preparationResultValidator,
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run || run.status !== "running") throw new Error("Preparation run tidak aktif.");
+    if (args.orgId && String(args.orgId) !== String(run.orgId)) throw new Error("Preparation run tidak aktif.");
+
+    const phase: PreparationPhase = run.phase ?? "products_orders";
+    if (isCounterPhase(phase)) await ensureCutoverLock(ctx, run);
+    const cursor = run.phase ? run.cursor ?? null : null;
+    const counterState = COUNTER_STATE[phase];
+    const result = phase === "products_orders"
+      ? await processProductOrders(ctx, run, cursor)
+      : phase === "products_recaps"
+        ? await processProductRecaps(ctx, run, cursor)
+        : phase === "recap_closing_buckets"
+          ? await processRecapBuckets(ctx, run, cursor)
+          : phase === "normalize_active"
+            ? await processConversations(ctx, run, "active", cursor)
+            : phase === "normalize_handover"
+              ? await processConversations(ctx, run, "handover", cursor)
+              : phase === "counters_delete"
+                ? await processCounterDeletion(ctx, run, cursor)
+                : await processCounterState(ctx, run, counterState!, cursor);
+
+    const nextPhase = result.page.isDone ? NEXT_PHASE[phase] : undefined;
+    const runComplete = result.page.isDone && nextPhase === undefined;
+    const updatedAt = Date.now();
+    await ctx.db.patch(run._id, {
+      phase: nextPhase ?? phase,
+      cursor: result.page.isDone ? undefined : result.page.continueCursor,
+      nextConversationStatus: phase === "normalize_active" && result.page.isDone ? "handover" : run.nextConversationStatus,
+      scanned: run.scanned + result.scanned,
+      eligible: run.eligible + result.eligible,
+      updated: run.updated + result.updated,
+      skipped: run.skipped + result.skipped,
+      failed: run.failed,
+      status: runComplete ? "complete" : "running",
+      updatedAt,
+      completedAt: runComplete ? updatedAt : undefined,
+    });
+
+    if (runComplete) await clearCutoverLock(ctx, run);
+
+    return {
+      phase,
+      processed: result.page.page.length,
+      eligible: result.eligible,
+      updated: result.updated,
+      skipped: result.skipped,
+      failed: 0,
+      done: result.page.isDone,
+      continueCursor: result.page.continueCursor,
+      nextPhase,
+      runComplete,
+    };
+  },
+});
+
+export const markPreparationFailed = internalMutation({
+  args: { runId: v.id("followUpPreparationRuns"), error: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const run = await ctx.db.get(args.runId);
+    if (!run || run.status !== "running") return null;
+    await clearCutoverLock(ctx, run);
+    await ctx.db.patch(run._id, {
+      status: "failed",
+      failed: run.failed + 1,
+      lastError: args.error.slice(0, SAFE_ERROR_LENGTH),
+      updatedAt: Date.now(),
+      completedAt: Date.now(),
+    });
+    return null;
+  },
+});
+
+export const runPreparationStep = internalAction({
+  args: { runId: v.id("followUpPreparationRuns") },
+  returns: v.object({ complete: v.boolean(), failed: v.boolean() }),
+  handler: async (ctx, args): Promise<{ complete: boolean; failed: boolean }> => {
+    try {
+      const result: { runComplete: boolean } = await ctx.runMutation(
+        internal.followUpMigration.preparePage,
+        { runId: args.runId },
+      );
+      if (!result.runComplete) {
+        await ctx.scheduler.runAfter(0, internal.followUpMigration.runPreparationStep, { runId: args.runId });
+      }
+      return { complete: result.runComplete, failed: false };
+    } catch {
+      const safeError = "Cutover page gagal. Perbaiki penyebabnya lalu jalankan resume.";
+      await ctx.runMutation(internal.followUpMigration.markPreparationFailed, {
+        runId: args.runId,
+        error: safeError,
+      });
+      return { complete: false, failed: true };
+    }
+  },
 });
 
 export const startRecentFollowUpPreparation = mutation({
@@ -242,19 +605,70 @@ export const startRecentFollowUpPreparation = mutation({
   returns: v.object({ runId: v.id("followUpPreparationRuns") }),
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "followUpMigration.startRecentFollowUpPreparation");
-    const recent = await ctx.db.query("followUpPreparationRuns")
-      .withIndex("by_org_startedAt", (q) => q.eq("orgId", orgId))
-      .order("desc").take(10);
-    if (recent.some((row) => row.status === "running")) throw new Error("Preparation Follow-up masih berjalan.");
-    const startedAt = Date.now();
-    const runId = await ctx.db.insert("followUpPreparationRuns", {
-      orgId, mode: args.mode, status: "running", nextConversationStatus: "active",
-      scanned: 0, eligible: 0, updated: 0, skipped: 0, failed: 0, startedAt, updatedAt: startedAt,
+    return startPreparationRun(ctx, orgId, args.mode);
+  },
+});
+
+export const startCutoverBySlug = internalMutation({
+  args: { orgSlug: v.string(), mode: preparationModeValidator },
+  returns: v.object({ runId: v.id("followUpPreparationRuns") }),
+  handler: async (ctx, args) => {
+    const orgSlug = args.orgSlug.trim();
+    if (!orgSlug) throw new Error("Slug organisasi wajib tersedia.");
+    const organization = await ctx.db.query("organizations")
+      .withIndex("by_slug", (q) => q.eq("slug", orgSlug))
+      .unique();
+    if (!organization) throw new Error("Organisasi tidak ditemukan.");
+    return startPreparationRun(ctx, organization._id, args.mode);
+  },
+});
+
+export const resumeCutoverBySlug = internalMutation({
+  args: { orgSlug: v.string() },
+  returns: v.object({ runId: v.id("followUpPreparationRuns") }),
+  handler: async (ctx, args) => {
+    const organization = await ctx.db.query("organizations")
+      .withIndex("by_slug", (q) => q.eq("slug", args.orgSlug.trim()))
+      .unique();
+    if (!organization) throw new Error("Organisasi tidak ditemukan.");
+    const resumedAt = Date.now();
+    const staleBefore = resumedAt - CUTOVER_LEASE_MS;
+    const freshRunning = await ctx.db.query("followUpPreparationRuns")
+      .withIndex("by_org_status_updatedAt", (q) => q
+        .eq("orgId", organization._id)
+        .eq("status", "running")
+        .gte("updatedAt", staleBefore))
+      .first();
+    if (freshRunning) throw new Error("Preparation Follow-up masih berjalan aktif.");
+    const staleRunning = await ctx.db.query("followUpPreparationRuns")
+      .withIndex("by_org_status_updatedAt", (q) => q
+        .eq("orgId", organization._id)
+        .eq("status", "running")
+        .lt("updatedAt", staleBefore))
+      .order("desc")
+      .first();
+    const failedRun = staleRunning ?? await ctx.db.query("followUpPreparationRuns")
+      .withIndex("by_org_status_startedAt", (q) => q.eq("orgId", organization._id).eq("status", "failed"))
+      .order("desc")
+      .first();
+    if (!failedRun) throw new Error("Cutover gagal atau kedaluwarsa yang dapat dilanjutkan tidak ditemukan.");
+    const phase = (failedRun.phase ?? "products_orders") as PreparationPhase;
+    const restartCounters = isCounterPhase(phase);
+    const staleLock = await ctx.db.query("followUpCutoverLocks")
+      .withIndex("by_org", (q) => q.eq("orgId", organization._id))
+      .unique();
+    if (staleLock) await ctx.db.delete(staleLock._id);
+    await ctx.db.patch(failedRun._id, {
+      status: "running",
+      phase: restartCounters ? "counters_delete" : phase,
+      cursor: restartCounters ? undefined : failedRun.cursor,
+      lastError: undefined,
+      completedAt: undefined,
+      updatedAt: resumedAt,
     });
-    await ctx.scheduler.runAfter(0, internal.followUpMigration.preparePage, {
-      runId, orgId, status: "active", now: startedAt,
-    });
-    return { runId };
+    if (restartCounters) await ensureCutoverLock(ctx, { ...failedRun, status: "running", phase: "counters_delete" });
+    await ctx.scheduler.runAfter(0, internal.followUpMigration.runPreparationStep, { runId: failedRun._id });
+    return { runId: failedRun._id };
   },
 });
 
@@ -266,10 +680,18 @@ export const getFollowUpPreparationRun = query({
     const run = await ctx.db.get(args.runId);
     if (!run || String(run.orgId) !== String(orgId)) throw new Error("Preparation run tidak ditemukan.");
     return {
-      runId: run._id, mode: run.mode, status: run.status,
-      scanned: run.scanned, eligible: run.eligible, updated: run.updated,
-      skipped: run.skipped, failed: run.failed, startedAt: run.startedAt,
-      updatedAt: run.updatedAt, completedAt: run.completedAt,
+      runId: run._id,
+      mode: run.mode,
+      status: run.status,
+      scanned: run.scanned,
+      eligible: run.eligible,
+      updated: run.updated,
+      skipped: run.skipped,
+      failed: run.failed,
+      startedAt: run.startedAt,
+      updatedAt: run.updatedAt,
+      completedAt: run.completedAt,
+      lastError: run.lastError,
     };
   },
 });

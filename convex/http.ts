@@ -3,6 +3,7 @@ import { httpAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { verifySignature } from "./ingest/signature";
 import { fetchBerduOrderDetail } from "./ingest/reconciler";
+import { captureAndScheduleKirimdev } from "./ingest/dispatch";
 
 const http = httpRouter();
 
@@ -227,7 +228,7 @@ http.route({
       const val = request.headers.get(h);
       if (val) relevantHeaders[h] = val;
     }
-    const eventId = await ctx.runMutation(internal.ingest.events.captureEvent, {
+    const eventId = await captureAndScheduleKirimdev(ctx, {
       sourceKey: source.sourceKey,
       kind: "message.event",
       rawHeaders: JSON.stringify(relevantHeaders),
@@ -235,15 +236,6 @@ http.route({
       signatureOk: sig.ok,
       orgId: source.orgId,
     });
-    // Always-200 after capture: a processing bug must not make the vendor
-    // count failures (that is what auto-disabled the subscription on 7 Jul).
-    try {
-      await ctx.runMutation(internal.ingest.core.processEvent, { eventId });
-    } catch (e) {
-      await ctx.runMutation(internal.ingest.events.markFailed, {
-        eventId, error: (e as Error).message || String(e),
-      });
-    }
     return jsonResponse({ ok: true, eventId });
   }),
 });

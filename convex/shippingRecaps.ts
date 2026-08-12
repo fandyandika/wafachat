@@ -9,6 +9,7 @@ import { performanceFromRaw } from "./rollupReaders";
 import { getInternalPhoneSet } from "./orgSettings";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
+import { terminateCycle } from "./followUpLifecycle";
 
 // Re-export from lib for backward compatibility
 export const canonicalizeProduct = canonicalizeProductLib;
@@ -16,6 +17,25 @@ export const normalizeProductName = normalizeProductNameLib;
 
 type RecapStatus = "ready" | "needs_review" | "exported" | "delivered" | "cancelled" | "cancelled_after_export";
 type PaymentMethod = "cod" | "transfer" | "unknown";
+
+function followUpSnapshotForRecap(conversation?: Doc<"conversations"> | null) {
+  if (!conversation) return {};
+  return {
+    followUpCsKey: conversation.followUpCsKey ?? csKey(conversation.assignedCsName),
+    followUpStage: conversation.followUpNextStage ?? conversation.followUpLastDetectedStage,
+    followUpProductName: conversation.followUpProductName,
+    followUpLastInboundPreview: conversation.followUpLastInboundPreview,
+    followUpLastInboundAt: conversation.followUpLastInboundAt,
+    followUpLastOutboundPreview: conversation.followUpLastOutboundPreview,
+    followUpLastOutboundAt: conversation.followUpLastOutboundAt,
+    followUpLastDetectedStage: conversation.followUpLastDetectedStage,
+    followUpLastDetectedTemplate: conversation.followUpLastDetectedTemplate,
+  };
+}
+
+function closingBucketForStatus(status: RecapStatus): "counted" | undefined {
+  return status === "cancelled" || status === "cancelled_after_export" ? undefined : "counted";
+}
 
 type AdminCancellationActor = { userId: string; name: string };
 
@@ -35,10 +55,18 @@ async function terminateLinkedConversation(
   orgId: Id<"organizations">,
   conversationId: Id<"conversations"> | undefined,
   at: number,
+  kind: "closing" | "cancelled" = "closing",
 ) {
   if (!conversationId) return;
   const conversation = await ctx.db.get(conversationId);
   if (!conversation || String(conversation.orgId) !== String(orgId)) return;
+  await terminateCycle(ctx, {
+    conversation,
+    eventKey: `terminal:${kind}:${String(conversation._id)}:${conversation.followUpCycleId ?? "no-cycle"}`,
+    kind,
+    createdAt: at,
+    source: "system",
+  });
   await ctx.db.patch(conversation._id, {
     status: "closed",
     followUpNextStage: undefined,
@@ -71,6 +99,7 @@ export async function cancelRecapByExactOrderCore(ctx: any, args: {
   const now = Date.now();
   await ctx.db.patch(row._id, {
     status,
+    closingBucket: closingBucketForStatus(status),
     cancelPreviousStatus: row.status,
     cancelReason: reason,
     cancelledAt: now,
@@ -88,7 +117,7 @@ export async function cancelRecapByExactOrderCore(ctx: any, args: {
     createdAt: now,
     orgId: args.orgId,
   });
-  await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now);
+  await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now, "cancelled");
   return { recapId: row._id, orderIdBerdu, status };
 }
 
@@ -110,6 +139,7 @@ export async function undoExactOrderCancellationCore(ctx: any, args: {
   const now = Date.now();
   await ctx.db.patch(row._id, {
     status,
+    closingBucket: closingBucketForStatus(status),
     cancelPreviousStatus: undefined,
     cancelReason: undefined,
     cancelledAt: undefined,
@@ -479,6 +509,7 @@ export const upsertFromN8n = internalMutation({
     const baseFlags = existing?.status === "exported" ? unique([...comparison.flags, "UPDATED_AFTER_EXPORT"]) : comparison.flags;
     const flags = resolvedCsName ? baseFlags : unique([...baseFlags, "NO_CS_DATA"]);
     const payload = {
+      ...followUpSnapshotForRecap(conversation),
       orderIdBerdu: args.orderIdBerdu ?? order?.orderId,
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
@@ -502,6 +533,7 @@ export const upsertFromN8n = internalMutation({
       discount: parsed.discount,
       inferredDiscount: comparison.inferredDiscount,
       status,
+      closingBucket: closingBucketForStatus(status),
       flags,
       sourceMessageId: args.sourceMessageId,
       sourceMessageText: args.sourceMessageText,
@@ -577,6 +609,7 @@ export const createFromPanelClosing = mutation({
     const panelFlags: string[] = order ? ["MANUAL_CLOSING"] : ["MANUAL_CLOSING", "NO_ORDER_DATA"];
     if (!resolvedCsName) panelFlags.push("NO_CS_DATA");
     const payload = {
+      ...followUpSnapshotForRecap(conversation),
       orderIdBerdu: args.orderId ?? order?.orderId,
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
@@ -596,6 +629,7 @@ export const createFromPanelClosing = mutation({
       shippingCost: parseRupiah(order?.shippingCost),
       total: parseRupiah(order?.total),
       status: "needs_review" as RecapStatus,
+      closingBucket: closingBucketForStatus("needs_review"),
       flags: panelFlags,
       sourceMessageText: "manual_closing_by_cs",
       updatedAt: now,
@@ -658,6 +692,7 @@ export async function upsertRecapFromMessage(
   const status: RecapStatus = flags.length > 0 ? "needs_review" : parsed.status;
   const sourceMessageId = message.externalMessageId ?? message._id;
   const payload = {
+    ...followUpSnapshotForRecap(conversation),
     orderIdBerdu: message.orderId || order?.orderId,
     conversationId: conversation?._id,
     customerPhone: message.customerPhone,
@@ -681,6 +716,7 @@ export async function upsertRecapFromMessage(
     discount: parsed.discount,
     inferredDiscount: comparison.inferredDiscount,
     status,
+    closingBucket: closingBucketForStatus(status),
     flags,
     sourceMessageId,
     sourceMessageText: message.content,
@@ -918,6 +954,7 @@ export const updateFields = mutation({
     await ctx.db.patch(recapId, {
       ...patch,
       status: "ready",
+      closingBucket: closingBucketForStatus("ready"),
       flags: [],
       updatedAt: Date.now(),
     });
@@ -933,7 +970,12 @@ export const markReady = mutation({
     const { orgId } = await requireAdminOrg(ctx, "shippingRecaps.markReady");
     const before = await ctx.db.get(args.recapId);
     if (!before || String(before.orgId) !== String(orgId)) return { success: false, error: "recap not found" };
-    await ctx.db.patch(args.recapId, { status: "ready", flags: [], updatedAt: Date.now() });
+    await ctx.db.patch(args.recapId, {
+      status: "ready",
+      closingBucket: closingBucketForStatus("ready"),
+      flags: [],
+      updatedAt: Date.now(),
+    });
     const after = await ctx.db.get(args.recapId);
     await bumpForRecapDoc(ctx, before, after);
     return { success: true, recapId: args.recapId };
@@ -951,6 +993,7 @@ export const markCancelled = mutation({
     const before = row;
     await ctx.db.patch(args.recapId, {
       status,
+      closingBucket: closingBucketForStatus(status),
       cancelReason: args.reason,
       cancelledAt: now,
       updatedAt: now,
@@ -967,7 +1010,7 @@ export const markCancelled = mutation({
       createdAt: now,
       orgId,
     });
-    await terminateLinkedConversation(ctx, orgId, row.conversationId, now);
+    await terminateLinkedConversation(ctx, orgId, row.conversationId, now, "cancelled");
     return { success: true, recapId: args.recapId, status };
   },
 });
@@ -983,6 +1026,7 @@ export const undoCancelled = mutation({
     const before = row;
     await ctx.db.patch(args.recapId, {
       status,
+      closingBucket: closingBucketForStatus(status),
       cancelReason: undefined,
       cancelledAt: undefined,
       updatedAt: now,
@@ -1016,6 +1060,7 @@ export const markExported = mutation({
       const before = row;
       await ctx.db.patch(recapId, {
         status: "exported",
+        closingBucket: closingBucketForStatus("exported"),
         exportedAt: now,
         exportBatchId: args.exportBatchId,
         updatedAt: now,
@@ -1062,7 +1107,12 @@ export const markDelivered = mutation({
       const row = await ctx.db.get(recapId);
       if (!row || String(row.orgId) !== String(orgId)) continue;
       const before = row;
-      await ctx.db.patch(recapId, { status: "delivered", deliveredAt: now, updatedAt: now });
+      await ctx.db.patch(recapId, {
+        status: "delivered",
+        closingBucket: closingBucketForStatus("delivered"),
+        deliveredAt: now,
+        updatedAt: now,
+      });
       const after = await ctx.db.get(recapId);
 
       // Collect affected pairs for batch rollup computation
@@ -1102,7 +1152,12 @@ export const undoDelivered = mutation({
     const row = await ctx.db.get(args.recapId);
     if (!row || String(row.orgId) !== String(orgId)) return { success: false, error: "recap not found" };
     const before = row;
-    await ctx.db.patch(args.recapId, { status: "exported", deliveredAt: undefined, updatedAt: Date.now() });
+    await ctx.db.patch(args.recapId, {
+      status: "exported",
+      closingBucket: closingBucketForStatus("exported"),
+      deliveredAt: undefined,
+      updatedAt: Date.now(),
+    });
     const after = await ctx.db.get(args.recapId);
     await bumpForRecapDoc(ctx, before, after);
     return { success: true, recapId: args.recapId };
@@ -1119,7 +1174,12 @@ export const markReadyBulk = mutation({
     for (const recapId of args.recapIds) {
       const before = await ctx.db.get(recapId);
       if (!before || String(before.orgId) !== String(orgId)) continue;
-      await ctx.db.patch(recapId, { status: "ready", flags: [], updatedAt: now });
+      await ctx.db.patch(recapId, {
+        status: "ready",
+        closingBucket: closingBucketForStatus("ready"),
+        flags: [],
+        updatedAt: now,
+      });
       const after = await ctx.db.get(recapId);
 
       // Collect affected pairs for batch rollup computation
@@ -1152,7 +1212,13 @@ export const markCancelledBulk = mutation({
       if (!row || String(row.orgId) !== String(orgId)) continue;
       const status: RecapStatus = row.status === "exported" || row.status === "delivered" ? "cancelled_after_export" : "cancelled";
       const before = row;
-      await ctx.db.patch(recapId, { status, cancelReason: args.reason, cancelledAt: now, updatedAt: now });
+      await ctx.db.patch(recapId, {
+        status,
+        closingBucket: closingBucketForStatus(status),
+        cancelReason: args.reason,
+        cancelledAt: now,
+        updatedAt: now,
+      });
       const after = await ctx.db.get(recapId);
 
       // Collect affected pairs for batch rollup computation
@@ -1173,7 +1239,7 @@ export const markCancelledBulk = mutation({
         createdAt: now,
         orgId: row.orgId,
       });
-      await terminateLinkedConversation(ctx, orgId, row.conversationId, now);
+      await terminateLinkedConversation(ctx, orgId, row.conversationId, now, "cancelled");
     }
 
     // Single batch rollup computation for all affected cs+window pairs
@@ -1212,6 +1278,7 @@ export const markLatestCancelledByPhone = internalMutation({
     const before = row;
     await ctx.db.patch(row._id, {
       status,
+      closingBucket: closingBucketForStatus(status),
       cancelReason: args.reason || "-Cancel",
       cancelledAt: now,
       updatedAt: now,
@@ -1229,7 +1296,7 @@ export const markLatestCancelledByPhone = internalMutation({
       orgId: row.orgId,
     });
 
-    await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now);
+    await terminateLinkedConversation(ctx, args.orgId, row.conversationId, now, "cancelled");
 
     return { success: true, recapId: row._id, status, phone };
   },
@@ -1266,6 +1333,7 @@ export const importBerduVerifiedRows = internalMutation({
       const rawImportCsName = row.csName || order?.assignedCsName || conversation?.assignedCsName || "";
       const canonImport = await canonicalizeCs(ctx, orgId, rawImportCsName);
       const payload = {
+        ...followUpSnapshotForRecap(conversation),
         orderIdBerdu,
         conversationId: conversation?._id,
         customerPhone,
@@ -1289,6 +1357,7 @@ export const importBerduVerifiedRows = internalMutation({
         discount: row.discount,
         inferredDiscount: undefined,
         status,
+        closingBucket: closingBucketForStatus(status),
         flags,
         sourceMessageId: `berdu:${orderIdBerdu}:${args.importBatchId}`,
         sourceMessageText: row.sourceMessageText,
@@ -1407,6 +1476,7 @@ export const repairRecipientNamesFromOrders = mutation({
         recipientCity: parsed.recipientCity || order.shippingCity || "",
         flags: comparison.flags,
         status: nextStatus,
+        closingBucket: closingBucketForStatus(nextStatus),
         updatedAt: Date.now(),
       });
       const after = await ctx.db.get(row._id);

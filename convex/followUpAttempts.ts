@@ -17,6 +17,7 @@ export type AcceptedAttemptInput = {
   conversationId: Id<"conversations">;
   csKey: string;
   cycleInboundAt: number;
+  cycleId?: string;
   stage: FollowUpStage;
   method: FollowUpAttemptMethod;
   nonce: string;
@@ -33,12 +34,12 @@ export type AcceptedAttemptInput = {
 
 export function attemptKey(
   conversationId: string,
-  cycleInboundAt: number,
+  cycleIdentity: string | number,
   stage: FollowUpStage,
   method: FollowUpAttemptMethod,
   nonce: string,
 ): string {
-  return `${conversationId}:${cycleInboundAt}:${stage}:${method}:${nonce}`;
+  return `${conversationId}:${cycleIdentity}:${stage}:${method}:${nonce}`;
 }
 
 export async function recordAcceptedAttempt(
@@ -47,7 +48,7 @@ export async function recordAcceptedAttempt(
 ): Promise<{ attemptId: Id<"followUpAttempts">; duplicate: boolean }> {
   const key = attemptKey(
     String(input.conversationId),
-    input.cycleInboundAt,
+    input.cycleId ?? input.cycleInboundAt,
     input.stage,
     input.method,
     input.nonce,
@@ -63,6 +64,7 @@ export async function recordAcceptedAttempt(
     conversationId: input.conversationId,
     csKey: input.csKey,
     cycleInboundAt: input.cycleInboundAt,
+    cycleId: input.cycleId,
     stage: input.stage,
     method: input.method,
     status: "accepted",
@@ -89,7 +91,13 @@ export async function reserveAttempt(
   ctx: Pick<MutationCtx, "db">,
   input: Omit<AcceptedAttemptInput, "acceptedAt"> & { createdAt: number },
 ): Promise<{ attemptId: Id<"followUpAttempts">; duplicate: boolean; status: AttemptStatus }> {
-  const key = attemptKey(String(input.conversationId), input.cycleInboundAt, input.stage, input.method, input.nonce);
+  const key = attemptKey(
+    String(input.conversationId),
+    input.cycleId ?? input.cycleInboundAt,
+    input.stage,
+    input.method,
+    input.nonce,
+  );
   const existing = await ctx.db.query("followUpAttempts")
     .withIndex("by_org_attemptKey", (q) => q.eq("orgId", input.orgId).eq("attemptKey", key))
     .unique();
@@ -99,6 +107,7 @@ export async function reserveAttempt(
     conversationId: input.conversationId,
     csKey: input.csKey,
     cycleInboundAt: input.cycleInboundAt,
+    cycleId: input.cycleId,
     stage: input.stage,
     method: input.method,
     status: "sending",

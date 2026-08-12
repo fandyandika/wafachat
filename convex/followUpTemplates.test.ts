@@ -35,6 +35,7 @@ describe("follow-up template configuration", () => {
       templateName: "approved_followup_h1",
       language: "id",
       variables: ["customer_name", "product_name", "order_id"],
+      matchPatterns: ["  Follow-up—pertama, Kak!  ", "follow up pertama kak"],
       isActive: true,
     });
 
@@ -46,6 +47,7 @@ describe("follow-up template configuration", () => {
         stage: 1,
         templateName: "approved_followup_h1",
         variables: ["customer_name", "product_name", "order_id"],
+        matchPatterns: ["follow up pertama kak"],
         isActive: true,
       }),
     ]);
@@ -75,6 +77,34 @@ describe("follow-up template configuration", () => {
       variables: ["customer_name", "customer_name"],
       isActive: true,
     })).rejects.toThrow(/duplikat/i);
+  });
+
+  test("rejects manual trigger patterns outside the allowed normalized bounds", async () => {
+    const { asAdmin } = await createHarness();
+
+    await expect(asAdmin.mutation(api.followUpTemplates.upsertFollowUpTemplate, {
+      stage: 1,
+      label: "H+1",
+      templateName: "follow_up_h1",
+      language: "id",
+      variables: [],
+      matchPatterns: ["halo"],
+      isActive: true,
+    })).rejects.toThrow(/8–200 karakter/i);
+  });
+
+  test("rejects more than ten manual trigger patterns", async () => {
+    const { asAdmin } = await createHarness();
+
+    await expect(asAdmin.mutation(api.followUpTemplates.upsertFollowUpTemplate, {
+      stage: 1,
+      label: "H+1",
+      templateName: "follow_up_h1",
+      language: "id",
+      variables: [],
+      matchPatterns: Array.from({ length: 11 }, (_, index) => `pesan manual ke ${index}`),
+      isActive: true,
+    })).rejects.toThrow(/maksimal 10 pola/i);
   });
 
   test("template setup is isolated by the admin organization", async () => {

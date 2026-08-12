@@ -196,6 +196,17 @@ test("importBerduVerifiedRows: canonicalizes raw csName through the registry (al
   expect(recaps.length).toBe(1);
   expect(recaps[0].csName).toBe("Aisyah");  // canonical form
   expect(recaps[0].csKey).toBe("aisyah");   // immutable key
+  expect(recaps[0].closingBucket).toBe("counted");
+
+  await asAdmin.mutation(api.shippingRecaps.markCancelled, {
+    recapId: recaps[0]._id,
+    reason: "Customer batal",
+  });
+  expect(await t.run(async (ctx: any) => (await ctx.db.get(recaps[0]._id))?.closingBucket))
+    .toBeNull();
+  await asAdmin.mutation(api.shippingRecaps.undoCancelled, { recapId: recaps[0]._id });
+  expect(await t.run(async (ctx: any) => (await ctx.db.get(recaps[0]._id))?.closingBucket))
+    .toBe("counted");
 });
 
 test("cancelling a recap clears any actionable follow-up state", async () => {
@@ -216,10 +227,21 @@ test("cancelling a recap clears any actionable follow-up state", async () => {
       note: "",
       followUpCsKey: "aisyah",
       followUpCycleInboundAt: t0 - 2 * 86_400_000,
+      followUpCycleId: "cycle:recap-cancel",
+      followUpCycleStartedAt: t0 - 2 * 86_400_000 + 1,
       followUpNextStage: 2,
       followUpDueAt: t0 - 1_000,
       followUpState: "waiting",
       createdAt: t0 - 2 * 86_400_000,
+      updatedAt: t0,
+    });
+    await ctx.db.insert("followUpCounters", {
+      orgId,
+      csKey: "aisyah",
+      h1: 0,
+      h2: 1,
+      h3: 0,
+      review: 0,
       updatedAt: t0,
     });
     recapId = await ctx.db.insert("shippingRecaps", {
@@ -247,8 +269,17 @@ test("cancelling a recap clears any actionable follow-up state", async () => {
   });
 
   await asAdmin.mutation(api.shippingRecaps.markCancelled, { recapId, reason: "Customer batal" });
+  await asAdmin.mutation(api.shippingRecaps.markCancelled, { recapId, reason: "Customer batal" });
   const conversation = await t.run(async (ctx) => (await ctx.db.get(conversationId)) as Doc<"conversations"> | null);
   expect(conversation).toMatchObject({ status: "closed", followUpState: "complete" });
   expect(conversation?.followUpNextStage).toBeUndefined();
   expect(conversation?.followUpDueAt).toBeUndefined();
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
+    expect.objectContaining({ csKey: "aisyah", h1: 0, h2: 0, h3: 0, review: 0 }),
+  ]);
+  const cancellations = await t.run(async (ctx) => (await ctx.db
+    .query("followUpTransitions")
+    .collect()).filter((transition) => transition.kind === "cancelled"));
+  expect(cancellations).toHaveLength(1);
+  expect(cancellations[0]).toMatchObject({ cycleId: "cycle:recap-cancel", source: "system" });
 });

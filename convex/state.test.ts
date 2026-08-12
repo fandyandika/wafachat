@@ -4,6 +4,8 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { startOfJakartaDayMs, csKey } from "./lib";
 
+const modules = (import.meta as any).glob("./**/*.{ts,js}");
+
 async function seedOrg(t: any) {
   return t.run((ctx: any) => ctx.db.insert("organizations", { slug: "pustakaislam", name: "Test Org", createdAt: 1, updatedAt: 1 }));
 }
@@ -167,5 +169,188 @@ test("org isolation: same orderId in two orgs = TWO rows; org-B upsert never pat
     const b = rows.find((r: any) => String(r.orgId) === String(orgB));
     expect(a?.customerName).toBe("A-Cust"); // org-B upsert did not clobber org-A
     expect(b?.customerName).toBe("B-Cust");
+  });
+});
+
+test('order reassignment preserves active-cycle ownership and refreshes idle ownership', async () => {
+  const t = convexTest(schema, modules);
+  const admin = t.withIdentity({ subject: 'reassign-admin', role: 'admin', name: 'Admin', email: 'reassign@w' });
+  const { orgId } = await admin.mutation(api.orgs.seedDefaultOrg, {});
+  await t.mutation(internal.state.upsertOrderFromN8n, { phone: '628-reassign', csName: 'Nabila', order_id: 'REASSIGN-1' });
+  const conversationId = await t.run(async (ctx) => (await ctx.db.query('conversations').withIndex('by_org_orderId', (q) => q.eq('orgId', orgId).eq('orderId', 'REASSIGN-1')).unique())!._id);
+  await t.run((ctx) => ctx.db.patch(conversationId, { followUpCsKey: undefined, followUpCycleId: 'cycle-nabila', followUpNextStage: 1, followUpDueAt: Date.now(), followUpState: 'waiting' }));
+  await t.mutation(internal.state.upsertOrderFromN8n, { phone: '628-reassign', csName: 'Aisyah', order_id: 'REASSIGN-1' });
+  await expect(t.run((ctx) => ctx.db.get(conversationId))).resolves.toMatchObject({ assignedCsName: 'Aisyah', followUpCsKey: 'nabila' });
+  await t.run((ctx) => ctx.db.patch(conversationId, { followUpCycleId: undefined, followUpNextStage: undefined, followUpDueAt: undefined, followUpState: undefined }));
+  await t.mutation(internal.state.upsertOrderFromN8n, { phone: '628-reassign', csName: 'Aisyah', order_id: 'REASSIGN-1' });
+  await expect(t.run((ctx) => ctx.db.get(conversationId))).resolves.toMatchObject({ assignedCsName: 'Aisyah', followUpCsKey: 'aisyah' });
+});
+
+test("order ingestion snapshots product context and the due queue does not reread a later order row", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({
+    subject: "snapshot-admin", role: "admin", name: "Snapshot Admin", email: "snapshot@wafachat.test",
+  });
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  const dueAt = Date.now() - 1_000;
+  await t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6285735647991",
+    csName: "Aisyah",
+    order_id: "O-PRODUCT-SNAPSHOT",
+    customerName: "Snapshot Customer",
+    productName: "Quran Mapping",
+    products: "Quran Mapping (1x)",
+    createdAt: dueAt - DAY,
+  });
+
+  const conversationId = await t.run(async (ctx) => {
+    const conversation = await ctx.db
+      .query("conversations")
+      .withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", "O-PRODUCT-SNAPSHOT"))
+      .unique();
+    expect(conversation?.followUpProductName).toBe("Quran Mapping");
+    await ctx.db.patch(conversation!._id, {
+      followUpCsKey: "aisyah",
+      followUpCycleInboundAt: dueAt - DAY,
+      followUpCycleId: "cycle:product-snapshot",
+      followUpCycleStartedAt: dueAt - DAY + 1,
+      followUpNextStage: 1,
+      followUpDueAt: dueAt,
+      followUpState: "waiting",
+    });
+    const order = await ctx.db
+      .query("orders")
+      .withIndex("by_org_orderId", (q) => q.eq("orgId", orgId).eq("orderId", "O-PRODUCT-SNAPSHOT"))
+      .unique();
+    await ctx.db.patch(order!._id, { productName: "Later Per-row Product" });
+    return conversation!._id;
+  });
+
+  const queue = await asAdmin.query(api.followUp.listDueFollowUps, {
+    now: dueAt + 1_000,
+    paginationOpts: { numItems: 10, cursor: null },
+  });
+  expect(queue.page).toEqual([
+    expect.objectContaining({ conversationId, productName: "Quran Mapping" }),
+  ]);
+});
+
+test("manual closing and cancellation terminate their lifecycle counters only once", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({
+    subject: "terminal-admin", role: "admin", name: "Terminal Admin", email: "terminal@wafachat.test",
+  });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (const row of [
+      { orderId: "O-MANUAL-CLOSING", phone: "6285735647992", cycleId: "cycle:manual-closing", stage: 1 as const },
+      { orderId: "O-MANUAL-CANCEL", phone: "6285735647993", cycleId: "cycle:manual-cancel", stage: 2 as const },
+      { orderId: "O-N8N-CLOSING", phone: "6285735647994", cycleId: "cycle:n8n-closing", stage: 3 as const },
+    ]) {
+      await ctx.db.insert("conversations", {
+        orgId,
+        orderId: row.orderId,
+        customerPhone: row.phone,
+        customerName: "Terminal Customer",
+        assignedCsName: "Aisyah",
+        status: "active",
+        aiEnabled: false,
+        note: "",
+        followUpCsKey: "aisyah",
+        followUpCycleInboundAt: 1_000,
+        followUpCycleId: row.cycleId,
+        followUpCycleStartedAt: 1_001,
+        followUpNextStage: row.stage,
+        followUpDueAt: 2_000,
+        followUpState: "waiting",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      });
+    }
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "aisyah", h1: 1, h2: 1, h3: 1, review: 0, updatedAt: 2_000,
+    });
+  });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await asAdmin.mutation(api.state.markConversationClosing, {
+      phone: "6285735647992", order_id: "O-MANUAL-CLOSING",
+    });
+    await asAdmin.mutation(api.state.markConversationCancelled, {
+      phone: "6285735647993", order_id: "O-MANUAL-CANCEL",
+    });
+    await t.mutation(internal.state.recordStatEventFromN8n, {
+      field: "closings", phone: "6285735647994", order_id: "O-N8N-CLOSING",
+    });
+  }
+
+  expect(await t.run((ctx) => ctx.db.query("followUpCounters").collect())).toEqual([
+    expect.objectContaining({ csKey: "aisyah", h1: 0, h2: 0, h3: 0, review: 0 }),
+  ]);
+  const transitions = await t.run((ctx) => ctx.db.query("followUpTransitions").collect());
+  expect(transitions.filter((transition) => transition.kind === "closing")).toHaveLength(2);
+  expect(transitions.filter((transition) => transition.kind === "cancelled")).toHaveLength(1);
+});
+
+test("cutover lock rejects direct lifecycle status, reactivation, and delete writers only for its org", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({
+    subject: "cutover-admin", role: "admin", name: "Cutover Admin", email: "cutover@wafachat.test",
+  });
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  const otherOrgId: any = await t.run((ctx: any) => ctx.db.insert("organizations", {
+    slug: "cutover-other", name: "Other", createdAt: 1, updatedAt: 1,
+  }));
+  await t.run(async (ctx: any) => {
+    for (const [orderId, phone, status] of [
+      ["LOCK-ACTIVE", "6285000000001", "active"],
+      ["LOCK-CLOSED", "6285000000002", "closed"],
+      ["LOCK-DELETE", "6285000000003", "active"],
+    ] as const) {
+      await ctx.db.insert("conversations", {
+        orgId, orderId, customerPhone: phone, customerName: "Locked", assignedCsName: "Aisyah",
+        status, aiEnabled: true, note: "", followUpCsKey: "aisyah", followUpCycleId: `cycle:${orderId}`,
+        followUpCycleStartedAt: 1_000, followUpNextStage: 1, followUpDueAt: 2_000,
+        followUpState: status === "active" ? "waiting" : "archived", createdAt: 1_000, updatedAt: 2_000,
+      });
+    }
+    const runId = await ctx.db.insert("followUpPreparationRuns", {
+      orgId, mode: "apply", status: "running", phase: "counters_waiting",
+      nextConversationStatus: "handover", scanned: 0, eligible: 0, updated: 0, skipped: 0,
+      failed: 0, startedAt: 2_000, updatedAt: 2_000,
+    });
+    await ctx.db.insert("followUpCutoverLocks", { orgId, runId, lockedAt: 2_000 });
+  });
+
+  await expect(t.mutation(internal.state.setConversationStatusFromN8n, {
+    phone: "6285000000001", order_id: "LOCK-ACTIVE", status: "closed",
+  })).rejects.toThrow(/cutover/i);
+  await expect(t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6285000000002", csName: "Aisyah", order_id: "LOCK-CLOSED",
+  })).rejects.toThrow(/cutover/i);
+  await expect(asAdmin.mutation(api.state.markConversationNotClosing, {
+    phone: "6285000000002", order_id: "LOCK-CLOSED",
+  })).rejects.toThrow(/cutover/i);
+  await expect(asAdmin.mutation(api.state.deleteConversationOrder, {
+    phone: "6285000000003", order_id: "LOCK-DELETE",
+  })).rejects.toThrow(/cutover/i);
+
+  await t.run(async (ctx: any) => {
+    const { upsertOrderCore } = await import("./state");
+    await upsertOrderCore(ctx, {
+      orgId: otherOrgId, phone: "6285000000099", csName: "Aisyah", order_id: "OTHER-ALLOWED",
+    });
+    expect(await ctx.db.query("conversations")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", otherOrgId).eq("orderId", "OTHER-ALLOWED"))
+      .unique()).not.toBeNull();
+    expect((await ctx.db.query("conversations")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "LOCK-ACTIVE"))
+      .unique())?.status).toBe("active");
+    expect((await ctx.db.query("conversations")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "LOCK-CLOSED"))
+      .unique())?.status).toBe("closed");
+    expect(await ctx.db.query("conversations")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "LOCK-DELETE"))
+      .unique()).not.toBeNull();
   });
 });

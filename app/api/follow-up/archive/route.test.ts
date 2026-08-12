@@ -18,11 +18,13 @@ vi.mock('convex/browser', () => ({
 
 import { POST } from './route';
 
-function request() {
+const requestId = '11111111-2222-4111-8111-111111111111';
+
+function request(body: Record<string, unknown> = { conversationId: 'conversation-1', requestId }) {
   return new NextRequest('http://localhost/api/follow-up/archive', {
     method: 'POST',
     headers: { cookie: 'auth_token=test', 'content-type': 'application/json' },
-    body: JSON.stringify({ conversationId: 'conversation-1' }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -38,5 +40,11 @@ test('archive carries signed identity and never sends PANEL_AUTH_SECRET', async 
 
   expect((await POST(request())).status).toBe(200);
   expect(state.setAuth).toHaveBeenCalledWith('archive-token');
-  expect(state.mutation.mock.calls[0][1]).toEqual({ conversationId: 'conversation-1' });
+  expect(state.mutation.mock.calls[0][1]).toEqual({ conversationId: 'conversation-1', requestId });
+});
+
+test('archive requires a request UUID for a distinct user action', async () => {
+  state.session = { role: 'admin', name: 'Owner', email: 'owner@test' };
+  expect((await POST(request({ conversationId: 'conversation-1' }))).status).toBe(400);
+  expect(state.mutation).not.toHaveBeenCalled();
 });

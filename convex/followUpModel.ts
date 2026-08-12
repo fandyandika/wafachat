@@ -23,7 +23,13 @@ type DueOutboundCandidate = {
 };
 
 export const FOLLOW_UP_DAY_MS = 24 * 60 * 60 * 1_000;
-export const FOLLOW_UP_EXPIRY_MS = 7 * FOLLOW_UP_DAY_MS;
+const JAKARTA_OFFSET_MS = 7 * 60 * 60 * 1_000;
+
+export function nextJakartaDueAt(eventAt: number): number {
+  if (!Number.isFinite(eventAt) || eventAt < 0) throw new Error("Waktu Follow-up tidak valid.");
+  const local = new Date(eventAt + JAKARTA_OFFSET_MS);
+  return Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + 1, 8) - JAKARTA_OFFSET_MS;
+}
 
 export function resetForInbound(cycleInboundAt: number) {
   return {
@@ -38,23 +44,14 @@ export function armH1AfterOutbound(cycleInboundAt: number, csKey: string, outbou
   return {
     csKey,
     nextStage: 1,
-    dueAt: outboundAt + FOLLOW_UP_DAY_MS,
+    dueAt: nextJakartaDueAt(outboundAt),
     state: "waiting",
   } as const;
 }
 
-export function shouldAdvanceDueOutbound(candidate: DueOutboundCandidate): boolean {
-  return candidate.status !== "closed"
-    && candidate.followUpState === "waiting"
-    && candidate.nextStage !== undefined
-    && candidate.dueAt !== undefined
-    && candidate.cycleInboundAt !== undefined
-    && candidate.createdAt >= candidate.dueAt
-    && candidate.role === "cs"
-    && candidate.direction === "outbound"
-    && candidate.source === "ingest"
-    && Boolean(candidate.externalMessageId?.trim())
-    && !candidate.isInternal;
+export function shouldAdvanceDueOutbound(_candidate: DueOutboundCandidate): boolean {
+  // Task 6 will require a detected follow-up trigger before advancing a stage.
+  return false;
 }
 
 export function advanceAfterAccepted(stage: FollowUpStage, acceptedAt: number) {
@@ -69,7 +66,7 @@ export function advanceAfterAccepted(stage: FollowUpStage, acceptedAt: number) {
   return {
     state: "waiting",
     nextStage: (stage + 1) as 2 | 3,
-    dueAt: acceptedAt + FOLLOW_UP_DAY_MS,
+    dueAt: nextJakartaDueAt(acceptedAt),
   } as const;
 }
 

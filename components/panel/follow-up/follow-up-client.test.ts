@@ -1,26 +1,40 @@
 import { beforeEach, expect, test, vi } from 'vitest';
-import { confirmContact, fetchHistory, fetchQueue, FollowUpClientError, searchCustomers, sendTemplate } from './follow-up-client';
+import {
+  archiveFollowUp,
+  confirmContact,
+  FollowUpClientError,
+  searchCustomers,
+  sendTemplate,
+  unarchiveFollowUp,
+} from './follow-up-client';
 
 beforeEach(() => vi.unstubAllGlobals());
 
-test('one-shot clients call only their requested view', async () => {
-  const request = vi.fn()
-    .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, page: [], pagination: { isDone: true, continueCursor: '' } }), { status: 200 }))
-    .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, page: [] }), { status: 200 }))
-    .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, page: [], isDone: true, continueCursor: '' }), { status: 200 }));
-  await fetchQueue({ csName: 'Aisyah' }, null, request);
+test('search remains an explicit one-shot request', async () => {
+  const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, page: [] }), { status: 200 }));
   await searchCustomers('Hasna', 'Aisyah', request);
-  await fetchHistory('sent', 'Aisyah', null, request);
+  expect(request).toHaveBeenCalledOnce();
+  expect(request.mock.calls[0][0]).toBe('/api/follow-up/search');
+});
+
+test('actions use dedicated guarded endpoints', async () => {
+  const request = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ ok: true, status: 'accepted' }), { status: 200 }));
+  await sendTemplate({ conversationId: 'c1', stage: 1, templateId: 't1', requestId: crypto.randomUUID() }, request);
+  await confirmContact({ conversationId: 'c1', requestId: crypto.randomUUID() }, request);
+  await unarchiveFollowUp('c1', request);
   expect(request.mock.calls.map(([url]) => url)).toEqual([
-    '/api/follow-up/snapshot', '/api/follow-up/search', '/api/follow-up/history',
+    '/api/follow-up/send', '/api/follow-up/confirm-contact', '/api/follow-up/unarchive',
   ]);
 });
 
-test('actions use the dedicated guarded endpoints', async () => {
-  const request = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ ok: true, status: 'accepted' }), { status: 200 }));
-  await sendTemplate({ conversationId: 'c1', stage: 1, templateId: 't1', requestId: crypto.randomUUID() }, request);
-  await confirmContact({ conversationId: 'c1', stage: 1, requestId: crypto.randomUUID() }, request);
-  expect(request.mock.calls.map(([url]) => url)).toEqual(['/api/follow-up/send', '/api/follow-up/confirm-contact']);
+test('archive generates and sends a request UUID for the user action', async () => {
+  const requestId = '123e4567-e89b-42d3-a456-426614174000';
+  vi.stubGlobal('crypto', { randomUUID: vi.fn(() => requestId) });
+  const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+  await archiveFollowUp('c1', request);
+  expect(request).toHaveBeenCalledWith('/api/follow-up/archive', expect.objectContaining({
+    body: JSON.stringify({ conversationId: 'c1', requestId }),
+  }));
 });
 
 test('localized server errors become typed client errors', async () => {

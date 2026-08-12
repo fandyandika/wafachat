@@ -13,6 +13,7 @@ type Draft = {
   templateName: string;
   language: string;
   variables: Variable[];
+  matchPatterns: string;
   isActive: boolean;
 };
 
@@ -28,17 +29,33 @@ const emptyDraft = (stage: Stage): Draft => ({
   templateName: "",
   language: "id",
   variables: ["customer_name", "product_name", "order_id"],
+  matchPatterns: "",
   isActive: false,
 });
+
+type FollowUpTemplateSetup = {
+  templates: Array<Omit<Draft, "matchPatterns"> & { stage: Stage; matchPatterns: string[] }>;
+};
+
+function draftsFromSetup(setup: FollowUpTemplateSetup | undefined) {
+  const drafts: Record<Stage, Draft> = { 1: emptyDraft(1), 2: emptyDraft(2), 3: emptyDraft(3) };
+  for (const row of setup?.templates ?? []) {
+    drafts[row.stage] = {
+      label: row.label,
+      templateName: row.templateName,
+      language: row.language,
+      variables: [...row.variables],
+      matchPatterns: (row.matchPatterns ?? []).join("\n"),
+      isActive: row.isActive,
+    };
+  }
+  return drafts;
+}
 
 export function FollowUpTemplateSettings() {
   const setup = useQuery(api.followUpTemplates.getFollowUpTemplateSetup, {});
   const upsert = useMutation(api.followUpTemplates.upsertFollowUpTemplate);
-  const [drafts, setDrafts] = useState<Record<Stage, Draft>>({
-    1: emptyDraft(1),
-    2: emptyDraft(2),
-    3: emptyDraft(3),
-  });
+  const [drafts, setDrafts] = useState<Record<Stage, Draft>>(() => draftsFromSetup(setup));
   const [busy, setBusy] = useState<Stage | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
 
@@ -52,6 +69,7 @@ export function FollowUpTemplateSettings() {
           templateName: row.templateName,
           language: row.language,
           variables: [...row.variables],
+          matchPatterns: (row.matchPatterns ?? []).join("\n"),
           isActive: row.isActive,
         };
       }
@@ -68,7 +86,11 @@ export function FollowUpTemplateSettings() {
     setBusy(stage);
     setFeedback(null);
     try {
-      await upsert({ stage, ...draft });
+      await upsert({
+        stage,
+        ...draft,
+        matchPatterns: draft.matchPatterns.split("\n"),
+      });
       setFeedback({ kind: "ok", message: `Template H+${stage} tersimpan.` });
     } catch (error) {
       setFeedback({ kind: "error", message: error instanceof Error ? error.message : "Template gagal disimpan." });
@@ -116,6 +138,11 @@ export function FollowUpTemplateSettings() {
                 <div className="space-y-1.5">
                   <label htmlFor={`follow-up-language-${stage}`} className="text-sm font-medium">Kode bahasa</label>
                   <input id={`follow-up-language-${stage}`} value={draft.language} onChange={(event) => patchDraft(stage, { language: event.target.value })} className="min-h-11 w-full rounded-lg border border-input bg-background px-3 text-sm" />
+                </div>
+                <div className="space-y-1.5">
+                  <label htmlFor={`follow-up-patterns-${stage}`} className="text-sm font-medium">Pola pesan manual H+{stage}</label>
+                  <textarea id={`follow-up-patterns-${stage}`} value={draft.matchPatterns} onChange={(event) => patchDraft(stage, { matchPatterns: event.target.value })} placeholder="Satu pola per baris" className="min-h-24 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" />
+                  <p className="text-xs text-muted-foreground">Satu pola per baris, 8–200 karakter, maksimal 10 pola.</p>
                 </div>
                 <fieldset className="space-y-2">
                   <legend className="text-sm font-medium">Urutan variabel</legend>

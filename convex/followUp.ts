@@ -8,15 +8,27 @@ import { eligibleStage } from "./followUpMath";
 import { getInternalPhoneSet } from "./orgSettings";
 import { assertPublicAnalyticsRange, collectExactBounded } from "./analyticsBounds";
 import { getBoundedActiveAgentRegistry } from "./agents";
-import { advanceAfterAccepted, FOLLOW_UP_EXPIRY_MS } from "./followUpModel";
+import {
+  assertFollowUpCutoverUnlocked,
+  confirmCurrentStage,
+  correctCurrentStage,
+  markCurrentStageSending,
+  reopenArchivedCycle,
+  terminateCycle,
+} from "./followUpLifecycle";
 import { internal } from "./_generated/api";
 import { buildTemplatePayload, sendKirimDevMessage } from "../lib/kirimdev";
 import { ROLLUP_SCHEMA_VERSION } from "./rollupVersion";
 import { attemptKey, finalizeAttempt, recordAcceptedAttempt, reserveAttempt } from "./followUpAttempts";
+import { markConversationCancelledCore, markConversationClosingCore } from "./state";
 
 const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+const JAKARTA_OFFSET_MS = 7 * HOUR;
 const WINDOW_HOURS = 24; // WhatsApp 24h window; a follow-up "touch" = an outbound sent after it closes
 const MAX_FOLLOW_UP_ROWS = 100;
+const MAX_QUEUE_PAGE_SIZE = 30;
+const MAX_COUNTER_ROWS = 100;
 
 const followUpStageValidator = v.union(v.literal(1), v.literal(2), v.literal(3));
 const dueFollowUpValidator = v.object({
@@ -30,6 +42,15 @@ const dueFollowUpValidator = v.object({
   stage: followUpStageValidator,
   dueAt: v.number(),
   productName: v.string(),
+  cycleId: v.optional(v.string()),
+  dueState: v.union(v.literal("overdue"), v.literal("due_today"), v.literal("scheduled")),
+  overdueDays: v.number(),
+  lastInboundPreview: v.string(),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundPreview: v.string(),
+  lastOutboundAt: v.optional(v.number()),
+  lastDetectedStage: v.optional(followUpStageValidator),
+  lastDetectedTemplate: v.optional(v.string()),
   lastMessagePreview: v.string(),
   lastMessageAt: v.number(),
   reason: v.string(),
@@ -42,108 +63,191 @@ const attentionFollowUpValidator = v.object({
   orderId: v.string(),
   csName: v.string(),
   stage: v.optional(followUpStageValidator),
-  state: v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown")),
+  state: v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown"), v.literal("review")),
   lastError: v.optional(v.string()),
   updatedAt: v.number(),
 });
-const attentionStateValidator = v.union(v.literal("sending"), v.literal("failed"), v.literal("unknown"));
+const attentionStateValidator = v.union(
+  v.literal("sending"),
+  v.literal("failed"),
+  v.literal("unknown"),
+  v.literal("review"),
+);
 
-export const listDueFollowUps = query({
+function pageSize(value: number, maximum: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(Math.floor(value), maximum));
+}
+
+function dueMetadata(dueAt: number, now: number) {
+  const dueDay = Math.floor((dueAt + JAKARTA_OFFSET_MS) / DAY);
+  const nowDay = Math.floor((now + JAKARTA_OFFSET_MS) / DAY);
+  const overdueDays = nowDay - dueDay;
+  if (overdueDays > 0) return { dueState: "overdue" as const, overdueDays };
+  if (overdueDays === 0) return { dueState: "due_today" as const, overdueDays: 0 };
+  return { dueState: "scheduled" as const, overdueDays: 0 };
+}
+
+function snapshotContext(row: any) {
+  return {
+    productName: row.followUpProductName ?? "Produk tidak tersedia",
+    cycleId: row.followUpCycleId,
+    lastInboundPreview: row.followUpLastInboundPreview ?? "",
+    lastInboundAt: row.followUpLastInboundAt,
+    lastOutboundPreview: row.followUpLastOutboundPreview ?? "",
+    lastOutboundAt: row.followUpLastOutboundAt,
+    lastDetectedStage: row.followUpLastDetectedStage,
+    lastDetectedTemplate: row.followUpLastDetectedTemplate,
+  };
+}
+
+async function listFollowUpQueueHandler(
+  ctx: any,
   args: {
-    stage: v.optional(followUpStageValidator),
-    csName: v.optional(v.string()),
-    now: v.number(),
-    paginationOpts: paginationOptsValidator,
+    stage?: 1 | 2 | 3;
+    csName?: string;
+    now: number;
+    paginationOpts: { cursor: string | null; numItems: number };
   },
-  returns: v.object({
-    page: v.array(dueFollowUpValidator),
-    isDone: v.boolean(),
-    continueCursor: v.string(),
-  }),
-  handler: async (ctx, args) => {
-    if (!Number.isFinite(args.now) || args.now < 0) throw new Error("Waktu queue tidak valid.");
-    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
-      ctx,
-      "followUp.listDueFollowUps",
-      args.csName,
-    );
-    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
-    const lowerDueAt = args.now - FOLLOW_UP_EXPIRY_MS;
-    const paginationOpts = {
-      cursor: args.paginationOpts.cursor,
-      numItems: Math.max(1, Math.min(Math.floor(args.paginationOpts.numItems), 30)),
-    };
+  functionName: string,
+) {
+  if (!Number.isFinite(args.now) || args.now < 0) throw new Error("Waktu queue tidak valid.");
+  const { orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, functionName, args.csName);
+  const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+  const paginationOpts = {
+    cursor: args.paginationOpts.cursor,
+    numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
+  };
 
-    const result = effectiveCsKey
-      ? args.stage
-        ? await ctx.db
-            .query("conversations")
-            .withIndex("by_org_followUpCsKey_stage_state_dueAt", (q) => q
-              .eq("orgId", orgId)
-              .eq("followUpCsKey", effectiveCsKey)
-              .eq("followUpNextStage", args.stage)
-              .eq("followUpState", "waiting")
-              .gte("followUpDueAt", lowerDueAt)
-              .lte("followUpDueAt", args.now))
-            .paginate(paginationOpts)
-        : await ctx.db
-            .query("conversations")
-            .withIndex("by_org_followUpCsKey_state_dueAt", (q) => q
-              .eq("orgId", orgId)
-              .eq("followUpCsKey", effectiveCsKey)
-              .eq("followUpState", "waiting")
-              .gte("followUpDueAt", lowerDueAt)
-              .lte("followUpDueAt", args.now))
-            .paginate(paginationOpts)
-      : args.stage
-        ? await ctx.db
-            .query("conversations")
-            .withIndex("by_org_followUpStage_state_dueAt", (q) => q
-              .eq("orgId", orgId)
-              .eq("followUpNextStage", args.stage)
-              .eq("followUpState", "waiting")
-              .gte("followUpDueAt", lowerDueAt)
-              .lte("followUpDueAt", args.now))
-            .paginate(paginationOpts)
-        : await ctx.db
-            .query("conversations")
-            .withIndex("by_org_followUpState_dueAt", (q) => q
-              .eq("orgId", orgId)
-              .eq("followUpState", "waiting")
-              .gte("followUpDueAt", lowerDueAt)
-              .lte("followUpDueAt", args.now))
-            .paginate(paginationOpts);
+  const result = effectiveCsKey
+    ? args.stage
+      ? await ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpCsKey_stage_state_dueAt", (q: any) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpNextStage", args.stage)
+            .eq("followUpState", "waiting"))
+          .order("asc")
+          .paginate(paginationOpts)
+      : await ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpCsKey_state_dueAt", (q: any) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpState", "waiting"))
+          .order("asc")
+          .paginate(paginationOpts)
+    : args.stage
+      ? await ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpStage_state_dueAt", (q: any) => q
+            .eq("orgId", orgId)
+            .eq("followUpNextStage", args.stage)
+            .eq("followUpState", "waiting"))
+          .order("asc")
+          .paginate(paginationOpts)
+      : await ctx.db
+          .query("conversations")
+          .withIndex("by_org_followUpState_dueAt", (q: any) => q
+            .eq("orgId", orgId)
+            .eq("followUpState", "waiting"))
+          .order("asc")
+          .paginate(paginationOpts);
 
-    const dueRows = result.page.filter((row) => row.followUpCycleInboundAt !== undefined
-      && row.followUpCycleInboundAt >= args.now - FOLLOW_UP_EXPIRY_MS);
-    const page = await Promise.all(dueRows.map(async (row) => {
-      const [order, lastMessage] = await Promise.all([
-        ctx.db.query("orders").withIndex("by_org_orderId", (q) => q
-          .eq("orgId", orgId).eq("orderId", row.orderId)).first(),
-        ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q
-          .eq("conversationId", row._id)).order("desc").first(),
-      ]);
+  return {
+    page: result.page.map((row: any) => {
+      const cycleInboundAt = row.followUpCycleInboundAt ?? row.followUpCycleStartedAt ?? row.createdAt;
+      const latestInboundAt = row.followUpLastInboundAt ?? Number.NEGATIVE_INFINITY;
+      const latestOutboundAt = row.followUpLastOutboundAt ?? Number.NEGATIVE_INFINITY;
+      const outboundIsLatest = latestOutboundAt >= latestInboundAt;
+      const lastMessagePreview = outboundIsLatest
+        ? row.followUpLastOutboundPreview ?? ""
+        : row.followUpLastInboundPreview ?? "";
+      const lastMessageAt = Math.max(latestInboundAt, latestOutboundAt, cycleInboundAt);
       return {
         conversationId: row._id,
         customerName: row.customerName,
         customerPhone: row.customerPhone,
         orderId: row.orderId,
         csName: row.assignedCsName,
-        csKey: row.followUpCsKey!,
-        cycleInboundAt: row.followUpCycleInboundAt!,
+        csKey: row.followUpCsKey ?? csKey(row.assignedCsName),
+        cycleInboundAt,
         stage: row.followUpNextStage!,
         dueAt: row.followUpDueAt!,
-        productName: order?.productName ?? "Produk tidak tersedia",
-        lastMessagePreview: (lastMessage?.content ?? "").slice(0, 180),
-        lastMessageAt: lastMessage?.createdAt ?? row.followUpCycleInboundAt!,
+        ...snapshotContext(row),
+        ...dueMetadata(row.followUpDueAt!, args.now),
+        lastMessagePreview,
+        lastMessageAt,
         reason: "CS terakhir membalas, customer belum merespons",
       };
-    }));
-    return {
-      page,
-      isDone: result.isDone,
-      continueCursor: result.continueCursor,
-    };
+    }),
+    isDone: result.isDone,
+    continueCursor: result.continueCursor,
+  };
+}
+
+const followUpQueueArgs = {
+  stage: v.optional(followUpStageValidator),
+  csName: v.optional(v.string()),
+  now: v.number(),
+  paginationOpts: paginationOptsValidator,
+};
+const followUpQueueResult = v.object({
+  page: v.array(dueFollowUpValidator),
+  isDone: v.boolean(),
+  continueCursor: v.string(),
+});
+
+export const listFollowUpQueue = query({
+  args: followUpQueueArgs,
+  returns: followUpQueueResult,
+  handler: async (ctx, args) => listFollowUpQueueHandler(ctx, args, "followUp.listFollowUpQueue"),
+});
+
+export const listDueFollowUps = query({
+  args: followUpQueueArgs,
+  returns: followUpQueueResult,
+  handler: async (ctx, args) => listFollowUpQueueHandler(ctx, args, "followUp.listDueFollowUps"),
+});
+
+const followUpCountsValidator = v.object({
+  h1: v.number(),
+  h2: v.number(),
+  h3: v.number(),
+  review: v.number(),
+});
+
+export const getFollowUpCounts = query({
+  args: { csName: v.optional(v.string()) },
+  returns: followUpCountsValidator,
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.getFollowUpCounts",
+      args.csName,
+    );
+    if (effectiveCsName) {
+      const counter = await ctx.db.query("followUpCounters")
+        .withIndex("by_org_csKey", (q) => q.eq("orgId", orgId).eq("csKey", csKey(effectiveCsName)))
+        .unique();
+      return counter
+        ? { h1: counter.h1, h2: counter.h2, h3: counter.h3, review: counter.review }
+        : { h1: 0, h2: 0, h3: 0, review: 0 };
+    }
+
+    const counters = await ctx.db.query("followUpCounters")
+      .withIndex("by_org_csKey", (q) => q.eq("orgId", orgId))
+      .take(MAX_COUNTER_ROWS + 1);
+    if (counters.length > MAX_COUNTER_ROWS) {
+      throw new Error("followUp.getFollowUpCounts: more than 100 CS rows");
+    }
+    return counters.reduce((total, counter) => ({
+      h1: total.h1 + counter.h1,
+      h2: total.h2 + counter.h2,
+      h3: total.h3 + counter.h3,
+      review: total.review + counter.review,
+    }), { h1: 0, h2: 0, h3: 0, review: 0 });
   },
 });
 
@@ -270,6 +374,261 @@ export const listFollowUpAttention = query({
   },
 });
 
+const attentionPageRowValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  csKey: v.string(),
+  stage: v.optional(followUpStageValidator),
+  dueAt: v.optional(v.number()),
+  state: attentionStateValidator,
+  lastError: v.optional(v.string()),
+  reviewReason: v.optional(v.string()),
+  productName: v.string(),
+  cycleId: v.optional(v.string()),
+  lastInboundPreview: v.string(),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundPreview: v.string(),
+  lastOutboundAt: v.optional(v.number()),
+  lastDetectedStage: v.optional(followUpStageValidator),
+  lastDetectedTemplate: v.optional(v.string()),
+  updatedAt: v.number(),
+});
+
+export const listFollowUpAttentionPage = query({
+  args: {
+    csName: v.optional(v.string()),
+    state: v.optional(attentionStateValidator),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(attentionPageRowValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listFollowUpAttentionPage",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const state = args.state ?? "review";
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
+    };
+    const result = await (effectiveCsKey
+      ? ctx.db.query("conversations")
+          .withIndex("by_org_followUpCsKey_state_updatedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpState", state))
+      : ctx.db.query("conversations")
+          .withIndex("by_org_followUpState_updatedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpState", state)))
+      .order("desc")
+      .paginate(paginationOpts);
+
+    return {
+      page: result.page.map((row) => ({
+        conversationId: row._id,
+        customerName: row.customerName,
+        customerPhone: row.customerPhone,
+        orderId: row.orderId,
+        csName: row.assignedCsName,
+        csKey: row.followUpCsKey ?? csKey(row.assignedCsName),
+        stage: row.followUpNextStage,
+        dueAt: row.followUpDueAt,
+        state: row.followUpState as "sending" | "failed" | "unknown" | "review",
+        lastError: row.followUpLastError,
+        reviewReason: row.followUpReviewReason,
+        ...snapshotContext(row),
+        updatedAt: row.updatedAt,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+const archivedPageRowValidator = v.object({
+  conversationId: v.id("conversations"),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  orderId: v.string(),
+  csName: v.string(),
+  csKey: v.string(),
+  archivedAt: v.number(),
+  outcome: v.optional(v.union(
+    v.literal("h3_complete"),
+    v.literal("closing"),
+    v.literal("cancelled"),
+    v.literal("manual_archive"),
+  )),
+  productName: v.string(),
+  cycleId: v.optional(v.string()),
+  lastInboundPreview: v.string(),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundPreview: v.string(),
+  lastOutboundAt: v.optional(v.number()),
+  lastDetectedStage: v.optional(followUpStageValidator),
+  lastDetectedTemplate: v.optional(v.string()),
+  updatedAt: v.number(),
+});
+
+export const listArchivedFollowUpsPage = query({
+  args: {
+    csName: v.optional(v.string()),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(archivedPageRowValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listArchivedFollowUpsPage",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
+    };
+    const result = await (effectiveCsKey
+      ? ctx.db.query("conversations")
+          .withIndex("by_org_followUpCsKey_state_updatedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpCsKey", effectiveCsKey)
+            .eq("followUpState", "archived"))
+      : ctx.db.query("conversations")
+          .withIndex("by_org_followUpState_updatedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("followUpState", "archived")))
+      .order("desc")
+      .paginate(paginationOpts);
+
+    return {
+      page: result.page.map((row) => ({
+        conversationId: row._id,
+        customerName: row.customerName,
+        customerPhone: row.customerPhone,
+        orderId: row.orderId,
+        csName: row.assignedCsName,
+        csKey: row.followUpCsKey ?? csKey(row.assignedCsName),
+        archivedAt: row.followUpArchivedAt ?? row.updatedAt,
+        outcome: row.followUpOutcome,
+        ...snapshotContext(row),
+        updatedAt: row.updatedAt,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+const closedPageRowValidator = v.object({
+  conversationId: v.optional(v.id("conversations")),
+  customerName: v.string(),
+  customerPhone: v.string(),
+  csName: v.string(),
+  csKey: v.string(),
+  orderId: v.string(),
+  closedAt: v.number(),
+  product: v.string(),
+  touches: v.number(),
+  fromFollowUp: v.boolean(),
+  contextAvailable: v.boolean(),
+  stage: v.optional(followUpStageValidator),
+  productName: v.optional(v.string()),
+  lastInboundPreview: v.optional(v.string()),
+  lastInboundAt: v.optional(v.number()),
+  lastOutboundPreview: v.optional(v.string()),
+  lastOutboundAt: v.optional(v.number()),
+  lastDetectedStage: v.optional(followUpStageValidator),
+  lastDetectedTemplate: v.optional(v.string()),
+});
+export const listClosedFollowUpsPage = query({
+  args: {
+    csName: v.optional(v.string()),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: v.object({
+    page: v.array(closedPageRowValidator),
+    isDone: v.boolean(),
+    continueCursor: v.string(),
+  }),
+  handler: async (ctx, args) => {
+    const { orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.listClosedFollowUpsPage",
+      args.csName,
+    );
+    const effectiveCsKey = effectiveCsName ? csKey(effectiveCsName) : undefined;
+    const paginationOpts = {
+      cursor: args.paginationOpts.cursor,
+      numItems: pageSize(args.paginationOpts.numItems, MAX_QUEUE_PAGE_SIZE),
+    };
+    // New writes maintain this ledger-compatible classification transactionally.
+    // Task 9 must bounded-backfill legacy rows before cutover; missing legacy
+    // classifications intentionally do not trigger a scan fallback here.
+    const result = await (effectiveCsKey
+      ? ctx.db.query("shippingRecaps")
+          .withIndex("by_org_csKey_closingBucket_closedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("csKey", effectiveCsKey)
+            .eq("closingBucket", "counted"))
+      : ctx.db.query("shippingRecaps")
+          .withIndex("by_org_closingBucket_closedAt", (q) => q
+            .eq("orgId", orgId)
+            .eq("closingBucket", "counted")))
+      .order("desc")
+      .paginate(paginationOpts);
+
+    return {
+      page: result.page.map((row) => {
+        const touches = row.followUpTouchesAtClose ?? 0;
+        return {
+          conversationId: row.conversationId,
+          customerName: row.customerName,
+          customerPhone: row.customerPhone,
+          csName: row.csName,
+          csKey: row.followUpCsKey ?? row.csKey ?? csKey(row.csName),
+          orderId: row.orderIdBerdu ?? "",
+          closedAt: row.closedAt,
+          product: row.packageContent,
+          touches,
+          fromFollowUp: touches > 0,
+          contextAvailable: row.followUpStage !== undefined
+            || row.followUpProductName !== undefined
+            || row.followUpLastInboundPreview !== undefined
+            || row.followUpLastInboundAt !== undefined
+            || row.followUpLastOutboundPreview !== undefined
+            || row.followUpLastOutboundAt !== undefined
+            || row.followUpLastDetectedStage !== undefined
+            || row.followUpLastDetectedTemplate !== undefined,
+          stage: row.followUpStage,
+          productName: row.followUpProductName,
+          lastInboundPreview: row.followUpLastInboundPreview,
+          lastInboundAt: row.followUpLastInboundAt,
+          lastOutboundPreview: row.followUpLastOutboundPreview,
+          lastOutboundAt: row.followUpLastOutboundAt,
+          lastDetectedStage: row.followUpLastDetectedStage,
+          lastDetectedTemplate: row.followUpLastDetectedTemplate,
+        };
+      }),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
 const reservationStatusValidator = v.union(
   v.literal("sending"),
   v.literal("accepted"),
@@ -288,6 +647,8 @@ const reservationResultValidator = v.union(
     language: v.string(),
     orderedValues: v.array(v.string()),
     idempotencyKey: v.string(),
+    expectedCycleId: v.string(),
+    stage: followUpStageValidator,
   }),
 );
 
@@ -304,6 +665,8 @@ type ReservationResult =
       language: string;
       orderedValues: string[];
       idempotencyKey: string;
+      expectedCycleId: string;
+      stage: 1 | 2 | 3;
     };
 type SendDueFollowUpResult = {
   ok: boolean;
@@ -357,18 +720,17 @@ export const reserveDueFollowUp = internalMutation({
       throw new Error("Pengiriman Follow-up masih diproses.");
     }
 
-    const currentTime = Date.now();
     if (
       conversation.status === "closed" ||
       conversation.followUpState !== "waiting" ||
       conversation.followUpNextStage !== args.stage ||
       conversation.followUpDueAt === undefined ||
-      conversation.followUpDueAt > currentTime ||
       conversation.followUpCycleInboundAt === undefined ||
-      conversation.followUpCycleInboundAt < currentTime - FOLLOW_UP_EXPIRY_MS
+      conversation.followUpCycleId === undefined
     ) {
       throw new Error("Follow-up ini tidak lagi jatuh tempo.");
     }
+    const currentTime = Date.now();
 
     const recap = await ctx.db
       .query("shippingRecaps")
@@ -423,6 +785,7 @@ export const reserveDueFollowUp = internalMutation({
       conversationId: conversation._id,
       csKey: agentKey,
       cycleInboundAt: conversation.followUpCycleInboundAt,
+      cycleId: conversation.followUpCycleId,
       stage: args.stage,
       method: "provider_template",
       nonce: args.requestId,
@@ -436,13 +799,14 @@ export const reserveDueFollowUp = internalMutation({
     });
     if (attempt.duplicate) return { shouldSend: false as const, status: attempt.status };
 
-    await ctx.db.patch(conversation._id, {
-      followUpState: "sending",
-      followUpRequestId: args.requestId,
-      followUpProviderMessageId: undefined,
-      followUpLastError: undefined,
-      updatedAt: currentTime,
+    const sending = await markCurrentStageSending(ctx, {
+      conversation,
+      expectedCycleId: conversation.followUpCycleId,
+      expectedStage: args.stage,
+      requestId: args.requestId,
+      createdAt: currentTime,
     });
+    if (!sending.applied) throw new Error("Follow-up ini tidak lagi jatuh tempo.");
     await ctx.scheduler.runAfter(2 * 60_000, internal.followUp.expireSendingReservation, {
       conversationId: conversation._id,
       requestId: args.requestId,
@@ -456,6 +820,8 @@ export const reserveDueFollowUp = internalMutation({
       language: template.language,
       orderedValues,
       idempotencyKey,
+      expectedCycleId: conversation.followUpCycleId,
+      stage: args.stage,
     };
   },
 });
@@ -464,6 +830,8 @@ export const finalizeDueFollowUp = internalMutation({
   args: {
     conversationId: v.id("conversations"),
     requestId: v.string(),
+    expectedCycleId: v.string(),
+    stage: followUpStageValidator,
     outcome: v.union(v.literal("accepted"), v.literal("failed"), v.literal("unknown")),
     providerMessageId: v.optional(v.string()),
     error: v.optional(v.string()),
@@ -474,23 +842,14 @@ export const finalizeDueFollowUp = internalMutation({
     const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.finalizeDueFollowUp");
     const conversation = await ctx.db.get(args.conversationId);
     if (!conversation || String(conversation.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    await assertFollowUpCutoverUnlocked(ctx, conversation.orgId);
     if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
       throw new Error("unauthorized: conversation scope mismatch");
     }
-    if (conversation.followUpRequestId !== args.requestId) throw new Error("Reservasi Follow-up tidak cocok.");
-    if (conversation.followUpProviderMessageId) return { ok: true as const, status: "accepted" as const };
-    if (conversation.followUpState !== "sending") {
-      const status: ReservationStatus = conversation.followUpState === "unknown" ? "unknown" : "failed";
-      return { ok: true as const, status };
-    }
-
-    if (!conversation.followUpCycleInboundAt || !conversation.followUpNextStage) {
-      throw new Error("Stage Follow-up tidak tersedia.");
-    }
     const key = attemptKey(
       String(conversation._id),
-      conversation.followUpCycleInboundAt,
-      conversation.followUpNextStage,
+      args.expectedCycleId,
+      args.stage,
       "provider_template",
       args.requestId,
     );
@@ -498,6 +857,8 @@ export const finalizeDueFollowUp = internalMutation({
       .withIndex("by_org_attemptKey", (q) => q.eq("orgId", orgId).eq("attemptKey", key))
       .unique();
     if (!attempt) throw new Error("Attempt Follow-up tidak ditemukan.");
+    if (attempt.status === "accepted") return { ok: true as const, status: "accepted" as const };
+    if (attempt.status !== "sending") return { ok: true as const, status: attempt.status };
 
     const finalizedAt = args.acceptedAt ?? Date.now();
     if (!Number.isFinite(finalizedAt) || Math.abs(Date.now() - finalizedAt) > 60_000) {
@@ -510,11 +871,15 @@ export const finalizeDueFollowUp = internalMutation({
         at: finalizedAt,
         error: args.error ?? "Pengiriman gagal tanpa detail.",
       });
-      await ctx.db.patch(conversation._id, {
-        followUpState: args.outcome,
-        followUpLastError: (args.error ?? "Pengiriman gagal tanpa detail.").slice(0, 500),
-        updatedAt: finalizedAt,
-      });
+      if (conversation.followUpCycleId === args.expectedCycleId
+        && conversation.followUpRequestId === args.requestId
+        && conversation.followUpState === "sending") {
+        await ctx.db.patch(conversation._id, {
+          followUpState: args.outcome,
+          followUpLastError: (args.error ?? "Pengiriman gagal tanpa detail.").slice(0, 500),
+          updatedAt: finalizedAt,
+        });
+      }
       return { ok: true as const, status: args.outcome as ReservationStatus };
     }
     if (!args.providerMessageId?.trim()) throw new Error("ID pesan provider wajib untuk pengiriman diterima.");
@@ -531,7 +896,7 @@ export const finalizeDueFollowUp = internalMutation({
         customerPhone: conversation.customerPhone,
         role: "cs",
         direction: "outbound",
-        content: `[follow-up H+${conversation.followUpNextStage}]`,
+        content: `[follow-up H+${args.stage}]`,
         messageType: "template",
         source: "panel",
         externalMessageId: args.providerMessageId,
@@ -539,25 +904,26 @@ export const finalizeDueFollowUp = internalMutation({
       });
     }
 
-    const sentStage = conversation.followUpNextStage;
-    const next = advanceAfterAccepted(sentStage, finalizedAt);
     await finalizeAttempt(ctx, {
       attemptId: attempt._id,
       status: "accepted",
       at: finalizedAt,
       providerMessageId: args.providerMessageId,
     });
-    await ctx.db.patch(conversation._id, {
-      followUpStage: sentStage,
-      followUpStageAt: finalizedAt,
-      followUpNextStage: next.nextStage ?? undefined,
-      followUpDueAt: next.dueAt ?? undefined,
-      followUpState: next.state,
-      followUpProviderMessageId: args.providerMessageId,
-      followUpLastError: undefined,
-      lastMessageAt: finalizedAt,
-      updatedAt: finalizedAt,
+    await confirmCurrentStage(ctx, {
+      conversation,
+      expectedCycleId: args.expectedCycleId,
+      expectedStage: args.stage,
+      requestId: args.requestId,
+      createdAt: finalizedAt,
+      source: "provider_template",
+      providerMessageId: args.providerMessageId,
+      templateName: attempt.templateName,
     });
+    const current = await ctx.db.get(conversation._id);
+    if (current && current.followUpCycleId === args.expectedCycleId) {
+      await ctx.db.patch(conversation._id, { lastMessageAt: finalizedAt });
+    }
     return { ok: true as const, status: "accepted" as const };
   },
 });
@@ -577,17 +943,30 @@ export const expireSendingReservation = internalMutation({
     ) {
       return { expired: false };
     }
+    await assertFollowUpCutoverUnlocked(ctx, conversation.orgId);
     if (conversation.followUpCycleInboundAt && conversation.followUpNextStage) {
       const key = attemptKey(
         String(conversation._id),
-        conversation.followUpCycleInboundAt,
+        conversation.followUpCycleId ?? conversation.followUpCycleInboundAt,
         conversation.followUpNextStage,
         "provider_template",
         args.requestId,
       );
-      const attempt = await ctx.db.query("followUpAttempts")
+      let attempt = await ctx.db.query("followUpAttempts")
         .withIndex("by_org_attemptKey", (q) => q.eq("orgId", conversation.orgId).eq("attemptKey", key))
         .unique();
+      if (!attempt && conversation.followUpCycleId) {
+        const legacyKey = attemptKey(
+          String(conversation._id),
+          conversation.followUpCycleInboundAt,
+          conversation.followUpNextStage,
+          "provider_template",
+          args.requestId,
+        );
+        attempt = await ctx.db.query("followUpAttempts")
+          .withIndex("by_org_attemptKey", (q) => q.eq("orgId", conversation.orgId).eq("attemptKey", legacyKey))
+          .unique();
+      }
       if (attempt) await finalizeAttempt(ctx, {
         attemptId: attempt._id,
         status: "unknown",
@@ -632,6 +1011,8 @@ export const sendDueFollowUp = action({
         conversationId: args.conversationId,
         requestId: args.requestId,
         outcome: "failed",
+        expectedCycleId: reservation.expectedCycleId,
+        stage: reservation.stage,
         error,
       });
       return { ok: false, status: "failed", error };
@@ -655,6 +1036,8 @@ export const sendDueFollowUp = action({
           conversationId: args.conversationId,
           requestId: args.requestId,
           outcome: "accepted",
+          expectedCycleId: reservation.expectedCycleId,
+          stage: reservation.stage,
           providerMessageId: result.providerMessageId,
           acceptedAt: Date.now(),
         });
@@ -670,6 +1053,8 @@ export const sendDueFollowUp = action({
         conversationId: args.conversationId,
         requestId: args.requestId,
         outcome,
+        expectedCycleId: reservation.expectedCycleId,
+        stage: reservation.stage,
         error: result.error,
       });
       return { ok: false, status: outcome, error: result.error };
@@ -679,6 +1064,8 @@ export const sendDueFollowUp = action({
         conversationId: args.conversationId,
         requestId: args.requestId,
         outcome: "unknown",
+        expectedCycleId: reservation.expectedCycleId,
+        stage: reservation.stage,
         error,
       });
       return { ok: false, status: "unknown", error };
@@ -689,7 +1076,6 @@ export const sendDueFollowUp = action({
 export const confirmManualContact = mutation({
   args: {
     conversationId: v.id("conversations"),
-    stage: followUpStageValidator,
     requestId: v.string(),
   },
   returns: v.object({ ok: v.literal(true), duplicate: v.boolean() }),
@@ -704,32 +1090,61 @@ export const confirmManualContact = mutation({
     if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
       throw new Error("unauthorized: conversation scope mismatch");
     }
-    if (!conversation.followUpCycleInboundAt) throw new Error("Follow-up ini tidak lagi jatuh tempo.");
-    const key = attemptKey(String(conversation._id), conversation.followUpCycleInboundAt, args.stage, "manual_confirmation", args.requestId);
-    const existing = await ctx.db.query("followUpAttempts")
-      .withIndex("by_org_attemptKey", (q) => q.eq("orgId", orgId).eq("attemptKey", key))
+    const existingConfirmation = await ctx.db.query("followUpTransitions")
+      .withIndex("by_org_eventKey", (q) => q.eq("orgId", orgId).eq("eventKey", `confirmation:${args.requestId}`))
       .unique();
-    if (existing?.status === "accepted") return { ok: true as const, duplicate: true };
-
+    if (existingConfirmation) {
+      if (String(existingConfirmation.conversationId) !== String(conversation._id)) {
+        throw new Error("Request ID Follow-up sudah digunakan.");
+      }
+      return { ok: true as const, duplicate: true };
+    }
+    if ((conversation.followUpStage === 1 || conversation.followUpStage === 2 || conversation.followUpStage === 3)
+      && conversation.followUpCycleInboundAt !== undefined) {
+      const cycleIdentities = conversation.followUpCycleId
+        ? [conversation.followUpCycleId, conversation.followUpCycleInboundAt]
+        : [conversation.followUpCycleInboundAt];
+      for (const cycleIdentity of cycleIdentities) {
+        const priorAttempt = await ctx.db.query("followUpAttempts")
+          .withIndex("by_org_attemptKey", (q) => q.eq("orgId", orgId).eq("attemptKey", attemptKey(
+            String(conversation._id),
+            cycleIdentity,
+            conversation.followUpStage as 1 | 2 | 3,
+            "manual_confirmation",
+            args.requestId,
+          )))
+          .unique();
+        if (priorAttempt?.status === "accepted") return { ok: true as const, duplicate: true };
+      }
+    }
     const confirmedAt = Date.now();
     if (conversation.status === "closed"
       || conversation.followUpState !== "waiting"
-      || conversation.followUpNextStage !== args.stage
-      || conversation.followUpDueAt === undefined
-      || conversation.followUpDueAt > confirmedAt
-      || conversation.followUpCycleInboundAt < confirmedAt - FOLLOW_UP_EXPIRY_MS) {
+      || conversation.followUpNextStage === undefined
+      || conversation.followUpCycleInboundAt === undefined
+      || conversation.followUpCycleId === undefined) {
       throw new Error("Follow-up ini tidak lagi jatuh tempo.");
     }
     const recap = await ctx.db.query("shippingRecaps")
       .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", orgId).eq("orderIdBerdu", conversation.orderId))
       .first();
     if (recap) throw new Error("Order sudah closing atau dibatalkan.");
+    const stage = conversation.followUpNextStage;
+    const lifecycle = await confirmCurrentStage(ctx, {
+      conversation,
+      requestId: args.requestId,
+      createdAt: confirmedAt,
+      actorName: viewer.name,
+    });
+    if (lifecycle.duplicate) return { ok: true as const, duplicate: true };
+    if (!lifecycle.applied) throw new Error("Follow-up ini tidak lagi jatuh tempo.");
     const accepted = await recordAcceptedAttempt(ctx, {
       orgId,
       conversationId: conversation._id,
       csKey: conversation.followUpCsKey ?? csKey(conversation.assignedCsName),
       cycleInboundAt: conversation.followUpCycleInboundAt,
-      stage: args.stage,
+      cycleId: conversation.followUpCycleId,
+      stage,
       method: "manual_confirmation",
       nonce: args.requestId,
       requestId: args.requestId,
@@ -738,19 +1153,73 @@ export const confirmManualContact = mutation({
       acceptedAt: confirmedAt,
     });
     if (accepted.duplicate) return { ok: true as const, duplicate: true };
-    const next = advanceAfterAccepted(args.stage, confirmedAt);
-    await ctx.db.patch(conversation._id, {
-      followUpStage: args.stage,
-      followUpStageAt: confirmedAt,
-      followUpNextStage: next.nextStage ?? undefined,
-      followUpDueAt: next.dueAt ?? undefined,
-      followUpState: next.state,
-      followUpRequestId: args.requestId,
-      followUpProviderMessageId: undefined,
-      followUpLastError: undefined,
-      updatedAt: confirmedAt,
-    });
     return { ok: true as const, duplicate: false };
+  },
+});
+
+export const correctFollowUpStage = mutation({
+  args: {
+    conversationId: v.id("conversations"),
+    targetStage: followUpStageValidator,
+    requestId: v.string(),
+  },
+  returns: v.object({ ok: v.literal(true), duplicate: v.boolean() }),
+  handler: async (ctx, args) => {
+    if (!REQUEST_ID_RE.test(args.requestId)) throw new Error("Request ID Follow-up tidak valid.");
+    const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(
+      ctx,
+      "followUp.correctFollowUpStage",
+    );
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation || String(conversation.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+    if (viewer.role === "cs" && (!effectiveCsName || csKey(conversation.assignedCsName) !== csKey(effectiveCsName))) {
+      throw new Error("unauthorized: conversation scope mismatch");
+    }
+    if (conversation.status === "closed") throw new Error("Percakapan sudah ditutup.");
+    if (conversation.followUpState === "sending" || conversation.followUpState === "unknown") {
+      throw new Error("Status pengiriman belum diketahui. Periksa riwayat KirimDev sebelum mengubah tahap.");
+    }
+    const recap = await ctx.db.query("shippingRecaps")
+      .withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", orgId).eq("orderIdBerdu", conversation.orderId))
+      .first();
+    if (recap) throw new Error("Order sudah closing atau dibatalkan.");
+    const result = await correctCurrentStage(ctx, {
+      conversation,
+      targetStage: args.targetStage,
+      requestId: args.requestId,
+      actorName: viewer.name,
+    });
+    return { ok: true as const, duplicate: result.duplicate };
+  },
+});
+
+async function scopedFollowUpConversation(ctx: any, conversationId: Id<"conversations">, functionName: string) {
+  const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, functionName);
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation || String(conversation.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
+  if (viewer.role === "cs" && (!effectiveCsName || conversation.followUpCsKey !== csKey(effectiveCsName))) {
+    throw new Error("unauthorized: conversation scope mismatch");
+  }
+  return { orgId, conversation };
+}
+
+export const markFollowUpClosing = mutation({
+  args: { conversationId: v.id("conversations"), expectedCycleId: v.string() },
+  handler: async (ctx, args) => {
+    if (!args.expectedCycleId.trim()) throw new Error("Identitas siklus follow-up wajib tersedia.");
+    const { orgId, conversation } = await scopedFollowUpConversation(ctx, args.conversationId, "followUp.markFollowUpClosing");
+    return markConversationClosingCore(ctx, { orgId, conversation, requiredCycleId: args.expectedCycleId });
+  },
+});
+
+export const markFollowUpCancelled = mutation({
+  args: { conversationId: v.id("conversations"), expectedCycleId: v.string(), reason: v.string() },
+  handler: async (ctx, args) => {
+    if (!args.expectedCycleId.trim()) throw new Error("Identitas siklus follow-up wajib tersedia.");
+    const reason = args.reason.trim();
+    if (!reason) throw new Error("Alasan pembatalan wajib diisi.");
+    const { orgId, conversation } = await scopedFollowUpConversation(ctx, args.conversationId, "followUp.markFollowUpCancelled");
+    return markConversationCancelledCore(ctx, { orgId, conversation, note: reason, requiredCycleId: args.expectedCycleId });
   },
 });
 
@@ -858,17 +1327,13 @@ async function followUpCandidatesHandler(ctx: any, args: { csName?: string; nowO
     }
     const deduped = [...byPhone.values()];
 
-    // Product name only for the final candidates.
-    const orders = await Promise.all(
-      deduped.map((e) => ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", args.orgId).eq("orderId", e.c.orderId)).first()),
-    );
     const stage1: Candidate[] = [];
     const stage2: Candidate[] = [];
     const stage3: Candidate[] = [];
-    deduped.forEach((e, i) => {
+    deduped.forEach((e) => {
       const card: Candidate = {
         conversationId: e.c._id, customerName: e.c.customerName, customerPhone: e.c.customerPhone,
-        productName: orders[i]?.productName ?? "—", orderId: e.c.orderId,
+        productName: e.c.followUpProductName ?? "—", orderId: e.c.orderId,
         csName: e.c.assignedCsName, lastInboundAt: e.lastInboundAt, touchAts: e.touchAts, lastMessageText: e.lastMessageText,
       };
       (e.stage === 1 ? stage1 : e.stage === 2 ? stage2 : stage3).push(card);
@@ -889,27 +1354,49 @@ export const getFollowUpCandidatesDiagnostic = internalQuery({
 });
 
 export const archiveFollowUp = mutation({
-  args: { conversationId: v.id("conversations") },
-  returns: v.object({ ok: v.literal(true) }),
+  args: { conversationId: v.id("conversations"), requestId: v.string() },
+  returns: v.object({ ok: v.literal(true), duplicate: v.boolean() }),
   handler: async (ctx, args) => {
+    if (!REQUEST_ID_RE.test(args.requestId)) throw new Error("Request ID Follow-up tidak valid.");
     const { viewer, orgId, effectiveCsName } = await requireScopedMemberOrg(ctx, "followUp.archiveFollowUp");
     const c = await ctx.db.get(args.conversationId);
     if (!c || String(c.orgId) !== String(orgId)) throw new Error("Percakapan tidak ditemukan.");
     if (viewer.role === "cs" && (!effectiveCsName || csKey(c.assignedCsName) !== csKey(effectiveCsName))) {
       throw new Error("unauthorized: conversation scope mismatch");
     }
+    if (c.followUpState === "unknown") {
+      throw new Error("Status pengiriman belum diketahui. Periksa riwayat KirimDev sebelum mengarsipkan.");
+    }
+    const eventKey = `archive:${args.requestId}`;
+    const existing = await ctx.db.query("followUpTransitions")
+      .withIndex("by_org_eventKey", (q) => q.eq("orgId", orgId).eq("eventKey", eventKey))
+      .unique();
+    if (existing) {
+      if (String(existing.conversationId) !== String(c._id) || existing.kind !== "archived") {
+        throw new Error("Request ID Follow-up sudah digunakan untuk tindakan lain.");
+      }
+      if (c.followUpState !== "archived"
+        || c.followUpCycleId !== existing.cycleId
+        || c.followUpRequestId !== args.requestId) {
+        throw new Error("Request ID archive tidak lagi mewakili status saat ini; gunakan request ID baru.");
+      }
+      return { ok: true as const, duplicate: true };
+    }
+    if (c.followUpState !== "waiting" && c.followUpState !== "review" && c.followUpState !== "failed") {
+      throw new Error("Follow-up tidak dapat diarsipkan dari status saat ini.");
+    }
     const now = Date.now();
-    await ctx.db.patch(args.conversationId, {
-      status: "closed",
-      followUpArchivedAt: now,
-      followUpNextStage: undefined,
-      followUpDueAt: undefined,
-      followUpState: "archived",
-      followUpRequestId: undefined,
-      followUpLastError: undefined,
-      updatedAt: now,
+    const result = await terminateCycle(ctx, {
+      conversation: c,
+      eventKey,
+      kind: "archived",
+      createdAt: now,
+      actorName: viewer.name,
+      source: "manual",
     });
-    return { ok: true as const };
+    if (!result.applied) throw new Error("Follow-up tidak berubah; muat ulang data terbaru.");
+    await ctx.db.patch(c._id, { followUpRequestId: args.requestId });
+    return { ok: true as const, duplicate: false };
   },
 });
 
@@ -925,16 +1412,13 @@ export const unarchiveFollowUp = mutation({
       throw new Error("unauthorized: conversation scope mismatch");
     }
     const now = Date.now();
-    await ctx.db.patch(args.conversationId, {
-      status: "active",
-      followUpArchivedAt: undefined,
-      followUpNextStage: undefined,
-      followUpDueAt: undefined,
-      followUpState: undefined,
-      followUpRequestId: undefined,
-      followUpLastError: undefined,
-      updatedAt: now,
-    });
+    const result = await reopenArchivedCycle(ctx, { conversation: c, createdAt: now });
+    if (!result.applied) {
+      if (c.followUpState === "unknown") {
+        throw new Error("Status pengiriman belum diketahui. Periksa riwayat KirimDev sebelum membuka arsip.");
+      }
+      throw new Error("Follow-up belum diarsipkan atau sudah berubah; muat ulang data terbaru.");
+    }
     return { ok: true as const };
   },
 });
@@ -949,7 +1433,6 @@ export const candidacyFor = internalQuery({
     const recap = await ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q) => q.eq("orgId", c.orgId).eq("orderIdBerdu", c.orderId)).first();
     const lastMsg = await ctx.db.query("messages").withIndex("by_conversation_createdAt", (q) => q.eq("conversationId", c._id)).order("desc").first();
     const lastInbound = await ctx.db.query("messages").withIndex("by_conversation_direction_createdAt", (q) => q.eq("conversationId", c._id).eq("direction", "inbound")).order("desc").first();
-    const order = await ctx.db.query("orders").withIndex("by_org_orderId", (q) => q.eq("orgId", c.orgId).eq("orderId", c.orderId)).first();
     const normName = normalizeCsName(c.assignedCsName);
     let cfg = await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q) => q.eq("orgId", c.orgId).eq("normalizedName", normName)).first();
     if (!cfg || !cfg.providerNumberId) {
@@ -975,7 +1458,7 @@ export const candidacyFor = internalQuery({
       customerName: c.customerName,
       customerPhone: c.customerPhone,
       orderId: c.orderId,
-      productName: order?.productName ?? "—",
+      productName: c.followUpProductName ?? "—",
     };
   },
 });
@@ -998,18 +1481,18 @@ export const getArchivedFollowUps = query({
     const since = now - 14 * DAY;
     const csKeyMemo = effectiveCsName ? csKey(effectiveCsName) : null;
 
-    // Manual archive sets status="closed" + followUpArchivedAt, so read only recently-closed
-    // conversations via the index (NOT a full-table .filter().collect() scan) then keep the
-    // ones that were actually archived. Bounds reads to recent closed convs.
-    const archived = await collectExactBounded(ctx.db
-      .query("conversations")
-      .withIndex("by_org_status_updatedAt", (q) => q.eq("orgId", orgId).eq("status", "closed").gte("updatedAt", since))
-      , "followUp archived conversations");
+    const archived = await collectExactBounded(
+      csKeyMemo
+        ? ctx.db.query("conversations").withIndex("by_org_followUpCsKey_state_updatedAt", (q) => q
+            .eq("orgId", orgId).eq("followUpCsKey", csKeyMemo).eq("followUpState", "archived").gte("updatedAt", since))
+        : ctx.db.query("conversations").withIndex("by_org_followUpState_updatedAt", (q) => q
+            .eq("orgId", orgId).eq("followUpState", "archived").gte("updatedAt", since)),
+      "followUp archived conversations",
+    );
 
     const filtered = archived
-      .filter((c) => c.followUpArchivedAt != null)
       .filter((c) => !isInternalTestPhone(c.customerPhone, internalPhones))
-      .filter((c) => (csKeyMemo ? csKey(c.assignedCsName) === csKeyMemo : true));
+      .filter((c) => c.followUpArchivedAt != null);
 
     type ArchivedRow = {
       conversationId: typeof archived[0]["_id"];

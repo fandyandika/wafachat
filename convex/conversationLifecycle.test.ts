@@ -76,6 +76,8 @@ test("scan/apply closes WON (recap) + STALE (>5d), keeps FRESH; counts correct",
       ...conv("O-WON", "62801"),
       followUpCsKey: "nabila",
       followUpCycleInboundAt: now - 6 * DAY,
+      followUpCycleId: "cycle:sweep-won",
+      followUpCycleStartedAt: now - 6 * DAY + 1,
       followUpNextStage: 2,
       followUpDueAt: now - DAY,
       followUpState: "waiting",
@@ -83,15 +85,13 @@ test("scan/apply closes WON (recap) + STALE (>5d), keeps FRESH; counts correct",
     await ctx.db.insert("orders", { orgId, ...order("O-WON", "62801") });
     await ctx.db.insert("shippingRecaps", { orgId, ...recap("O-WON", "62801") });
     await ctx.db.insert("messages", { orgId, ...inbound(won, "O-WON", "62801", now - 6 * DAY) });
+    await ctx.db.insert("followUpCounters", {
+      orgId, csKey: "nabila", h1: 0, h2: 1, h3: 0, review: 0, updatedAt: now - DAY,
+    });
 
     stale = await ctx.db.insert("conversations", {
       orgId,
       ...conv("O-STALE", "62802"),
-      followUpCsKey: "nabila",
-      followUpCycleInboundAt: now - 6 * DAY,
-      followUpNextStage: 3,
-      followUpDueAt: now - DAY,
-      followUpState: "waiting",
     });
     await ctx.db.insert("orders", { orgId, ...order("O-STALE", "62802") });
     await ctx.db.insert("messages", { orgId, ...inbound(stale, "O-STALE", "62802", now - 6 * DAY) }); // last inbound 6d ago
@@ -111,8 +111,49 @@ test("scan/apply closes WON (recap) + STALE (>5d), keeps FRESH; counts correct",
     expect(await ctx.db.get(stale)).toMatchObject({ followUpState: "archived" });
     expect((await ctx.db.get(won))?.followUpDueAt).toBeUndefined();
     expect((await ctx.db.get(stale))?.followUpDueAt).toBeUndefined();
+    expect(await ctx.db.query("followUpCounters").unique()).toMatchObject({ h1: 0, h2: 0, h3: 0, review: 0 });
+    expect(await ctx.db.query("followUpTransitions").collect()).toEqual([
+      expect.objectContaining({ cycleId: "cycle:sweep-won", kind: "closing", source: "system" }),
+    ]);
   });
 });
+
+test.each(["waiting", "sending", "failed", "unknown", "review"] as const)(
+  "stale sweep skips a conversation while lifecycle state is %s",
+  async (followUpState) => {
+    const t = convexTest(schema);
+    const orgId = await seedOrg(t);
+    const conversationId = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("conversations", {
+        orgId,
+        ...conv(`O-PROTECTED-${followUpState}`, `62809${followUpState.length}`),
+        followUpCsKey: "nabila",
+        followUpCycleInboundAt: now - 6 * DAY,
+        followUpCycleId: `cycle:protected:${followUpState}`,
+        followUpCycleStartedAt: now - 6 * DAY,
+        followUpNextStage: 2,
+        followUpDueAt: now - DAY,
+        followUpState,
+      });
+      await ctx.db.insert("messages", {
+        orgId,
+        ...inbound(id, `O-PROTECTED-${followUpState}`, `62809${followUpState.length}`, now - 6 * DAY),
+      });
+      return id;
+    });
+
+    const result = await t.mutation(internal.conversationLifecycle.processConversationIds, {
+      ids: [conversationId], dryRun: false, now, orgId,
+    });
+
+    expect(result).toEqual({ closedWon: 0, closedMarker: 0, closedStale: 0 });
+    expect(await t.run((ctx) => ctx.db.get(conversationId))).toMatchObject({
+      status: "active",
+      followUpState,
+      followUpCycleId: `cycle:protected:${followUpState}`,
+    });
+  },
+);
 
 test("scan/apply dryRun reports counts but mutates nothing", async () => {
   const t = convexTest(schema);

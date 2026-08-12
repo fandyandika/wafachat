@@ -46,6 +46,16 @@ async function captureKirimdev(t: ReturnType<typeof convexTest>, orgId: any, raw
   });
 }
 
+async function seedCsProvider(t: ReturnType<typeof convexTest>, orgId: any) {
+  await t.run((ctx) => ctx.db.insert("csConfigs", {
+    orgId,
+    normalizedName: "cs azelia", csName: "CS Azelia", key: "azelia",
+    providerNumberIds: ["485071188032281"],
+    orderAutomationEnabled: false, aiAssistantEnabled: false, reportingEnabled: true,
+    isActive: true, createdAt: 1, updatedAt: 1,
+  }));
+}
+
 test("processEvent ingests message with original timestamp + CS from providerNumberIds", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
@@ -71,6 +81,15 @@ test("processEvent ingests message with original timestamp + CS from providerNum
     });
     const convs = await ctx.db.query("conversations").collect();
     expect(convs[0].assignedCsName).toBe("CS Azelia");
+    const health = await ctx.db.query("providerChannelHealth").collect();
+    expect(health).toHaveLength(1);
+    expect(health[0]).toMatchObject({
+      providerNumberId: "485071188032281",
+      channelType: "cs",
+      csKey: "azelia",
+      lastInboundAt: expect.any(Number),
+    });
+    expect(health[0].lastError).toBeUndefined();
   });
 });
 
@@ -92,6 +111,13 @@ test("admin provider number routes inbound only to the isolated expedition inbox
     expect(await ctx.db.query("messages").collect()).toHaveLength(0);
     expect(await ctx.db.query("conversations").collect()).toHaveLength(0);
     expect(await ctx.db.query("dailyRollups").collect()).toHaveLength(0);
+    const health = await ctx.db.query("providerChannelHealth").collect();
+    expect(health).toHaveLength(1);
+    expect(health[0]).toMatchObject({
+      providerNumberId: "485071188032281",
+      channelType: "admin",
+      lastInboundAt: expect.any(Number),
+    });
   });
 
   await t.run(async (ctx) => {
@@ -104,6 +130,39 @@ test("admin provider number routes inbound only to the isolated expedition inbox
     expect(await ctx.db.query("adminThreadMessages").collect()).toHaveLength(1);
     expect(await ctx.db.query("messages").collect()).toHaveLength(0);
     expect(await ctx.db.query("conversations").collect()).toHaveLength(0);
+    expect(await ctx.db.query("providerChannelHealth").unique()).toMatchObject({
+      channelType: "admin",
+      lastError: "Kanal admin tidak aktif",
+      errorAt: 1783427359000,
+    });
+  });
+});
+
+test("active admin status updates outbound health without writing a customer message", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run((ctx) => ctx.db.insert("adminChannels", {
+    orgId, name: "Admin Ekspedisi", provider: "kirimdev", providerNumberId: "485071188032281",
+    isActive: true, createdAt: 1, updatedAt: 1,
+  }));
+  const raw = JSON.stringify({ entry: [{ changes: [{ value: {
+    metadata: { phone_number_id: "485071188032281" },
+    statuses: [{ id: "wamid.admin-out", status: "delivered", timestamp: "1783427400" }],
+  } }] }] });
+  const eventId = await captureKirimdev(t, orgId, raw, JSON.stringify({
+    "x-kirim-event": "message.status", "x-kirim-event-id": "evt-admin-status",
+  }));
+
+  expect(await t.mutation(internal.ingest.core.processEvent, { eventId })).toEqual({
+    status: "skipped", skipReason: "admin inbox: outbound message not found",
+  });
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("messages").collect()).toHaveLength(0);
+    expect(await ctx.db.query("providerChannelHealth").unique()).toMatchObject({
+      channelType: "admin",
+      lastOutboundAt: 1783427400000,
+    });
+    expect((await ctx.db.query("providerChannelHealth").unique())?.lastError).toBeUndefined();
   });
 });
 
@@ -130,15 +189,95 @@ test("legacy single providerNumberId still matches", async () => {
 test("idempotent: same externalMessageId twice -> one message, both events processed", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
+  await seedCsProvider(t, orgId);
   const e1 = await captureKirimdev(t, orgId, RECEIVED_RAW);
   const e2 = await captureKirimdev(t, orgId, RECEIVED_RAW);
   await t.mutation(internal.ingest.core.processEvent, { eventId: e1 });
   await t.mutation(internal.ingest.core.processEvent, { eventId: e2 });
   await t.run(async (ctx) => {
     expect(await ctx.db.query("messages").collect()).toHaveLength(1);
+    expect(await ctx.db.query("providerChannelHealth").collect()).toHaveLength(1);
   });
   const events = await asAdmin(t).query(api.ingest.events.listRecent, {});
   expect(events.every((e) => e.status === "processed")).toBe(true);
+});
+
+test("unknown provider preserves a message only for an existing customer conversation", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId,
+    orderId: "existing-order",
+    customerPhone: "6285799533626",
+    customerName: "Kurn",
+    assignedCsName: "CS Lama",
+    status: "active",
+    aiEnabled: false,
+    note: "existing",
+    createdAt: 1,
+    updatedAt: 1,
+  }));
+
+  const eventId = await captureKirimdev(t, orgId, RECEIVED_RAW);
+  const outcome = await t.mutation(internal.ingest.core.processEvent, { eventId });
+  expect(outcome.status).toBe("processed");
+
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("conversations").collect()).toHaveLength(1);
+    expect(await ctx.db.query("messages").collect()).toEqual([
+      expect.objectContaining({ externalMessageId: "wamid.X1", conversationId: expect.any(String) }),
+    ]);
+    const health = await ctx.db.query("providerChannelHealth").unique();
+    expect(health).toMatchObject({
+      providerNumberId: "485071188032281",
+      channelType: "unknown",
+      lastError: "Nomor provider belum dipetakan",
+      errorAt: expect.any(Number),
+    });
+    expect(health).not.toHaveProperty("rawBody");
+  });
+});
+
+test("unknown provider does not create a conversation for an unresolved customer", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const eventId = await captureKirimdev(t, orgId, RECEIVED_RAW);
+
+  const outcome = await t.mutation(internal.ingest.core.processEvent, { eventId });
+  expect(outcome).toEqual({
+    status: "skipped",
+    skipReason: "provider number unmapped and customer conversation not found",
+  });
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("conversations").collect()).toHaveLength(0);
+    expect(await ctx.db.query("messages").collect()).toHaveLength(0);
+    expect(await ctx.db.query("providerChannelHealth").unique()).toMatchObject({
+      channelType: "unknown",
+      lastError: "Nomor provider belum dipetakan",
+    });
+  });
+});
+
+test("missing provider number fails safely before appending to an existing conversation", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  await t.run((ctx) => ctx.db.insert("conversations", {
+    orgId, orderId: "existing-order", customerPhone: "6285799533626", customerName: "Kurn",
+    assignedCsName: "CS Lama", status: "active", aiEnabled: false, note: "existing",
+    createdAt: 1, updatedAt: 1,
+  }));
+  const body = JSON.parse(RECEIVED_RAW);
+  delete body.entry[0].changes[0].value.metadata;
+  const eventId = await captureKirimdev(t, orgId, JSON.stringify(body));
+
+  expect(await t.mutation(internal.ingest.core.processEvent, { eventId })).toEqual({
+    status: "skipped",
+    skipReason: "missing provider number id",
+  });
+  await t.run(async (ctx) => {
+    expect(await ctx.db.query("messages").collect()).toHaveLength(0);
+    expect(await ctx.db.query("providerChannelHealth").collect()).toHaveLength(0);
+  });
 });
 
 test("skip payload marks skipped with reason", async () => {
@@ -154,6 +293,7 @@ test("skip payload marks skipped with reason", async () => {
 test("closing detection fires through the ingest path", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
+  await seedCsProvider(t, orgId);
   const sentRaw = JSON.stringify({
     type: "message.sent",
     data: {
@@ -178,6 +318,7 @@ test("closing detection fires through the ingest path", async () => {
 test("replayEvent re-processes an event (admin only), bookkeeping via replayOf", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);
+  await seedCsProvider(t, orgId);
   const eventId = await captureKirimdev(t, orgId, RECEIVED_RAW);
   await t.mutation(internal.ingest.events.markFailed, { eventId, error: "simulated" });
   await expect(t.mutation(api.ingest.core.replayEvent, { eventId })).rejects.toThrow(/unauthorized/);

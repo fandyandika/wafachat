@@ -3,10 +3,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
-import { ArrowLeft, Ban, CheckCheck, Clock3, Inbox, MessageSquareText, Plus, RefreshCw, RotateCcw, Send, Settings2 } from "lucide-react";
+import { ArrowLeft, Clock3, MessageSquareText, Plus, RefreshCw, Send, Settings2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { filterAdminThreads, sendFailureNeedsPageFeedback, type AdminInboxView } from "./admin-expedition-inbox-model";
+import { AdminExpeditionThreadList } from "./admin-expedition-thread-list";
+import { AdminExpeditionContext } from "./admin-expedition-context";
+import { AdminExpeditionMessage } from "./admin-expedition-message";
 
 type Feedback = { kind: "ok" | "error"; message: string } | null;
 
@@ -162,20 +166,6 @@ function requestId() {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
 
-function timeLabel(value?: number) {
-  if (!value) return "Belum ada pesan";
-  return new Intl.DateTimeFormat("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" }).format(value);
-}
-
-function statusLabel(status: string) {
-  if (status === "accepted") return "Terkirim";
-  if (status === "delivered") return "Diterima";
-  if (status === "read") return "Dibaca";
-  if (status === "failed") return "Gagal";
-  if (status === "unknown") return "Perlu dicek";
-  return "Mengirim";
-}
-
 export function AdminExpeditionInbox() {
   const setup = useQuery(api.adminInbox.getSetup, {});
   const channelId = setup?.channel?.id;
@@ -185,7 +175,13 @@ export function AdminExpeditionInbox() {
     { initialNumItems: 30 },
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [view, setView] = useState<AdminInboxView>("all");
   const selectedThread = threads.results.find((thread) => String(thread.id) === selectedId) ?? null;
+  const visibleThreads = useMemo(
+    () => filterAdminThreads(threads.results, search, view),
+    [search, threads.results, view],
+  );
   const messages = useQuery(api.adminInbox.listMessages, selectedThread ? { threadId: selectedThread.id, limit: 100 } : "skip");
   const linkedOrder = useQuery(api.adminInbox.getLinkedOrderState, selectedThread ? { threadId: selectedThread.id } : "skip");
   const cancelLinkedOrder = useMutation(api.adminInbox.cancelLinkedOrder);
@@ -212,6 +208,10 @@ export function AdminExpeditionInbox() {
     if (!templateId && activeTemplates[0]) setTemplateId(String(activeTemplates[0].id));
   }, [activeTemplates, templateId]);
 
+  useEffect(() => {
+    setFeedback(null);
+  }, [selectedId]);
+
   async function sendTemplate() {
     if (!setup?.channel || !selectedTemplate) return;
     const attemptId = templateAttemptId ?? requestId();
@@ -237,7 +237,15 @@ export function AdminExpeditionInbox() {
       });
       const result = await response.json();
       keepAttempt = result.statusUnknown === true;
-      if (!response.ok || !result.ok) throw new Error(result.error || "Template gagal dikirim.");
+      if (!response.ok || !result.ok) {
+        if (!sendFailureNeedsPageFeedback(result)) {
+          if (!keepAttempt) setTemplateAttemptId(null);
+          setNewOpen(false);
+          setFeedback(null);
+          return;
+        }
+        throw new Error(result.error || "Template gagal dikirim.");
+      }
       setFeedback({ kind: "ok", message: "Template diterima KirimDev." });
       setNewOpen(false);
       setCustomerPhone("");
@@ -269,7 +277,14 @@ export function AdminExpeditionInbox() {
       });
       const result = await response.json();
       keepAttempt = result.statusUnknown === true;
-      if (!response.ok || !result.ok) throw new Error(result.error || "Pesan gagal dikirim.");
+      if (!response.ok || !result.ok) {
+        if (!sendFailureNeedsPageFeedback(result)) {
+          if (!keepAttempt) setReplyAttemptId(null);
+          setFeedback(null);
+          return;
+        }
+        throw new Error(result.error || "Pesan gagal dikirim.");
+      }
       setReply("");
       setReplyAttemptId(null);
       setFeedback({ kind: "ok", message: "Pesan diterima KirimDev." });
@@ -343,63 +358,60 @@ export function AdminExpeditionInbox() {
         <div role={feedback.kind === "error" ? "alert" : "status"} className={cn("rounded-lg border px-3 py-2 text-sm", feedback.kind === "ok" ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-destructive/30 bg-destructive/5 text-destructive")}>{feedback.message}</div>
       )}
 
-      <div className="min-h-[calc(100dvh-12rem)] overflow-hidden rounded-xl border border-ledger-rule bg-card lg:grid lg:grid-cols-[340px_minmax(0,1fr)]">
-        <aside aria-label="Daftar percakapan ekspedisi" className={cn("border-ledger-rule lg:border-r", selectedThread && "hidden lg:block")}>
-          <div className="border-b border-ledger-rule px-4 py-3">
-            <p className="text-sm font-semibold">Percakapan</p>
-            <p className="text-xs text-muted-foreground">{threads.results.length} customer aktif</p>
-          </div>
-          {threads.status === "LoadingFirstPage" ? (
-            <p className="p-4 text-sm text-muted-foreground">Memuat percakapan…</p>
-          ) : threads.results.length === 0 ? (
-            <div className="px-6 py-14 text-center"><Inbox className="mx-auto size-6 text-muted-foreground" /><p className="mt-3 text-sm font-medium">Belum ada percakapan</p><p className="mt-1 text-xs text-muted-foreground">Mulai dengan template approved.</p></div>
-          ) : (
-            <div className="divide-y divide-ledger-rule">
-              {threads.results.map((thread) => (
-                <button key={String(thread.id)} type="button" onClick={() => setSelectedId(String(thread.id))} className="flex min-h-20 w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/60">
-                  <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold">{(thread.customerName || thread.customerPhone).slice(0, 2).toUpperCase()}</span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center justify-between gap-2"><strong className="truncate text-sm">{thread.customerName || thread.customerPhone}</strong><span className="shrink-0 text-[11px] text-muted-foreground">{timeLabel(thread.updatedAt)}</span></span>
-                    <span className="mt-1 flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{adminThreadListSubtitle(thread)}</span><span className={cn("shrink-0 rounded-full px-2 py-0.5", thread.windowOpen ? "bg-emerald-100 text-emerald-800" : "bg-muted")}>{thread.windowOpen ? "24 jam aktif" : "Template"}</span></span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-          {threads.status === "CanLoadMore" && <div className="p-3"><Button variant="outline" className="w-full" onClick={() => threads.loadMore(30)}>Muat lainnya</Button></div>}
-        </aside>
+      <div className="min-h-[calc(100dvh-12rem)] overflow-hidden rounded-xl border border-ledger-rule bg-card xl:grid xl:grid-cols-[320px_minmax(0,1fr)_280px]">
+        <AdminExpeditionThreadList
+          className={selectedThread ? "hidden xl:flex" : undefined}
+          threads={visibleThreads}
+          totalLoaded={threads.results.length}
+          selectedId={selectedId}
+          search={search}
+          view={view}
+          loadingFirstPage={threads.status === "LoadingFirstPage"}
+          canLoadMore={threads.status === "CanLoadMore"}
+          loadingMore={threads.status === "LoadingMore"}
+          onSearchChange={setSearch}
+          onViewChange={setView}
+          onSelect={setSelectedId}
+          onLoadMore={() => threads.loadMore(30)}
+        />
 
-        <main className={cn("min-w-0", !selectedThread && "hidden lg:block")}>
+        <main className={cn("min-w-0", !selectedThread && "hidden xl:block")}>
           {!selectedThread ? (
             <div className="flex min-h-[60vh] flex-col items-center justify-center p-6 text-center"><MessageSquareText className="size-7 text-muted-foreground" /><p className="mt-3 font-semibold">Pilih percakapan</p><p className="mt-1 text-sm text-muted-foreground">Riwayat pesan dan tindakan tampil di sini.</p></div>
           ) : (
             <div className="flex min-h-[calc(100dvh-12rem)] flex-col">
-              <header className="flex items-center gap-3 border-b border-ledger-rule px-3 py-3 md:px-5">
-                <Button variant="ghost" size="icon" className="lg:hidden" aria-label="Kembali ke daftar" onClick={() => setSelectedId(null)}><ArrowLeft className="size-5" /></Button>
+              <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-ledger-rule bg-card px-3 py-3 md:px-5">
+                <Button variant="ghost" size="icon" className="xl:hidden" aria-label="Kembali ke daftar" onClick={() => setSelectedId(null)}><ArrowLeft className="size-5" /></Button>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{selectedThread.customerName || selectedThread.customerPhone}</p>
                   <p className="truncate text-xs text-muted-foreground">{adminThreadMeta(selectedThread)}</p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {linkedOrder && (linkedOrder.status === "cancelled" || linkedOrder.status === "cancelled_after_export" ? linkedOrder.canUndo ? (
-                    <Button size="sm" variant="outline" disabled={busy} onClick={() => void undoCancellation()}><RotateCcw className="size-3.5" /> <span className="hidden sm:inline">Batalkan pembatalan</span></Button>
-                  ) : (
-                    <span className="rounded-full bg-destructive/10 px-2.5 py-1 text-xs font-medium text-destructive">Order dibatalkan</span>
-                  ) : (
-                    <Button size="sm" variant="destructive" disabled={busy} onClick={() => setCancelOpen(true)}><Ban className="size-3.5" /> <span className="hidden sm:inline">Batalkan order</span></Button>
-                  ))}
-                  <span className={cn("rounded-full px-2.5 py-1 text-xs font-medium", selectedThread.windowOpen ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-900")}>{selectedThread.windowOpen ? "Balasan bebas aktif" : "Hanya template"}</span>
-                </div>
+                <span className={cn("shrink-0 rounded-md px-2.5 py-1 text-xs font-medium", selectedThread.windowOpen ? "bg-positive-soft text-positive" : "bg-amber-50 text-amber-900")}>{selectedThread.windowOpen ? "Balasan bebas aktif" : "Hanya template"}</span>
               </header>
               <div className="flex-1 space-y-3 overflow-y-auto bg-muted/20 p-4 md:p-6">
-                {messages === undefined ? <p className="text-center text-sm text-muted-foreground">Memuat pesan…</p> : messages.map((message) => (
-                  <div key={String(message.id)} className={cn("flex", message.direction === "outbound" ? "justify-end" : "justify-start")}>
-                    <div className={cn("max-w-[86%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm md:max-w-[70%]", message.direction === "outbound" ? "rounded-br-md bg-primary text-primary-foreground" : "rounded-bl-md border border-ledger-rule bg-card")}>
-                      <p className="whitespace-pre-wrap break-words">{message.content}</p>
-                      {message.failureReason && <p className={cn("mt-2 rounded-md px-2 py-1 text-xs", message.direction === "outbound" ? "bg-black/15 text-primary-foreground" : "bg-destructive/10 text-destructive")}>{message.failureReason}</p>}
-                      <div className={cn("mt-1.5 flex items-center justify-end gap-1 text-[10px]", message.direction === "outbound" ? "text-primary-foreground/75" : "text-muted-foreground")}><span>{timeLabel(message.createdAt)}</span>{message.direction === "outbound" && <><CheckCheck className="size-3" /><span>{statusLabel(message.status)}</span></>}</div>
-                    </div>
+                {messages === undefined ? (
+                  <div role="status" className="space-y-3">
+                    <div className="h-16 w-3/5 animate-pulse rounded-xl bg-muted" />
+                    <div className="ml-auto h-20 w-2/3 animate-pulse rounded-xl bg-muted" />
+                    <span className="sr-only">Memuat pesan…</span>
                   </div>
+                ) : messages.length === 0 ? (
+                  <div className="flex min-h-56 flex-col items-center justify-center text-center">
+                    <MessageSquareText className="size-6 text-muted-foreground" />
+                    <p className="mt-3 text-sm font-semibold">Belum ada riwayat pesan</p>
+                    <p className="mt-1 max-w-xs text-xs leading-5 text-muted-foreground">Kirim template approved untuk memulai percakapan ini.</p>
+                  </div>
+                ) : messages.map((message) => (
+                  <AdminExpeditionMessage
+                    key={String(message.id)}
+                    direction={message.direction}
+                    messageType={message.messageType}
+                    content={message.content}
+                    status={message.status}
+                    failureReason={message.failureReason}
+                    actorName={message.actorName}
+                    createdAt={message.createdAt}
+                  />
                 ))}
               </div>
               <footer className="border-t border-ledger-rule bg-card p-3 md:p-4">
@@ -412,6 +424,15 @@ export function AdminExpeditionInbox() {
             </div>
           )}
         </main>
+        {selectedThread && (
+          <AdminExpeditionContext
+            thread={selectedThread}
+            linkedOrder={linkedOrder}
+            busy={busy}
+            onCancel={() => setCancelOpen(true)}
+            onUndoCancellation={() => void undoCancellation()}
+          />
+        )}
       </div>
 
       {newOpen && (

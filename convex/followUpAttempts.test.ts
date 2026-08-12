@@ -9,9 +9,10 @@ const modules = (import.meta as any).glob("./**/*.{ts,js}");
 const acceptedAt = Date.UTC(2026, 7, 11, 8, 0, 0);
 
 test("attemptKey distinguishes retries while remaining stable for one request", () => {
-  const first = attemptKey("conv-1", 10_000, 1, "provider_template", "request-1");
-  expect(first).toBe(attemptKey("conv-1", 10_000, 1, "provider_template", "request-1"));
-  expect(first).not.toBe(attemptKey("conv-1", 10_000, 1, "provider_template", "request-2"));
+  const first = attemptKey("conv-1", "cycle-1", 1, "provider_template", "request-1");
+  expect(first).toBe(attemptKey("conv-1", "cycle-1", 1, "provider_template", "request-1"));
+  expect(first).not.toBe(attemptKey("conv-1", "cycle-2", 1, "provider_template", "request-1"));
+  expect(first).not.toBe(attemptKey("conv-1", "cycle-1", 1, "provider_template", "request-2"));
 });
 
 test("accepted attempts are idempotent for the same cycle stage method and nonce", async () => {
@@ -43,6 +44,7 @@ test("accepted attempts are idempotent for the same cycle stage method and nonce
     conversationId,
     csKey: "aisyah",
     cycleInboundAt: 10_000,
+    cycleId: "cycle-attempt-1",
     stage: 1 as const,
     method: "provider_webhook" as const,
     nonce: "wamid.phone.1",
@@ -55,7 +57,8 @@ test("accepted attempts are idempotent for the same cycle stage method and nonce
 
   expect(first.duplicate).toBe(false);
   expect(second).toEqual({ attemptId: first.attemptId, duplicate: true });
-  expect(await t.run((ctx) => ctx.db.query("followUpAttempts").collect())).toHaveLength(1);
+  expect(await t.run((ctx) => ctx.db.query("followUpAttempts").unique()))
+    .toMatchObject({ cycleId: "cycle-attempt-1" });
 });
 
 test("listFollowUpHistory paginates accepted attempts by organization", async () => {

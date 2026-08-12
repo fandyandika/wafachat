@@ -55,6 +55,66 @@ test("captureWindow stores one daily Queen snapshot and stays idempotent", async
   expect(awards[0]).toMatchObject({ windowKey: WINDOW, status: "won", winnerCsName: "Azelia" });
 });
 
+test("every CS account sees the same organization-wide daily Queen", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  const windowKey = "2026-08-01";
+  const { startAt } = windowRangeForKey(windowKey);
+  const identities = await t.run(async (ctx: any) => {
+    const userIds: Record<string, string> = {};
+    for (const [csKey, csName, email, responseMs] of [
+      ["aisyah", "Aisyah", "aisyah@wafachat", 20 * 60_000],
+      ["azelia", "Azelia", "azelia@wafachat", 60_000],
+    ] as const) {
+      await ctx.db.insert("dailyRollups", {
+        orgId, windowKey, csKey, csName, leadOrders: 10, leadsCust: 10,
+        closings: 7, closedCust: 7, cancelled: 0, manualClosings: 0, delivered: 0,
+        revenue: 0, discount: 0, fuClosings: 0, fuH1: 0, fuH2: 0, fuH3: 0,
+        byProduct: [], updatedAt: startAt + 1,
+      });
+      for (let i = 0; i < 5; i++) {
+        const conversationId = await ctx.db.insert("conversations", {
+          orgId, orderId: `${csKey}-${i}`, customerPhone: `62812000${csKey === "aisyah" ? "1" : "2"}${i}`,
+          customerName: "Customer", assignedCsName: csName, status: "active", aiEnabled: false,
+          note: "", createdAt: startAt + i, updatedAt: startAt + i,
+        });
+        await ctx.db.insert("responseSamples", {
+          orgId, csKey, csName, conversationId, deltaMs: responseMs,
+          inboundAt: startAt + i, slaBreach: responseMs > 15 * 60_000, createdAt: startAt + i,
+        });
+      }
+      const userId = await ctx.db.insert("users", {
+        orgId, email, name: csName, role: "cs", csName, passwordHash: "x",
+        isActive: true, createdAt: 1, updatedAt: 1,
+      });
+      userIds[csKey] = String(userId);
+    }
+    return userIds;
+  });
+
+  const aisyah = t.withIdentity({ subject: identities.aisyah, role: "cs", name: "Aisyah", email: "aisyah@wafachat" });
+  const azelia = t.withIdentity({ subject: identities.azelia, role: "cs", name: "Azelia", email: "azelia@wafachat" });
+  const args = { businessDate: "2026-08-02" };
+
+  const [seenByAisyah, seenByAzelia] = await Promise.all([
+    aisyah.query((api as any).queens.getDailyStanding, args),
+    azelia.query((api as any).queens.getDailyStanding, args),
+  ]);
+
+  expect(seenByAisyah.winnerCsName).toBe("Azelia");
+  expect(seenByAzelia).toEqual(seenByAisyah);
+});
+
+test("daily Queen rejects a calendar date that rolls into another month", async () => {
+  const t = convexTest(schema, modules);
+  await seedOrg(t);
+  const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
+
+  await expect(
+    admin.query((api as any).queens.getDailyStanding, { businessDate: "2026-02-31" }),
+  ).rejects.toThrow(/businessDate/i);
+});
+
 test("a refreshed no-winner snapshot clears a prior winner", async () => {
   const t = convexTest(schema, modules);
   const orgId = await seedOrg(t);
