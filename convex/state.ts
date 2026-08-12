@@ -17,7 +17,7 @@ import { getCsFeatureConfig } from "./csConfigs";
 import { bumpForOrderDoc } from "./rollups";
 import { requireDefaultOrgId } from "./orgs";
 import { canonicalizeCs } from "./agents";
-import { terminateCycle } from "./followUpLifecycle";
+import { assertFollowUpCutoverUnlocked, terminateCycle } from "./followUpLifecycle";
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"), v.literal("closed"));
 
@@ -249,6 +249,7 @@ export async function upsertOrderCore(
     orgId: Id<"organizations">;
   },
 ) {
+  await assertFollowUpCutoverUnlocked(ctx, args.orgId);
   const canon = await canonicalizeCs(ctx, args.orgId, args.csName);
   const now = Date.now();
   const phone = normalizePhone(args.phone);
@@ -417,6 +418,7 @@ export const setConversationStatusFromN8n = internalMutation({
     const now = Date.now();
     // B3: default-org BY DESIGN — n8n internal mutation, no viewer identity
     const orgId = await requireDefaultOrgId(ctx);
+    await assertFollowUpCutoverUnlocked(ctx, orgId);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {
@@ -514,6 +516,7 @@ export const markConversationNotClosing = mutation({
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "state.markConversationNotClosing");
+    await assertFollowUpCutoverUnlocked(ctx, orgId);
     const now = Date.now();
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
@@ -768,6 +771,7 @@ export const deleteConversationOrder = mutation({
   },
   handler: async (ctx, args) => {
     const { orgId } = await requireAdminOrg(ctx, "state.deleteConversationOrder");
+    await assertFollowUpCutoverUnlocked(ctx, orgId);
     const conversation = await getConversationForArgs(ctx, { orderId: args.order_id, phone: args.phone }, orgId);
 
     if (!conversation) {

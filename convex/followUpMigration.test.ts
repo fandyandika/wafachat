@@ -301,6 +301,8 @@ test("rebuilds exact organization counters from normalized active lifecycle rows
       { orderId: "SENDING-4", cs: "aisyah", state: "sending", stage: 2 },
       { orderId: "H3-5", cs: "budi", state: "waiting", stage: 3 },
       { orderId: "UNASSIGNED-6", cs: "", state: "review", stage: undefined },
+      { orderId: "UNKNOWN-7", cs: "aisyah", state: "unknown", stage: 2 },
+      { orderId: "FAILED-8", cs: "aisyah", state: "failed", stage: 3 },
     ] as const;
     for (const row of activeRows) {
       await ctx.db.insert("conversations", conversation(orgId, row.orderId, {
@@ -308,9 +310,16 @@ test("rebuilds exact organization counters from normalized active lifecycle rows
         followUpCsKey: row.cs,
         followUpCycleId: `cycle:${row.orderId}`,
         followUpCycleStartedAt: anchor,
+        lastMessageAt: row.state === "unknown" || row.state === "failed" ? anchor : undefined,
         followUpState: row.state,
         followUpNextStage: row.stage,
         followUpDueAt: row.state === "waiting" ? calendarDueAt : undefined,
+      }));
+    }
+    for (let index = 0; index < 26; index += 1) {
+      await ctx.db.insert("conversations", conversation(orgId, `UNKNOWN-BULK-${String(index).padStart(2, "0")}`, {
+        assignedCsName: "Bulk", followUpCsKey: "bulk", followUpCycleId: `cycle:unknown-bulk:${index}`,
+        followUpCycleStartedAt: anchor, lastMessageAt: anchor, followUpState: "unknown", followUpNextStage: 2,
       }));
     }
     await ctx.db.insert("conversations", conversation(orgId, "TERMINAL-7", {
@@ -339,6 +348,15 @@ test("rebuilds exact organization counters from normalized active lifecycle rows
   });
 
   const runId = await createRun(t, orgId, "apply");
+  let firstUnknownPage: any;
+  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+    const page = await t.mutation(internal.followUpMigration.preparePage, { runId, scheduleNext: false });
+    if (page.phase === "counters_unknown") {
+      firstUnknownPage = page;
+      break;
+    }
+  }
+  expect(firstUnknownPage).toMatchObject({ phase: "counters_unknown", processed: 25, done: false });
   await finishCutover(t, runId);
 
   const counters = await t.run((ctx: any) => ctx.db.query("followUpCounters")
@@ -346,12 +364,13 @@ test("rebuilds exact organization counters from normalized active lifecycle rows
     .collect()) as Array<{ csKey: string; h1: number; h2: number; h3: number; review: number }>;
   expect(counters.map(({ csKey, h1, h2, h3, review }: any) => ({ csKey, h1, h2, h3, review })))
     .toEqual([
-      { csKey: "aisyah", h1: 1, h2: 1, h3: 0, review: 2 },
+      { csKey: "aisyah", h1: 1, h2: 1, h3: 0, review: 4 },
       { csKey: "budi", h1: 0, h2: 0, h3: 1, review: 0 },
+      { csKey: "bulk", h1: 0, h2: 0, h3: 0, review: 26 },
       { csKey: "unassigned", h1: 0, h2: 0, h3: 0, review: 1 },
     ]);
   expect(counters.reduce((total: number, row: any) => total + row.h1 + row.h2 + row.h3 + row.review, 0))
-    .toBe(6);
+    .toBe(34);
   expect(await t.run((ctx: any) => ctx.db.query("followUpCounters")
     .withIndex("by_org_csKey", (q: any) => q.eq("orgId", otherOrgId).eq("csKey", "foreign")).unique()))
     .toMatchObject({ h1: 8, h2: 7, h3: 6, review: 5 });
@@ -523,6 +542,81 @@ test("failed scheduled page marks the run failed, unlocks, and internal resume c
   expect(await t.run((ctx: any) => ctx.db.get(runId))).toMatchObject({ status: "complete" });
   expect(await t.run((ctx: any) => ctx.db.query("followUpCutoverLocks")
     .withIndex("by_org", (q: any) => q.eq("orgId", orgId)).unique())).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("resume rejects fresh overlap, including when an older failed run exists", async () => {
+  vi.useFakeTimers({ now });
+  try {
+    const t = convexTest(schema, modules);
+    const orgId = await seedOrg(t);
+    await t.run(async (ctx: any) => {
+      await ctx.db.insert("followUpPreparationRuns", {
+        orgId, mode: "apply", status: "failed", phase: "products_orders",
+        nextConversationStatus: "active", scanned: 0, eligible: 0, updated: 0, skipped: 0,
+        failed: 1, startedAt: now - 20_000, updatedAt: now - 10_000,
+      });
+      await ctx.db.insert("followUpPreparationRuns", {
+        orgId, mode: "apply", status: "running", phase: "normalize_active",
+        nextConversationStatus: "active", scanned: 0, eligible: 0, updated: 0, skipped: 0,
+        failed: 0, startedAt: now - 15 * 60 * 1_000, updatedAt: now - 15 * 60 * 1_000,
+      });
+    });
+    await expect(t.mutation(internal.followUpMigration.resumeCutoverBySlug, {
+      orgSlug: "pustakaislam",
+    })).rejects.toThrow(/masih berjalan|aktif/i);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("resume recovers a stale running counter run from deletion, refreshes lock, and completes", async () => {
+  vi.useFakeTimers({ now });
+  try {
+    const t = convexTest(schema, modules);
+    const orgId = await seedOrg(t);
+    const staleAt = now - 24 * 60 * 60 * 1_000;
+    const runId = await t.run(async (ctx: any) => {
+      const runId = await ctx.db.insert("followUpPreparationRuns", {
+        orgId, mode: "apply", status: "running", phase: "counters_failed", cursor: "stale-cursor",
+        nextConversationStatus: "handover", scanned: 0, eligible: 0, updated: 0, skipped: 0,
+        failed: 0, startedAt: staleAt, updatedAt: staleAt,
+      });
+      await ctx.db.insert("followUpCutoverLocks", { orgId, runId, lockedAt: staleAt });
+      await ctx.db.insert("followUpCounters", {
+        orgId, csKey: "stale", h1: 99, h2: 99, h3: 99, review: 99, updatedAt: staleAt,
+      });
+      await ctx.db.insert("conversations", conversation(orgId, "STALE-UNKNOWN", {
+        followUpCsKey: "aisyah", followUpCycleId: "cycle:stale-unknown", followUpCycleStartedAt: anchor,
+        lastMessageAt: anchor, followUpNextStage: 2, followUpState: "unknown",
+      }));
+      return runId;
+    });
+
+    expect(await t.mutation(internal.followUpMigration.resumeCutoverBySlug, {
+      orgSlug: "pustakaislam",
+    })).toEqual({ runId });
+    const resumed: any = await t.run((ctx: any) => ctx.db.get(runId));
+    expect(resumed).toMatchObject({ status: "running", phase: "counters_delete", updatedAt: now });
+    expect(resumed?.cursor).toBeUndefined();
+    expect(await t.run((ctx: any) => ctx.db.query("followUpCutoverLocks")
+      .withIndex("by_org", (q: any) => q.eq("orgId", orgId)).unique())).toMatchObject({ lockedAt: now });
+
+    vi.advanceTimersByTime(60_000);
+    await t.mutation(internal.followUpMigration.preparePage, { runId, scheduleNext: false });
+    expect(await t.run((ctx: any) => ctx.db.query("followUpCutoverLocks")
+      .withIndex("by_org", (q: any) => q.eq("orgId", orgId)).unique()))
+      .toMatchObject({ lockedAt: now + 60_000 });
+
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await t.run((ctx: any) => ctx.db.get(runId))).toMatchObject({ status: "complete" });
+    expect(await t.run((ctx: any) => ctx.db.query("followUpCounters")
+      .withIndex("by_org_csKey", (q: any) => q.eq("orgId", orgId).eq("csKey", "aisyah")).unique()))
+      .toMatchObject({ h1: 0, h2: 0, h3: 0, review: 1 });
+    expect(await t.run((ctx: any) => ctx.db.query("followUpCutoverLocks")
+      .withIndex("by_org", (q: any) => q.eq("orgId", orgId)).unique())).toBeNull();
   } finally {
     vi.useRealTimers();
   }

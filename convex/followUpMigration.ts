@@ -10,6 +10,7 @@ import { nextJakartaDueAt, type FollowUpStage } from "./followUpModel";
 const PAGE_SIZE = 25;
 const UNASSIGNED_CS_KEY = "unassigned";
 const SAFE_ERROR_LENGTH = 240;
+const CUTOVER_LEASE_MS = 15 * 60 * 1_000;
 
 const statusValidator = v.union(v.literal("active"), v.literal("handover"));
 const preparationModeValidator = v.union(v.literal("dry_run"), v.literal("apply"));
@@ -472,6 +473,7 @@ async function ensureCutoverLock(ctx: MutationCtx, run: Doc<"followUpPreparation
     .unique();
   if (existing) {
     if (String(existing.runId) !== String(run._id)) throw new Error("Organisasi dikunci oleh cutover lain.");
+    await ctx.db.patch(existing._id, { lockedAt: Date.now() });
     return;
   }
   await ctx.db.insert("followUpCutoverLocks", {
@@ -629,20 +631,40 @@ export const resumeCutoverBySlug = internalMutation({
       .withIndex("by_slug", (q) => q.eq("slug", args.orgSlug.trim()))
       .unique();
     if (!organization) throw new Error("Organisasi tidak ditemukan.");
-    const failedRun = await ctx.db.query("followUpPreparationRuns")
+    const resumedAt = Date.now();
+    const staleBefore = resumedAt - CUTOVER_LEASE_MS;
+    const freshRunning = await ctx.db.query("followUpPreparationRuns")
+      .withIndex("by_org_status_updatedAt", (q) => q
+        .eq("orgId", organization._id)
+        .eq("status", "running")
+        .gte("updatedAt", staleBefore))
+      .first();
+    if (freshRunning) throw new Error("Preparation Follow-up masih berjalan aktif.");
+    const staleRunning = await ctx.db.query("followUpPreparationRuns")
+      .withIndex("by_org_status_updatedAt", (q) => q
+        .eq("orgId", organization._id)
+        .eq("status", "running")
+        .lt("updatedAt", staleBefore))
+      .order("desc")
+      .first();
+    const failedRun = staleRunning ?? await ctx.db.query("followUpPreparationRuns")
       .withIndex("by_org_status_startedAt", (q) => q.eq("orgId", organization._id).eq("status", "failed"))
       .order("desc")
       .first();
-    if (!failedRun) throw new Error("Cutover gagal yang dapat dilanjutkan tidak ditemukan.");
+    if (!failedRun) throw new Error("Cutover gagal atau kedaluwarsa yang dapat dilanjutkan tidak ditemukan.");
     const phase = (failedRun.phase ?? "products_orders") as PreparationPhase;
     const restartCounters = isCounterPhase(phase);
+    const staleLock = await ctx.db.query("followUpCutoverLocks")
+      .withIndex("by_org", (q) => q.eq("orgId", organization._id))
+      .unique();
+    if (staleLock) await ctx.db.delete(staleLock._id);
     await ctx.db.patch(failedRun._id, {
       status: "running",
       phase: restartCounters ? "counters_delete" : phase,
       cursor: restartCounters ? undefined : failedRun.cursor,
       lastError: undefined,
       completedAt: undefined,
-      updatedAt: Date.now(),
+      updatedAt: resumedAt,
     });
     if (restartCounters) await ensureCutoverLock(ctx, { ...failedRun, status: "running", phase: "counters_delete" });
     await ctx.scheduler.runAfter(0, internal.followUpMigration.runPreparationStep, { runId: failedRun._id });

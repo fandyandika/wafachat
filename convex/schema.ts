@@ -243,7 +243,8 @@ export default defineSchema({
     updatedAt: v.number(),
     completedAt: v.optional(v.number()),
   }).index("by_org_startedAt", ["orgId", "startedAt"])
-    .index("by_org_status_startedAt", ["orgId", "status", "startedAt"]),
+    .index("by_org_status_startedAt", ["orgId", "status", "startedAt"])
+    .index("by_org_status_updatedAt", ["orgId", "status", "updatedAt"]),
 
   followUpCutoverLocks: defineTable({
     orgId: v.id("organizations"),

@@ -277,3 +277,66 @@ test("manual closing and cancellation terminate their lifecycle counters only on
   expect(transitions.filter((transition) => transition.kind === "closing")).toHaveLength(2);
   expect(transitions.filter((transition) => transition.kind === "cancelled")).toHaveLength(1);
 });
+
+test("cutover lock rejects direct lifecycle status, reactivation, and delete writers only for its org", async () => {
+  const t = convexTest(schema, modules);
+  const asAdmin = t.withIdentity({
+    subject: "cutover-admin", role: "admin", name: "Cutover Admin", email: "cutover@wafachat.test",
+  });
+  const { orgId } = await asAdmin.mutation(api.orgs.seedDefaultOrg, {});
+  const otherOrgId: any = await t.run((ctx: any) => ctx.db.insert("organizations", {
+    slug: "cutover-other", name: "Other", createdAt: 1, updatedAt: 1,
+  }));
+  await t.run(async (ctx: any) => {
+    for (const [orderId, phone, status] of [
+      ["LOCK-ACTIVE", "6285000000001", "active"],
+      ["LOCK-CLOSED", "6285000000002", "closed"],
+      ["LOCK-DELETE", "6285000000003", "active"],
+    ] as const) {
+      await ctx.db.insert("conversations", {
+        orgId, orderId, customerPhone: phone, customerName: "Locked", assignedCsName: "Aisyah",
+        status, aiEnabled: true, note: "", followUpCsKey: "aisyah", followUpCycleId: `cycle:${orderId}`,
+        followUpCycleStartedAt: 1_000, followUpNextStage: 1, followUpDueAt: 2_000,
+        followUpState: status === "active" ? "waiting" : "archived", createdAt: 1_000, updatedAt: 2_000,
+      });
+    }
+    const runId = await ctx.db.insert("followUpPreparationRuns", {
+      orgId, mode: "apply", status: "running", phase: "counters_waiting",
+      nextConversationStatus: "handover", scanned: 0, eligible: 0, updated: 0, skipped: 0,
+      failed: 0, startedAt: 2_000, updatedAt: 2_000,
+    });
+    await ctx.db.insert("followUpCutoverLocks", { orgId, runId, lockedAt: 2_000 });
+  });
+
+  await expect(t.mutation(internal.state.setConversationStatusFromN8n, {
+    phone: "6285000000001", order_id: "LOCK-ACTIVE", status: "closed",
+  })).rejects.toThrow(/cutover/i);
+  await expect(t.mutation(internal.state.upsertOrderFromN8n, {
+    phone: "6285000000002", csName: "Aisyah", order_id: "LOCK-CLOSED",
+  })).rejects.toThrow(/cutover/i);
+  await expect(asAdmin.mutation(api.state.markConversationNotClosing, {
+    phone: "6285000000002", order_id: "LOCK-CLOSED",
+  })).rejects.toThrow(/cutover/i);
+  await expect(asAdmin.mutation(api.state.deleteConversationOrder, {
+    phone: "6285000000003", order_id: "LOCK-DELETE",
+  })).rejects.toThrow(/cutover/i);
+
+  await t.run(async (ctx: any) => {
+    const { upsertOrderCore } = await import("./state");
+    await upsertOrderCore(ctx, {
+      orgId: otherOrgId, phone: "6285000000099", csName: "Aisyah", order_id: "OTHER-ALLOWED",
+    });
+    expect(await ctx.db.query("conversations")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", otherOrgId).eq("orderId", "OTHER-ALLOWED"))
+      .unique()).not.toBeNull();
+    expect((await ctx.db.query("conversations")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "LOCK-ACTIVE"))
+      .unique())?.status).toBe("active");
+    expect((await ctx.db.query("conversations")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "LOCK-CLOSED"))
+      .unique())?.status).toBe("closed");
+    expect(await ctx.db.query("conversations")
+      .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "LOCK-DELETE"))
+      .unique()).not.toBeNull();
+  });
+});
