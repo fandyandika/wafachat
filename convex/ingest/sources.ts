@@ -1,8 +1,9 @@
 import { v } from "convex/values";
-import { internalQuery, mutation, query } from "../_generated/server";
+import { internalMutation, internalQuery, mutation, query } from "../_generated/server";
 import { requireAdmin, requireAdminOrg } from "../authz";
+import { requireDefaultOrgId } from "../orgs";
 
-const kindValidator = v.union(v.literal("kirimdev"), v.literal("berdu"), v.literal("custom"));
+const kindValidator = v.union(v.literal("kirimdev"), v.literal("berdu"), v.literal("scalev"), v.literal("custom"));
 
 export const getBySourceKey = internalQuery({
   args: { sourceKey: v.string() },
@@ -11,6 +12,45 @@ export const getBySourceKey = internalQuery({
       .query("ingestSources")
       .withIndex("by_sourceKey", (q) => q.eq("sourceKey", args.sourceKey))
       .unique();
+  },
+});
+
+export const provisionDefaultScalevSource = internalMutation({
+  args: {},
+  returns: v.object({
+    created: v.boolean(),
+    sourceKey: v.string(),
+    orgId: v.id("organizations"),
+  }),
+  handler: async (ctx) => {
+    const sourceKey = "scalev-pustakaislam";
+    const orgId = await requireDefaultOrgId(ctx);
+    const existing = await ctx.db
+      .query("ingestSources")
+      .withIndex("by_sourceKey", (q) => q.eq("sourceKey", sourceKey))
+      .unique();
+    if (existing) {
+      if (existing.orgId !== orgId || existing.kind !== "scalev") {
+        throw new Error("scalev-pustakaislam is already claimed by another source");
+      }
+      await ctx.db.patch(existing._id, {
+        secret: "env:SCALEV_WEBHOOK_SIGNING_SECRET",
+        enabled: true,
+        enforceSignature: true,
+      });
+      return { created: false, sourceKey, orgId };
+    }
+    await ctx.db.insert("ingestSources", {
+      orgId,
+      sourceKey,
+      name: "Scalev Pustaka Islam",
+      kind: "scalev",
+      secret: "env:SCALEV_WEBHOOK_SIGNING_SECRET",
+      enabled: true,
+      enforceSignature: true,
+      createdAt: Date.now(),
+    });
+    return { created: true, sourceKey, orgId };
   },
 });
 

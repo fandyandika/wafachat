@@ -15,6 +15,16 @@ type KirimdevCaptureInput = {
 
 type KirimdevDispatchCtx = Pick<ActionCtx, "runMutation" | "scheduler">;
 
+type ScalevCaptureInput = {
+  sourceKey: string;
+  kind: "scalev.event";
+  externalEventId: string;
+  rawHeaders: string;
+  rawBody: string;
+  signatureOk: boolean;
+  orgId: Id<"organizations">;
+};
+
 export async function captureAndScheduleKirimdev(
   ctx: KirimdevDispatchCtx,
   input: KirimdevCaptureInput,
@@ -29,6 +39,24 @@ export async function captureAndScheduleKirimdev(
     { eventId },
   );
   return eventId;
+}
+
+export async function captureAndScheduleScalev(
+  ctx: KirimdevDispatchCtx,
+  input: ScalevCaptureInput,
+): Promise<{ eventId: Id<"ingestEvents">; duplicate: boolean }> {
+  const captured = await ctx.runMutation(
+    internal.ingest.events.captureScalevEvent,
+    input,
+  ) as { eventId: Id<"ingestEvents">; duplicate: boolean };
+  if (!captured.duplicate) {
+    await ctx.scheduler.runAfter(
+      0,
+      internal.ingest.dispatch.processScheduledEvent,
+      { eventId: captured.eventId },
+    );
+  }
+  return captured;
 }
 
 const SAFE_PROCESSING_ERROR =

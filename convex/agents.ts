@@ -94,9 +94,9 @@ export async function syncProviderNumberClaims(
 export async function resolveAgent(
   ctx: { db: any },
   orgId: Id<"organizations">,
-  q: { name?: string; berduStaffId?: string; phoneNumberId?: string },
+  q: { name?: string; berduStaffId?: string; scalevHandlerId?: string; phoneNumberId?: string },
 ): Promise<ResolvedAgent | null> {
-  if (!q.name && !q.berduStaffId && !q.phoneNumberId) return null;
+  if (!q.name && !q.berduStaffId && !q.scalevHandlerId && !q.phoneNumberId) return null;
   // Every resolution path is active-only. Avoid materializing the active registry for the
   // common phone-number path; the legacy array fallback remains org-scoped during migration.
   let activeRows: any[] | null | undefined;
@@ -138,7 +138,18 @@ export async function resolveAgent(
     const hit = rows.find((r: any) => (r.berduStaffIds ?? []).includes(q.berduStaffId));
     if (hit) return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
   }
-  // 3) raw name form: current csName (REQUIRED for post-rename: csKey(newName) != key,
+  // 3) Scalev handler/member id (order attribution)
+  if (q.scalevHandlerId) {
+    const rows = await getActiveRows();
+    if (!rows) throw new Error(`active agent registry exceeds ${ACTIVE_AGENT_REGISTRY_LIMIT}; complete provider migration`);
+    const matches = rows.filter((row: any) => (row.scalevHandlerIds ?? []).includes(q.scalevHandlerId));
+    if (matches.length === 1) {
+      const hit = matches[0];
+      return { key: keyOf(hit), csName: hit.csName, agentId: hit._id };
+    }
+    if (matches.length > 1) return null;
+  }
+  // 4) raw name form: current csName (REQUIRED for post-rename: csKey(newName) != key,
   //    only this match returns the old immutable key) > explicit alias > csKey match.
   if (q.name) {
     const n = normName(q.name);

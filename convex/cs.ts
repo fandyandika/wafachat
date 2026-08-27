@@ -7,7 +7,7 @@ import { DEFAULT_CONFIGS } from "./csConfigs";
 type CsRow = {
   csName: string; normalizedName: string; key: string; avatarUrl: string | null;
   isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
-  reportingEnabled: boolean; csPhone?: string; providerNumberId?: string; berduStaffIds?: string[];
+  reportingEnabled: boolean; csPhone?: string; providerNumberId?: string; berduStaffIds?: string[]; scalevHandlerIds?: string[];
   registryKey?: string; nameAliases?: string[];
 };
 
@@ -26,7 +26,7 @@ export const listCs = query({
 
     type Entry = {
       csName: string; isActive: boolean; orderAutomationEnabled: boolean; aiAssistantEnabled: boolean;
-      reportingEnabled: boolean; csPhone?: string; providerNumberId?: string; berduStaffIds?: string[]; avatarStorageId?: typeof filtered[number]["avatarStorageId"];
+      reportingEnabled: boolean; csPhone?: string; providerNumberId?: string; berduStaffIds?: string[]; scalevHandlerIds?: string[]; avatarStorageId?: typeof filtered[number]["avatarStorageId"];
       registryKey?: string; nameAliases?: string[];
     };
     const byKey = new Map<string, Entry>();
@@ -46,7 +46,7 @@ export const listCs = query({
       byKey.set(k, {
         csName: c.csName, isActive: c.isActive, orderAutomationEnabled: c.orderAutomationEnabled,
         aiAssistantEnabled: c.aiAssistantEnabled, reportingEnabled: c.reportingEnabled,
-        csPhone: c.csPhone, providerNumberId: c.providerNumberId, berduStaffIds: c.berduStaffIds, avatarStorageId: c.avatarStorageId,
+        csPhone: c.csPhone, providerNumberId: c.providerNumberId, berduStaffIds: c.berduStaffIds, scalevHandlerIds: c.scalevHandlerIds, avatarStorageId: c.avatarStorageId,
         registryKey: c.key, nameAliases: c.nameAliases,
       });
     }
@@ -63,6 +63,7 @@ export const listCs = query({
         csPhone: e.csPhone,
         providerNumberId: e.providerNumberId,
         berduStaffIds: e.berduStaffIds,
+        scalevHandlerIds: e.scalevHandlerIds,
         registryKey: e.registryKey,
         nameAliases: e.nameAliases,
       });

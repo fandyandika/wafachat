@@ -2,7 +2,8 @@ import { convexTest } from "convex-test";
 import { expect, test, vi } from "vitest";
 import { api, internal } from "../_generated/api";
 import schema from "../schema";
-import { captureAndScheduleKirimdev } from "./dispatch";
+import { captureAndScheduleKirimdev, captureAndScheduleScalev } from "./dispatch";
+import { hmacBase64 } from "./scalevSignature";
 
 const modules = (import.meta as any).glob("/convex/**/*.{ts,js}");
 
@@ -38,6 +39,20 @@ test("captures before scheduling and never processes inline", async () => {
     { eventId: "event-1" },
   );
   expect(ctx.runMutation).toHaveBeenCalledTimes(1);
+});
+
+test("Scalev duplicate capture is acknowledged without scheduling duplicate processing", async () => {
+  const ctx = {
+    runMutation: vi.fn(async () => ({ eventId: "event-1", duplicate: true })),
+    scheduler: { runAfter: vi.fn(async () => undefined) },
+  };
+
+  await expect(captureAndScheduleScalev(ctx as never, {
+    ...input,
+    kind: "scalev.event",
+    externalEventId: "event_scalev_001",
+  } as never)).resolves.toEqual({ eventId: "event-1", duplicate: true });
+  expect(ctx.scheduler.runAfter).not.toHaveBeenCalled();
 });
 
 test("a cutover rejection rolls back message writes and leaves the failed raw event replayable", async () => {
@@ -198,6 +213,113 @@ test("the KirimDev HTTP route acknowledges after capture without waiting for pro
       });
     });
   } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the Scalev HTTP route verifies, deduplicates, and asynchronously creates one provider-scoped order", async () => {
+  vi.useFakeTimers();
+  const previousSecret = process.env.SCALEV_WEBHOOK_SIGNING_SECRET;
+  process.env.SCALEV_WEBHOOK_SIGNING_SECRET = "scalev-test-secret";
+  try {
+    const t = convexTest(schema, modules);
+    await t.run(async (ctx) => {
+      const orgId = await ctx.db.insert("organizations", {
+        slug: "pustakaislam",
+        name: "Test Org",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      await ctx.db.insert("csConfigs", {
+        orgId,
+        normalizedName: "aisyah",
+        csName: "Aisyah",
+        key: "aisyah",
+        scalevHandlerIds: ["482913"],
+        orderAutomationEnabled: false,
+        aiAssistantEnabled: false,
+        reportingEnabled: true,
+        isActive: true,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+      await ctx.db.insert("ingestSources", {
+        orgId,
+        sourceKey: "scalev-test",
+        name: "Scalev Test",
+        kind: "scalev",
+        secret: "env:SCALEV_WEBHOOK_SIGNING_SECRET",
+        enabled: true,
+        enforceSignature: true,
+        createdAt: 1,
+      });
+    });
+    const rawBody = JSON.stringify({
+      event: "order.created",
+      unique_id: "event_scalev_route_001",
+      timestamp: "2026-08-27T08:00:05.000Z",
+      data: {
+        id: "0198-route-order",
+        order_id: "260827ROUTE",
+        status: "pending",
+        payment_status: "unpaid",
+        gross_revenue: "189000.00",
+        product_price: "179000.00",
+        shipping_cost: "10000.00",
+        handler: { id: "482913", name: "Aisyah Scalev" },
+        destination_address: {
+          name: "Fandi",
+          phone: "085715682110",
+          address: "Test",
+          subdistrict: "Tambun Utara",
+          city: "Kab. Bekasi",
+        },
+        orderlines: [{ product_name: "Quran Mapping", quantity: 1 }],
+        created_at: "2026-08-27T15:00:00+07:00",
+      },
+    });
+    const signature = await hmacBase64("scalev-test-secret", rawBody);
+
+    const first = await t.fetch("/webhooks/scalev?source=scalev-test", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-scalev-hmac-sha256": signature },
+      body: rawBody,
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.json() as { eventId: string; duplicate: boolean };
+    expect(firstBody).toMatchObject({ eventId: expect.any(String), duplicate: false });
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("orders").collect()).toHaveLength(0);
+      expect(await ctx.db.query("ingestEvents").collect()).toHaveLength(1);
+    });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    const duplicate = await t.fetch("/webhooks/scalev?source=scalev-test", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-scalev-hmac-sha256": signature },
+      body: rawBody,
+    });
+    expect(duplicate.status).toBe(200);
+    expect(await duplicate.json()).toMatchObject({ eventId: firstBody.eventId, duplicate: true });
+
+    await t.run(async (ctx) => {
+      expect(await ctx.db.query("ingestEvents").collect()).toHaveLength(1);
+      expect(await ctx.db.query("orders").collect()).toEqual([
+        expect.objectContaining({
+          orderId: "scalev:0198-route-order",
+          externalOrderId: "260827ROUTE",
+          providerRecordId: "0198-route-order",
+          source: "scalev",
+          assignedCsName: "Aisyah",
+          csKey: "aisyah",
+        }),
+      ]);
+      expect(await ctx.db.query("conversations").collect()).toHaveLength(1);
+    });
+  } finally {
+    if (previousSecret === undefined) delete process.env.SCALEV_WEBHOOK_SIGNING_SECRET;
+    else process.env.SCALEV_WEBHOOK_SIGNING_SECRET = previousSecret;
     vi.useRealTimers();
   }
 });

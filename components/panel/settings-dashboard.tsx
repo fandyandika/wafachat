@@ -57,6 +57,7 @@ type CsRow = {
   reportingEnabled: boolean;
   isActive: boolean;
   berduStaffIds?: string[];
+  scalevHandlerIds?: string[];
   registryKey?: string;
   nameAliases?: string[];
   key: string;
@@ -720,6 +721,7 @@ export function SettingsDashboard() {
   const renameCs = useMutation(api.csConfigs.renameCs);
   const deleteCsConfig = useMutation(api.csConfigs.deleteCsConfig);
   const setBerduStaffIds = useMutation(api.csConfigs.setBerduStaffIds);
+  const setScalevHandlerIds = useMutation(api.csConfigs.setScalevHandlerIds);
   const setProviderNumberIds = useMutation(api.csConfigs.setProviderNumberIds);
   const setNameAliases = useMutation(api.agents.setNameAliases);
   const requestedSection = searchParams.get("section");
@@ -1037,6 +1039,17 @@ export function SettingsDashboard() {
                     placeholder="B-xxxxx, B-yyyyy"
                     save={(berduStaffIds) =>
                       setBerduStaffIds({ csName: cs.csName, berduStaffIds })
+                    }
+                  />
+                  <CsvField
+                    csName={cs.csName}
+                    initial={cs.scalevHandlerIds ?? []}
+                    disabled={busy === cs.csName}
+                    label="Scalev Handler IDs"
+                    placeholder="Contoh: 482913"
+                    inputMode="numeric"
+                    save={(scalevHandlerIds) =>
+                      setScalevHandlerIds({ csName: cs.csName, scalevHandlerIds })
                     }
                   />
                   <CsvField

@@ -4,6 +4,8 @@ import { api, internal } from "./_generated/api";
 import { verifySignature } from "./ingest/signature";
 import { fetchBerduOrderDetail } from "./ingest/reconciler";
 import { captureAndScheduleKirimdev } from "./ingest/dispatch";
+import { captureAndScheduleScalev } from "./ingest/dispatch";
+import { verifyScalevSignature } from "./ingest/scalevSignature";
 
 const http = httpRouter();
 
@@ -281,6 +283,55 @@ http.route({
       await ctx.runMutation(internal.ingest.events.markFailed, { eventId, error: (e as Error).message || String(e) });
     }
     return jsonResponse({ ok: true, eventId });
+  }),
+});
+
+http.route({
+  path: "/webhooks/scalev",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const rawBody = await request.text();
+    if (rawBody.length > MAX_BODY_BYTES) {
+      return jsonResponse({ ok: false, error: "payload too large" }, 400);
+    }
+    const sourceKeyParam = new URL(request.url).searchParams.get("source");
+    const source = await ctx.runQuery(internal.ingest.sources.getBySourceKey, {
+      sourceKey: sourceKeyParam || "scalev-pustakaislam",
+    });
+    if (!source || !source.enabled || source.kind !== "scalev") {
+      console.warn("[ingest] unknown/disabled Scalev source; acked 200 to avoid vendor auto-disable");
+      return jsonResponse({ ok: true, ignored: "unknown or disabled source" }, 200);
+    }
+    const secret = process.env.SCALEV_WEBHOOK_SIGNING_SECRET;
+    if (!secret) return jsonResponse({ ok: false, error: "Scalev webhook is not configured" }, 503);
+    const signature = await verifyScalevSignature({
+      header: request.headers.get("x-scalev-hmac-sha256"),
+      rawBody,
+      secret,
+    });
+    if (!signature.ok) return jsonResponse({ ok: false, error: "invalid signature" }, 401);
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(rawBody) as Record<string, unknown>;
+    } catch {
+      return jsonResponse({ ok: false, error: "invalid json" }, 400);
+    }
+    const externalEventId = typeof payload.unique_id === "string" ? payload.unique_id.trim() : "";
+    if (!externalEventId) return jsonResponse({ ok: false, error: "missing unique_id" }, 400);
+    const captured = await captureAndScheduleScalev(ctx, {
+      sourceKey: source.sourceKey,
+      kind: "scalev.event",
+      externalEventId,
+      rawHeaders: JSON.stringify({
+        "content-type": request.headers.get("content-type") ?? "",
+        "x-scalev-hmac-sha256": request.headers.get("x-scalev-hmac-sha256") ?? "",
+      }),
+      rawBody,
+      signatureOk: true,
+      orgId: source.orgId,
+    });
+    return jsonResponse({ ok: true, ...captured });
   }),
 });
 

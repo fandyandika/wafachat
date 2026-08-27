@@ -246,6 +246,11 @@ export async function upsertOrderCore(
     shippingCity?: string;
     order_id?: string;
     createdAt?: number;
+    source?: "berdu" | "scalev";
+    externalOrderId?: string;
+    providerRecordId?: string;
+    orderStatus?: string;
+    paymentStatus?: string;
     orgId: Id<"organizations">;
   },
 ) {
@@ -295,7 +300,11 @@ export async function upsertOrderCore(
     shippingAddress: args.shippingAddress || "",
     shippingDistrict: args.shippingDistrict || "",
     shippingCity: args.shippingCity || "",
-    source: "berdu" as const,
+    source: args.source ?? "berdu" as const,
+    externalOrderId: args.externalOrderId,
+    providerRecordId: args.providerRecordId,
+    orderStatus: args.orderStatus,
+    paymentStatus: args.paymentStatus,
     aiEligible,
     updatedAt: now,
   };

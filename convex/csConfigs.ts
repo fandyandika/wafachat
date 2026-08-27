@@ -3,7 +3,7 @@ import { requireAdmin, requireAdminOrg, requireMemberOrg } from "./authz";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { normalizeCsName, csKey } from "./lib";
-import { canAssignProviderNumberId, syncProviderNumberClaims } from "./agents";
+import { canAssignProviderNumberId, getBoundedActiveAgentRegistry, syncProviderNumberClaims } from "./agents";
 
 export type CsFeatureConfig = {
   csName: string;
@@ -246,6 +246,30 @@ export const setBerduStaffIds = mutation({
     if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
     await ctx.db.patch(existing._id, { berduStaffIds: args.berduStaffIds, updatedAt: Date.now() });
     return { success: true, csName: args.csName, berduStaffIds: args.berduStaffIds };
+  },
+});
+
+export const setScalevHandlerIds = mutation({
+  args: { csName: v.string(), scalevHandlerIds: v.array(v.string()) },
+  returns: v.object({ success: v.boolean(), csName: v.string(), scalevHandlerIds: v.array(v.string()) }),
+  handler: async (ctx, args) => {
+    const { orgId } = await requireAdminOrg(ctx, "csConfigs.setScalevHandlerIds");
+    const normalizedName = normalizeCsName(args.csName);
+    const existing = await ctx.db
+      .query("csConfigs")
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", orgId).eq("normalizedName", normalizedName))
+      .unique();
+    if (!existing) throw new Error(`csConfig not found: ${args.csName}`);
+    const scalevHandlerIds = Array.from(new Set(args.scalevHandlerIds.map((id) => id.trim()).filter(Boolean)));
+    if (scalevHandlerIds.length > 20) throw new Error("Scalev handler IDs exceeds 20");
+    const activeRows = await getBoundedActiveAgentRegistry(ctx, orgId);
+    if (!activeRows) throw new Error("active agent registry exceeds supported Scalev mapping limit");
+    for (const handlerId of scalevHandlerIds) {
+      const collision = activeRows.find((row) => row._id !== existing._id && (row.scalevHandlerIds ?? []).includes(handlerId));
+      if (collision) throw new Error(`Scalev handler ID already assigned: ${handlerId}`);
+    }
+    await ctx.db.patch(existing._id, { scalevHandlerIds, updatedAt: Date.now() });
+    return { success: true, csName: args.csName, scalevHandlerIds };
   },
 });
 

@@ -21,6 +21,35 @@ export const captureEvent = internalMutation({
   },
 });
 
+export const captureScalevEvent = internalMutation({
+  args: {
+    sourceKey: v.string(),
+    kind: v.literal("scalev.event"),
+    externalEventId: v.string(),
+    rawHeaders: v.string(),
+    rawBody: v.string(),
+    signatureOk: v.boolean(),
+    orgId: v.id("organizations"),
+  },
+  returns: v.object({ eventId: v.id("ingestEvents"), duplicate: v.boolean() }),
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("ingestEvents")
+      .withIndex("by_org_sourceKey_externalEventId", (q) => q
+        .eq("orgId", args.orgId)
+        .eq("sourceKey", args.sourceKey)
+        .eq("externalEventId", args.externalEventId))
+      .unique();
+    if (existing) return { eventId: existing._id, duplicate: true };
+    const eventId = await ctx.db.insert("ingestEvents", {
+      ...args,
+      status: "received",
+      receivedAt: Date.now(),
+    });
+    return { eventId, duplicate: false };
+  },
+});
+
 export const markProcessed = internalMutation({
   args: { eventId: v.id("ingestEvents"), resultRef: v.optional(v.string()) },
   handler: async (ctx, args) => {

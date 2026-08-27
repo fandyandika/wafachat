@@ -25,6 +25,8 @@ export default defineSchema({
   orders: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     orderId: v.string(),
+    externalOrderId: v.optional(v.string()),
+    providerRecordId: v.optional(v.string()),
     customerPhone: v.string(),
     customerName: v.string(),
     assignedCsName: v.string(),
@@ -38,12 +40,15 @@ export default defineSchema({
     shippingAddress: v.string(),
     shippingDistrict: v.string(),
     shippingCity: v.string(),
-    source: v.literal("berdu"),
+    source: v.union(v.literal("berdu"), v.literal("scalev")),
+    orderStatus: v.optional(v.string()),
+    paymentStatus: v.optional(v.string()),
     aiEligible: v.boolean(),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_org_orderId", ["orgId", "orderId"])
+    .index("by_org_source_externalOrderId", ["orgId", "source", "externalOrderId"])
     .index("by_org_customerPhone", ["orgId", "customerPhone"])
     .index("by_org_customerPhone_createdAt", ["orgId", "customerPhone", "createdAt"])
     .index("by_org_createdAt", ["orgId", "createdAt"])
@@ -272,6 +277,7 @@ export default defineSchema({
     providerNumberId: v.optional(v.string()),
     providerNumberIds: v.optional(v.array(v.string())), // one CS can own >1 WABA number (e.g. Nabila has 2)
     berduStaffIds: v.optional(v.array(v.string())), // Berdu staff id(s) owned by this CS (order attribution)
+    scalevHandlerIds: v.optional(v.array(v.string())), // Scalev handler/member ids owned by this CS
     key: v.optional(v.string()),          // canonical per-org identity key (= csKey(csName) at creation; IMMUTABLE across renames)
     nameAliases: v.optional(v.array(v.string())), // raw name forms that resolve to this agent (e.g. "CS Aisyah", pre-rename names)
     orderAutomationEnabled: v.boolean(),
@@ -345,6 +351,7 @@ export default defineSchema({
     kind: v.string(), // "message.event" | "lead.created" | "generic.message" | "generic.lead" | "unknown"
     rawHeaders: v.string(), // JSON string of the relevant header subset
     rawBody: v.string(),
+    externalEventId: v.optional(v.string()),
     signatureOk: v.boolean(),
     status: v.union(
       v.literal("received"),
@@ -362,13 +369,14 @@ export default defineSchema({
     .index("by_status_receivedAt", ["status", "receivedAt"])
     .index("by_receivedAt", ["receivedAt"])
     .index("by_org_kind_status_receivedAt", ["orgId", "kind", "status", "receivedAt"])
-    .index("by_org_status_receivedAt", ["orgId", "status", "receivedAt"]),
+    .index("by_org_status_receivedAt", ["orgId", "status", "receivedAt"])
+    .index("by_org_sourceKey_externalEventId", ["orgId", "sourceKey", "externalEventId"]),
 
   ingestSources: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     sourceKey: v.string(),
     name: v.string(),
-    kind: v.union(v.literal("kirimdev"), v.literal("berdu"), v.literal("custom")),
+    kind: v.union(v.literal("kirimdev"), v.literal("berdu"), v.literal("scalev"), v.literal("custom")),
     secret: v.string(),
     enabled: v.boolean(),
     // false = log-only: record signatureOk but accept the request. Prevents a

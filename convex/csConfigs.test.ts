@@ -82,6 +82,36 @@ test("renameCs backstop: row without key gets key=csKey(oldName) before renaming
   });
 });
 
+test("setScalevHandlerIds stores a unique provider mapping and rejects an active collision", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity(ADMIN);
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (const csName of ["Aisyah", "Nabila"]) {
+      await ctx.db.insert("csConfigs", {
+        orgId,
+        normalizedName: csName.toLowerCase(),
+        csName,
+        orderAutomationEnabled: true,
+        aiAssistantEnabled: false,
+        reportingEnabled: true,
+        isActive: true,
+        createdAt: 1,
+        updatedAt: 1,
+      });
+    }
+  });
+
+  await expect(asAdmin.mutation(api.csConfigs.setScalevHandlerIds, {
+    csName: "Aisyah",
+    scalevHandlerIds: ["482913"],
+  })).resolves.toMatchObject({ success: true, scalevHandlerIds: ["482913"] });
+  await expect(asAdmin.mutation(api.csConfigs.setScalevHandlerIds, {
+    csName: "Nabila",
+    scalevHandlerIds: ["482913"],
+  })).rejects.toThrow(/already assigned/);
+});
+
 test("setProviderNumberIds synchronizes scalar after a backfill and clears it for ambiguous replacements", async () => {
   const t = convexTest(schema);
   const orgId = await seedOrg(t);

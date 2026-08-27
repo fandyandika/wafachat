@@ -5,6 +5,7 @@ import { requireAdmin } from "../authz";
 import { appendMessageCore } from "../messages";
 import { parseKirimdevWebhook } from "./kirimdevAdapter";
 import { parseBerduOrderDetail, DEFAULT_BERDU_STAFF_MAP } from "./berduAdapter";
+import { parseScalevOrderEvent } from "./scalevAdapter";
 import { upsertOrderCore } from "../state";
 import { getBoundedActiveAgentRegistry, resolveAgent } from "../agents";
 import { getDefaultOrgId } from "../orgs";
@@ -30,6 +31,21 @@ export async function resolveBerduStaffMap(ctx: any, orgId: Id<"organizations">)
   if (Object.keys(map).length > 0) return map;
   const defaultOrgId = await getDefaultOrgId(ctx);
   return defaultOrgId != null && String(defaultOrgId) === String(orgId) ? DEFAULT_BERDU_STAFF_MAP : {};
+}
+
+export async function resolveScalevHandlerMap(ctx: any, orgId: Id<"organizations">): Promise<Record<string, string>> {
+  const configs = await getBoundedActiveAgentRegistry(ctx, orgId);
+  if (!configs) throw new Error("active agent registry exceeds supported Scalev mapping limit");
+  const map: Record<string, string> = {};
+  for (const config of configs) {
+    for (const handlerId of config.scalevHandlerIds ?? []) {
+      if (map[handlerId] && map[handlerId] !== config.csName) {
+        throw new Error(`duplicate Scalev handler mapping: ${handlerId}`);
+      }
+      map[handlerId] = config.csName;
+    }
+  }
+  return map;
 }
 
 type ProcessOutcome =
@@ -178,6 +194,36 @@ export async function processCapturedEvent(
       orgId: event.orgId,
     });
     return { status: "processed", resultRef: String(result?.orderId ?? e.orderId) };
+  }
+
+  if (event.kind === "scalev.event") {
+    const handlerMap = await resolveScalevHandlerMap(ctx, event.orgId);
+    const parsed = parseScalevOrderEvent(body, handlerMap);
+    if (parsed.kind === "skip") return { status: "skipped", skipReason: parsed.reason };
+    if (parsed.kind === "test") return { status: "processed", resultRef: parsed.eventId };
+    const scalev = parsed.event;
+    const result = await upsertOrderCore(ctx, {
+      phone: scalev.phone,
+      csName: scalev.csName,
+      customerName: scalev.customerName,
+      productName: scalev.productName,
+      products: scalev.products,
+      productsSubtotal: scalev.productsSubtotal,
+      shippingCost: scalev.shippingCost,
+      total: scalev.total,
+      shippingAddress: scalev.shippingAddress,
+      shippingDistrict: scalev.shippingDistrict,
+      shippingCity: scalev.shippingCity,
+      order_id: scalev.internalOrderId,
+      externalOrderId: scalev.externalOrderId,
+      providerRecordId: scalev.providerRecordId,
+      orderStatus: scalev.orderStatus,
+      paymentStatus: scalev.paymentStatus,
+      createdAt: scalev.createdAt,
+      source: "scalev",
+      orgId: event.orgId,
+    });
+    return { status: "processed", resultRef: String(result?.orderId ?? scalev.internalOrderId) };
   }
 
   if (event.kind === "generic.message") {
