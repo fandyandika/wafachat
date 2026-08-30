@@ -59,6 +59,17 @@ function extractHandler(data: Record<string, any>): { id?: string; name?: string
   };
 }
 
+export function parseScalevOrderHandler(input: unknown): { handlerId: string; handlerName?: string } | null {
+  const order = asRecord(input);
+  const handler = asRecord(order.handler);
+  const handlerId = cleanString(handler.id);
+  if (!handlerId) return null;
+  return {
+    handlerId,
+    handlerName: cleanString(handler.fullname ?? handler.name ?? handler.display_name),
+  };
+}
+
 function productRows(data: Record<string, any>): Array<{ name: string; quantity: number }> {
   if (Array.isArray(data.orderlines) && data.orderlines.length > 0) {
     return data.orderlines.flatMap((line: unknown) => {

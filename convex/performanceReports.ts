@@ -62,6 +62,11 @@ const performanceReportValidator = v.object({
     deltaCr: v.number(),
   })),
   products: v.array(v.object({ ...metricFields, product: v.string() })),
+  sources: v.optional(v.array(v.object({
+    ...metricFields,
+    source: v.union(v.literal("berdu"), v.literal("scalev"), v.literal("unknown")),
+    label: v.string(),
+  }))),
   weeks: v.array(v.object({
     startDate: v.string(),
     endDate: v.string(),
@@ -172,6 +177,20 @@ function exactRange(period: PerformancePeriod, startDate: string, endDate: strin
     throw new Error("Rentang tidak sesuai dengan jenis periode");
   }
   return resolved;
+}
+
+async function sourceBreakdownFromRaw(
+  ctx: any,
+  orgId: Id<"organizations">,
+  range: { startAt: number; endAt: number },
+  csName?: string,
+) {
+  try {
+    return (await performanceFromRaw(ctx, orgId, { ...range, csName })).sources;
+  } catch (error) {
+    if (error instanceof Error && /exact row cap/i.test(error.message)) return undefined;
+    throw error;
+  }
 }
 
 async function readWindowRollups(
@@ -314,15 +333,17 @@ export const getPerformanceReport = query({
           },
           cs: rawCs(currentRaw, priorRaw, medians),
           products: rawProducts(currentRaw),
+          sources: currentRaw.sources,
           weeks: [],
         };
       }
 
       const previousDate = previousPerformanceRange("day", selected, selected).startDate;
-      const [currentRows, previousRows, response] = await Promise.all([
+      const [currentRows, previousRows, response, sources] = await Promise.all([
         readWindowRollups(ctx, orgId, selected.startDate, requestedCsKey),
         readWindowRollups(ctx, orgId, previousDate, requestedCsKey),
         responseTimesForPerformanceReport(ctx, orgId, { ...range, csName: args.csName }),
+        sourceBreakdownFromRaw(ctx, orgId, range, args.csName),
       ]);
       const medians = new Map<string, number | null>();
       if (response.data) {
@@ -349,6 +370,7 @@ export const getPerformanceReport = query({
         },
         cs: aggregateByCs(currentRows, previousRows, medians),
         products: aggregateProducts(currentRows),
+        sources,
         weeks: [],
       };
     }
@@ -356,15 +378,16 @@ export const getPerformanceReport = query({
     const today = businessDateKeyForWindowKey(windowKeyToday());
     const effective = effectivePerformanceRange(selected, today);
     const previous = previousPerformanceRange(args.period, selected, effective);
-    const [currentRows, previousRows] = await Promise.all([
+    const firstWindow = windowRangeForKey(windowKeyForBusinessDate(effective.startDate));
+    const lastWindow = windowRangeForKey(windowKeyForBusinessDate(effective.endDate));
+    const [currentRows, previousRows, sources] = await Promise.all([
       readRollups(ctx, orgId, effective, requestedCsKey),
       readRollups(ctx, orgId, previous, requestedCsKey),
+      sourceBreakdownFromRaw(ctx, orgId, { startAt: firstWindow.startAt, endAt: lastWindow.endAt }, args.csName),
     ]);
 
     let responseNotice: string | undefined;
     const medians = new Map<string, number | null>();
-    const firstWindow = windowRangeForKey(windowKeyForBusinessDate(effective.startDate));
-    const lastWindow = windowRangeForKey(windowKeyForBusinessDate(effective.endDate));
     const response = await responseTimesForPerformanceReport(ctx, orgId, {
       startAt: firstWindow.startAt,
       endAt: lastWindow.endAt,
@@ -406,6 +429,7 @@ export const getPerformanceReport = query({
       },
       cs: aggregateByCs(currentRows, previousRows, medians),
       products: aggregateProducts(currentRows),
+      sources,
       weeks,
     };
   },

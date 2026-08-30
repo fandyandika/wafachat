@@ -52,6 +52,7 @@ export default defineSchema({
     .index("by_org_customerPhone", ["orgId", "customerPhone"])
     .index("by_org_customerPhone_createdAt", ["orgId", "customerPhone", "createdAt"])
     .index("by_org_createdAt", ["orgId", "createdAt"])
+    .index("by_org_source_csKey_createdAt", ["orgId", "source", "csKey", "createdAt"])
     .index("by_org_csKey_createdAt", ["orgId", "csKey", "createdAt"]),
 
   // Per-day cursor for the Berdu safety-net reconciler. This keeps repeated
@@ -635,6 +636,7 @@ export default defineSchema({
   shippingRecaps: defineTable({
     orgId: v.id("organizations"), // B1: REQUIRED — every row belongs to an org (spec §3.4)
     orderIdBerdu: v.optional(v.string()),
+    orderSource: v.optional(v.union(v.literal("berdu"), v.literal("scalev"))),
     conversationId: v.optional(v.id("conversations")),
     customerPhone: v.string(),
     customerName: v.string(),

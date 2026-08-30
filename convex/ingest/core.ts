@@ -13,6 +13,7 @@ import { extractAdminProviderNumberId, parseAdminKirimdevEvent } from "../adminI
 import { applyAdminStatusCore, upsertAdminInboundCore } from "../adminInbox";
 import { touchProviderChannelHealth } from "../providerChannelHealth";
 import { normalizePhone } from "../lib";
+import { internal } from "../_generated/api";
 
 /** @deprecated B2a — use resolveAgent({ phoneNumberId }) from ../agents. */
 export async function resolveCsByPhoneNumberId(ctx: any, orgId: Id<"organizations">, phoneNumberId: string | undefined) {
@@ -222,6 +223,11 @@ export async function processCapturedEvent(
       createdAt: scalev.createdAt,
       source: "scalev",
       orgId: event.orgId,
+    });
+    await ctx.scheduler.runAfter(0, internal.ingest.scalevEnrichmentActions.enrichOrder, {
+      orgId: event.orgId,
+      orderId: scalev.internalOrderId,
+      providerRecordId: scalev.providerRecordId,
     });
     return { status: "processed", resultRef: String(result?.orderId ?? scalev.internalOrderId) };
   }

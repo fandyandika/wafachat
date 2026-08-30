@@ -511,6 +511,7 @@ export const upsertFromN8n = internalMutation({
     const payload = {
       ...followUpSnapshotForRecap(conversation),
       orderIdBerdu: args.orderIdBerdu ?? order?.orderId,
+      orderSource: order?.source,
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
       customerName: isGeneratedCustomerName(args.customerName) ? order?.customerName ?? conversation?.customerName ?? "" : args.customerName ?? order?.customerName ?? conversation?.customerName ?? "",
@@ -611,6 +612,7 @@ export const createFromPanelClosing = mutation({
     const payload = {
       ...followUpSnapshotForRecap(conversation),
       orderIdBerdu: args.orderId ?? order?.orderId,
+      orderSource: order?.source,
       conversationId: conversation?._id,
       customerPhone: args.customerPhone,
       customerName: order?.customerName ?? conversation?.customerName ?? "",
@@ -694,6 +696,7 @@ export async function upsertRecapFromMessage(
   const payload = {
     ...followUpSnapshotForRecap(conversation),
     orderIdBerdu: message.orderId || order?.orderId,
+    orderSource: order?.source,
     conversationId: conversation?._id,
     customerPhone: message.customerPhone,
     customerName: order?.customerName ?? conversation?.customerName ?? "",

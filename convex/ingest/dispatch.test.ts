@@ -220,7 +220,14 @@ test("the KirimDev HTTP route acknowledges after capture without waiting for pro
 test("the Scalev HTTP route verifies, deduplicates, and asynchronously creates one provider-scoped order", async () => {
   vi.useFakeTimers();
   const previousSecret = process.env.SCALEV_WEBHOOK_SIGNING_SECRET;
+  const previousApiKey = process.env.SCALEV_API_KEY;
   process.env.SCALEV_WEBHOOK_SIGNING_SECRET = "scalev-test-secret";
+  process.env.SCALEV_API_KEY = "scalev-api-test";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+    id: "0198-route-order",
+    handler: { id: 482913, fullname: "Aisyah" },
+  }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
   try {
     const t = convexTest(schema, modules);
     await t.run(async (ctx) => {
@@ -266,7 +273,6 @@ test("the Scalev HTTP route verifies, deduplicates, and asynchronously creates o
         gross_revenue: "189000.00",
         product_price: "179000.00",
         shipping_cost: "10000.00",
-        handler: { id: "482913", name: "Aisyah Scalev" },
         destination_address: {
           name: "Fandi",
           phone: "085715682110",
@@ -320,6 +326,9 @@ test("the Scalev HTTP route verifies, deduplicates, and asynchronously creates o
   } finally {
     if (previousSecret === undefined) delete process.env.SCALEV_WEBHOOK_SIGNING_SECRET;
     else process.env.SCALEV_WEBHOOK_SIGNING_SECRET = previousSecret;
+    if (previousApiKey === undefined) delete process.env.SCALEV_API_KEY;
+    else process.env.SCALEV_API_KEY = previousApiKey;
+    globalThis.fetch = originalFetch;
     vi.useRealTimers();
   }
 });

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DeltaPill } from "@/components/ui/metric-card";
 import { formatDuration, formatNumberId, formatPercentId, formatRupiah } from "@/lib/format";
-import type { CsMetricRow, ProductMetricRow } from "@/lib/performance-report";
+import type { CsMetricRow, ProductMetricRow, SourceMetricRow } from "@/lib/performance-report";
 
 export type ProductSort = "closing" | "cr";
 
@@ -162,6 +162,63 @@ export function ProductPerformanceBreakdown({ rows }: { rows: ProductMetricRow[]
                 <div><dt className="text-xs text-muted-foreground">COD</dt><dd className="tabular-nums">{formatNumberId(row.cod)}</dd></div>
                 <div><dt className="text-xs text-muted-foreground">Transfer</dt><dd className="tabular-nums">{formatNumberId(row.transfer)}</dd></div>
                 <div><dt className="text-xs text-muted-foreground">Rasio pembayaran</dt><dd className="tabular-nums"><PaymentSplit codPct={row.codPct} transferPct={row.transferPct} /></dd></div>
+              </dl>
+            </article>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function SourcePerformanceBreakdown({ rows }: { rows: SourceMetricRow[] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Traffic per sumber</CardTitle>
+        <CardDescription>Leads adalah customer unik per sumber; closing mengikuti sumber order yang cocok.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div data-layout="desktop-table" className="hidden overflow-x-auto md:block">
+          <table className="w-full min-w-[760px] text-sm">
+            <caption className="sr-only">Perbandingan traffic Berdu dan Scalev</caption>
+            <thead className="text-left text-xs text-muted-foreground">
+              <tr>
+                <th className="pb-2 font-medium">Sumber</th>
+                <th className="pb-2 text-right font-medium">Leads</th>
+                <th className="pb-2 text-right font-medium">Closing</th>
+                <th className="pb-2 text-right font-medium">CR</th>
+                <th className="pb-2 text-right font-medium">Omzet</th>
+                <th className="pb-2 text-right font-medium">COD</th>
+                <th className="pb-2 text-right font-medium">Transfer</th>
+              </tr>
+            </thead>
+            <tbody>{rows.map((row) => (
+              <tr key={row.source} className="border-t border-border">
+                <th scope="row" className="py-3 text-left font-medium">{row.label}</th>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.leads)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.closings)}</td>
+                <td className="py-3 text-right tabular-nums">{formatPercentId(row.cr)}</td>
+                <td className="py-3 text-right tabular-nums">{formatRupiah(row.revenue)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.cod)}</td>
+                <td className="py-3 text-right tabular-nums">{formatNumberId(row.transfer)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+
+        <div data-layout="mobile-ledger" className="divide-y divide-border md:hidden">
+          {rows.map((row) => (
+            <article key={row.source} className="space-y-3 py-4 first:pt-0 last:pb-0">
+              <h3 className="font-semibold">{row.label}</h3>
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <strong>{formatNumberId(row.leads)} leads</strong>
+                <span>{formatNumberId(row.closings)} closing</span>
+                <span className="tabular-nums">CR {formatPercentId(row.cr)}</span>
+              </div>
+              <dl className="grid grid-cols-2 gap-4 text-sm">
+                <div><dt className="text-xs text-muted-foreground">Omzet</dt><dd className="tabular-nums">{formatRupiah(row.revenue)}</dd></div>
+                <div><dt className="text-xs text-muted-foreground">Pembayaran</dt><dd className="tabular-nums">COD {formatNumberId(row.cod)} · Transfer {formatNumberId(row.transfer)}</dd></div>
               </dl>
             </article>
           ))}

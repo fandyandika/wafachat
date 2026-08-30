@@ -414,11 +414,11 @@ export async function performanceFromRaw(
   // Fallback order lookup for closings whose orders aren't in the range
   const fbNeeded: Array<{ phone: string; orderIdBerdu?: string }> = [];
   const fbSeen = new Set<string>();
-  for (const r of validClosings) {
+  for (const r of visibleRecaps) {
     const phone = normalizePhone(r.customerPhone);
     if (latestOrderByPhone.has(phone)) continue; // already covered by date-range orders
     if (fbSeen.has(phone)) continue; // already fetched
-    if (r.packageContent && r.csName) continue; // no fallback needed
+    if (r.orderSource) continue;
     fbSeen.add(phone);
     fbNeeded.push({ phone, orderIdBerdu: r.orderIdBerdu });
   }
@@ -452,6 +452,38 @@ export async function performanceFromRaw(
   let totalRevenue = 0;
   let totalDiscount = 0;
   const closedCustomers = new Set<string>();
+  const sourceMap = new Map<string, {
+    source: "berdu" | "scalev" | "unknown";
+    label: string;
+    leads: Set<string>;
+    closings: Set<string>;
+    revenue: number;
+    discount: number;
+    cod: number;
+    transfer: number;
+    delivered: number;
+    cancelled: number;
+  }>();
+  const getSource = (source: "berdu" | "scalev" | "unknown") => {
+    const row = sourceMap.get(source) ?? {
+      source,
+      label: source === "berdu" ? "Berdu" : source === "scalev" ? "Scalev" : "Belum teratribusi",
+      leads: new Set<string>(),
+      closings: new Set<string>(),
+      revenue: 0,
+      discount: 0,
+      cod: 0,
+      transfer: 0,
+      delivered: 0,
+      cancelled: 0,
+    };
+    sourceMap.set(source, row);
+    return row;
+  };
+
+  for (const order of realOrders) {
+    getSource(order.source).leads.add(normalizePhone(order.customerPhone));
+  }
 
   for (const o of uniqueOrders) {
     const p = canonicalizeProduct(o.productName || o.products);
@@ -483,6 +515,22 @@ export async function performanceFromRaw(
     if (r.paymentMethod === "transfer") cs.transfer += 1;
     totalRevenue += revenue;
     totalDiscount += discount;
+    const source = (r.orderSource ?? matchedOrder?.source ?? "unknown") as "berdu" | "scalev" | "unknown";
+    const sourceRow = getSource(source);
+    sourceRow.closings.add(r.orderIdBerdu || phone);
+    sourceRow.revenue += revenue;
+    sourceRow.discount += discount;
+    if (r.paymentMethod === "cod") sourceRow.cod += 1;
+    if (r.paymentMethod === "transfer") sourceRow.transfer += 1;
+    if (r.status === "delivered") sourceRow.delivered += 1;
+  }
+
+  for (const r of visibleRecaps) {
+    if (r.status !== "cancelled" && r.status !== "cancelled_after_export") continue;
+    const phone = normalizePhone(r.customerPhone);
+    const matchedOrder = latestOrderByPhone.get(phone) ?? fallbackOrderByPhone.get(phone);
+    const source = (r.orderSource ?? matchedOrder?.source ?? "unknown") as "berdu" | "scalev" | "unknown";
+    getSource(source).cancelled += 1;
   }
 
   const delivered = visibleRecaps.filter((r: any) => r.status === "delivered").length;
@@ -506,6 +554,24 @@ export async function performanceFromRaw(
       codPct: cr(row.cod, row.cod + row.transfer),
       transferPct: cr(row.transfer, row.cod + row.transfer),
     })),
+    sources: Array.from(sourceMap.values())
+      .map((row) => ({
+        source: row.source,
+        label: row.label,
+        leads: row.leads.size,
+        closings: row.closings.size,
+        cr: cr(row.closings.size, row.leads.size),
+        revenue: row.revenue,
+        discount: row.discount,
+        cod: row.cod,
+        transfer: row.transfer,
+        codPct: cr(row.cod, row.cod + row.transfer),
+        transferPct: cr(row.transfer, row.cod + row.transfer),
+        delivered: row.delivered,
+        cancelled: row.cancelled,
+      }))
+      .filter((row) => row.leads > 0 || row.closings > 0 || row.cancelled > 0)
+      .sort((a, b) => ({ berdu: 0, scalev: 1, unknown: 2 })[a.source] - ({ berdu: 0, scalev: 1, unknown: 2 })[b.source]),
     cs: Array.from(csMap.values()).map((row) => ({
       csName: row.csName,
       leads: row.phones.size,

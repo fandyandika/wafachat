@@ -27,7 +27,13 @@ beforeEach(() => {
   snapshots
     .mockReturnValueOnce({ data: { leads: 12, closings: 8, manualClosings: 8, cancelled: 0, handovers: 0, revenue: 1_500_000 }, loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() })
     .mockReturnValueOnce({ data: undefined, loading: false, error: null, lastUpdatedAt: null, refresh: vi.fn() })
-    .mockReturnValueOnce({ data: { totalClosing: 8, overallCr: 66.7, cancelled: 0, cs: [], products: [] }, loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() });
+    .mockReturnValueOnce({ data: {
+      totalClosing: 8,
+      overallCr: 66.7,
+      cancelled: 0,
+      cs: [],
+      products: [{ product: "Quran Mapping", leads: 12, closing: 8, cr: 66.7, revenue: 1_500_000, discount: 0 }],
+    }, loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() });
 });
 
 test("renders a past date as read-only history without current operational alerts", () => {
@@ -61,6 +67,9 @@ test("puts business metrics before operational attention on the mobile reading p
   expect(html).toContain("md:hidden");
   expect(html).toContain("md:block");
   expect(html).toContain("xl:grid-cols-3 grid-cols-2");
+  expect(html).toContain("12 leads");
+  expect(html).toContain("8 closing");
+  expect(html).toContain("66,7% CR");
 });
 
 test("presents duplicate orders as a readable structured list", () => {

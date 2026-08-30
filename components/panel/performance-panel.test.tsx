@@ -44,6 +44,10 @@ const report: PerformanceReport = {
   },
   cs: [{ ...metrics, csKey: "aisyah", csName: "Aisyah", responseMedianMs: 60_000, deltaCr: 2.5 }],
   products: [{ ...metrics, product: "Quran Mapping" }],
+  sources: [
+    { ...metrics, source: "berdu", label: "Berdu", leads: 20, closings: 10 },
+    { ...metrics, source: "scalev", label: "Scalev", leads: 10, closings: 5 },
+  ],
   weeks: [
     { startDate: "2026-08-01", endDate: "2026-08-02", partial: true, status: "complete", metrics },
     { startDate: "2026-08-03", endDate: "2026-08-09", partial: false, status: "running", metrics },
@@ -81,6 +85,19 @@ test("shows the running summary and clipped monthly weeks", () => {
   expect(html).toContain("1–2 Agu");
   expect(html).toContain("Pekan parsial");
   expect(html).toContain("31 Agu");
+  expect(html).toContain("Per sumber");
+});
+
+test("shows source traffic with leads, closing, and conversion rate", () => {
+  const html = renderToStaticMarkup(
+    <PerformanceBreakdownContent tab={"source" as any} report={report} />,
+  );
+
+  expect(html).toContain("Berdu");
+  expect(html).toContain("Scalev");
+  expect(html).toContain("20");
+  expect(html).toContain("10");
+  expect(html).toContain("50%");
 });
 
 test("formats large revenue deltas in Indonesian Rupiah", () => {
@@ -125,10 +142,11 @@ test("treats a basis change as a new explicit report request", () => {
 
 test.each([
   ["summary", "ArrowRight", "cs"],
-  ["summary", "ArrowLeft", "product"],
-  ["product", "ArrowRight", "summary"],
+  ["summary", "ArrowLeft", "source"],
+  ["product", "ArrowRight", "source"],
+  ["source", "ArrowRight", "summary"],
   ["cs", "Home", "summary"],
-  ["cs", "End", "product"],
+  ["cs", "End", "source"],
   ["summary", "Enter", null],
 ] as const)("moves from %s with %s to %s", (current, key, expected) => {
   expect(nextPerformanceTab(current, key)).toBe(expected);

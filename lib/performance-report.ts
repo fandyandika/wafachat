@@ -31,6 +31,10 @@ export type CsMetricRow = MetricRow & {
 };
 
 export type ProductMetricRow = MetricRow & { product: string };
+export type SourceMetricRow = MetricRow & {
+  source: "berdu" | "scalev" | "unknown";
+  label: string;
+};
 
 export type PerformanceReport = {
   period: PerformancePeriod;
@@ -50,6 +54,7 @@ export type PerformanceReport = {
   };
   cs: CsMetricRow[];
   products: ProductMetricRow[];
+  sources?: SourceMetricRow[];
   weeks: Array<DateRange & {
     partial: boolean;
     status: "upcoming" | "running" | "complete";

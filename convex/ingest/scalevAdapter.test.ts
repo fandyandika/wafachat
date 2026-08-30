@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseScalevOrderEvent } from "./scalevAdapter";
+import { parseScalevOrderEvent, parseScalevOrderHandler } from "./scalevAdapter";
 
 const SCALEV_EVENT = {
   event: "order.created",
@@ -28,6 +28,15 @@ const SCALEV_EVENT = {
 };
 
 describe("parseScalevOrderEvent", () => {
+  test("reads the assigned handler from the official Scalev order detail response", () => {
+    expect(parseScalevOrderHandler({
+      id: "0198-scalev-order-id",
+      handler: { id: 104794, fullname: "Aisyah" },
+    })).toEqual({ handlerId: "104794", handlerName: "Aisyah" });
+
+    expect(parseScalevOrderHandler({ id: "0198-scalev-order-id", handler: null })).toBeNull();
+  });
+
   test("normalizes a Scalev order without changing the provider order identity", () => {
     expect(parseScalevOrderEvent(SCALEV_EVENT, { "482913": "Aisyah" })).toEqual({
       kind: "order",

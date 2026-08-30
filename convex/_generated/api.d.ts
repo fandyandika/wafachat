@@ -41,6 +41,8 @@ import type * as ingest_monitor from "../ingest/monitor.js";
 import type * as ingest_reconcileState from "../ingest/reconcileState.js";
 import type * as ingest_reconciler from "../ingest/reconciler.js";
 import type * as ingest_scalevAdapter from "../ingest/scalevAdapter.js";
+import type * as ingest_scalevEnrichment from "../ingest/scalevEnrichment.js";
+import type * as ingest_scalevEnrichmentActions from "../ingest/scalevEnrichmentActions.js";
 import type * as ingest_scalevSignature from "../ingest/scalevSignature.js";
 import type * as ingest_signature from "../ingest/signature.js";
 import type * as ingest_sources from "../ingest/sources.js";
@@ -103,6 +105,8 @@ declare const fullApi: ApiFromModules<{
   "ingest/reconcileState": typeof ingest_reconcileState;
   "ingest/reconciler": typeof ingest_reconciler;
   "ingest/scalevAdapter": typeof ingest_scalevAdapter;
+  "ingest/scalevEnrichment": typeof ingest_scalevEnrichment;
+  "ingest/scalevEnrichmentActions": typeof ingest_scalevEnrichmentActions;
   "ingest/scalevSignature": typeof ingest_scalevSignature;
   "ingest/signature": typeof ingest_signature;
   "ingest/sources": typeof ingest_sources;

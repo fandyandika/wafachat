@@ -5,6 +5,7 @@ import { RefreshCw } from "lucide-react";
 import {
   CsPerformanceBreakdown,
   ProductPerformanceBreakdown,
+  SourcePerformanceBreakdown,
 } from "@/components/panel/performance-breakdowns";
 import { StatusStamp } from "@/components/panel/dashboard/ledger";
 import { PerformanceSummary, PerformanceSummarySkeleton } from "@/components/panel/performance-summary";
@@ -16,7 +17,7 @@ import type { DateRange, PerformancePeriod, PerformanceReport } from "@/lib/perf
 import type { DayBasis } from "@/lib/history-period";
 import { cn } from "@/lib/utils";
 
-const tabs = [['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per produk']] as const;
+const tabs = [['summary', 'Ringkasan'], ['cs', 'Per CS'], ['product', 'Per produk'], ['source', 'Per sumber']] as const;
 type PerformanceTab = typeof tabs[number][0];
 
 export type SubmittedArgs = {
@@ -208,6 +209,11 @@ export function PerformanceBreakdownContent({
   }
   if (tab === "product") {
     return <ProductPerformanceBreakdown rows={report.products} />;
+  }
+  if (tab === "source") {
+    return report.sources?.length
+      ? <SourcePerformanceBreakdown rows={report.sources} />
+      : <PanelState kind="empty" title="Breakdown sumber belum tersedia untuk periode ini" />;
   }
   return null;
 }

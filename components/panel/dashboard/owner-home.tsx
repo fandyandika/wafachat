@@ -236,13 +236,15 @@ function CsRanking({ rows, avatarByKey, periodLabel }: {
 
 function ProductRanking({ rows, periodLabel }: { rows: PerformanceData['products']; periodLabel: string }) {
   return (
-    <LedgerSection title="Top Produk" description={`Closing terbanyak · ${periodLabel}`}>
+    <LedgerSection title="Top Produk" description={`Leads, closing, dan CR · ${periodLabel}`}>
       <div className="divide-y divide-ledger-rule px-4">
         {rows.length ? rows.map((row) => (
           <div key={row.product} className="py-3">
             <div className="flex justify-between gap-3 text-sm">
               <span className="truncate font-medium">{row.product}</span>
-              <span className="shrink-0 tabular-nums text-muted-foreground">{row.closing} · {row.cr}%</span>
+              <span className="shrink-0 tabular-nums text-muted-foreground">
+                {row.leads} leads · {row.closing} closing · {new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 }).format(row.cr)}% CR
+              </span>
             </div>
             <div className="mt-2 h-1 bg-muted"><div className={cn('h-full', crBarClass(row.cr))} style={{ width: `${Math.min(Math.max(row.cr, 0), 100)}%` }} /></div>
           </div>

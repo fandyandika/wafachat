@@ -161,6 +161,47 @@ test("daily calendar reports use exact Jakarta midnight bounds and exclude anoth
   expect(report.products).toEqual([
     expect.objectContaining({ product: "Quran Mapping", leads: 2, closings: 2, cod: 1, transfer: 1 }),
   ]);
+  expect(report.sources).toEqual([
+    expect.objectContaining({ source: "berdu", label: "Berdu", leads: 2, closings: 2 }),
+  ]);
+});
+
+test("reports Berdu and Scalev traffic separately without changing the overall totals", async () => {
+  vi.useFakeTimers({ now: new Date("2026-08-10T12:00:00.000Z") });
+  const t = convexTest(schema, modules);
+  const orgId = await seed(t);
+  const at = Date.parse("2026-08-07T10:00:00+07:00");
+
+  await t.run(async (ctx: any) => {
+    for (const [index, source] of (["berdu", "scalev"] as const).entries()) {
+      const phone = `628555777000${index}`;
+      const orderId = source === "scalev" ? `scalev:order-${index}` : `O-order-${index}`;
+      await ctx.db.insert("orders", {
+        orgId, orderId, customerPhone: phone, customerName: `Customer ${index}`,
+        assignedCsName: "Aisyah", csKey: "aisyah", productName: "Quran Mapping", products: "Quran Mapping",
+        productsSubtotal: "100000", shippingCost: "0", total: "100000", shippingAddress: "",
+        shippingDistrict: "", shippingCity: "", source, aiEligible: false, createdAt: at + index, updatedAt: at + index,
+      });
+      await ctx.db.insert("shippingRecaps", {
+        orgId, orderIdBerdu: orderId, orderSource: source, customerPhone: phone, customerName: `Customer ${index}`,
+        csName: "Aisyah", csKey: "aisyah", closedAt: at + index, recipientName: `Customer ${index}`,
+        recipientPhone: phone, recipientAddress: "", recipientDistrict: "", recipientCity: "",
+        packageContent: "Quran Mapping", paymentMethod: "cod", total: 100000, status: "ready", flags: [],
+        sourceMessageText: "", version: 1, createdAt: at + index, updatedAt: at + index,
+      });
+    }
+  });
+
+  const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
+  const report = await admin.query((api as any).performanceReports.getPerformanceReport, {
+    period: "day", basis: "calendar", startDate: "2026-08-07", endDate: "2026-08-07",
+  });
+
+  expect(report.summary).toMatchObject({ leads: 2, closings: 2 });
+  expect(report.sources).toEqual([
+    expect.objectContaining({ source: "berdu", label: "Berdu", leads: 1, closings: 1, cr: 100 }),
+    expect.objectContaining({ source: "scalev", label: "Scalev", leads: 1, closings: 1, cr: 100 }),
+  ]);
 });
 
 test("scopes every report section to one CS", async () => {
