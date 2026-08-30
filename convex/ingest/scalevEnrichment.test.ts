@@ -5,7 +5,7 @@ import { internal } from "../_generated/api";
 
 const modules = (import.meta as any).glob("/convex/**/*.{ts,js}");
 
-test("enrichment replaces Scalev Unassigned with the mapped CS and moves its rollup", async () => {
+test("enrichment falls back to the Scalev handler name when its API id is not mapped", async () => {
   const t = convexTest(schema, modules);
   const at = Date.parse("2026-08-30T09:00:00+07:00");
   const orgId = await t.run(async (ctx: any) => {
@@ -39,7 +39,8 @@ test("enrichment replaces Scalev Unassigned with the mapped CS and moves its rol
   await t.mutation((internal as any).ingest.scalevEnrichment.applyEnrichedHandler, {
     orgId,
     orderId: "scalev:order-1",
-    handlerId: "104794",
+    handlerId: "581746",
+    handlerName: "Aisyah",
   });
 
   const state = await t.run(async (ctx: any) => ({

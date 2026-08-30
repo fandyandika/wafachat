@@ -15,6 +15,7 @@ export const applyEnrichedHandler = internalMutation({
     orgId: v.id("organizations"),
     orderId: v.string(),
     handlerId: v.string(),
+    handlerName: v.optional(v.string()),
   },
   returns: enrichmentResultValidator,
   handler: async (ctx, args) => {
@@ -24,7 +25,11 @@ export const applyEnrichedHandler = internalMutation({
       .unique();
     if (!order || order.source !== "scalev") return { status: "missing" as const };
 
-    const agent = await resolveAgent(ctx, args.orgId, { scalevHandlerId: args.handlerId });
+    const agent =
+      await resolveAgent(ctx, args.orgId, { scalevHandlerId: args.handlerId }) ??
+      (args.handlerName
+        ? await resolveAgent(ctx, args.orgId, { name: args.handlerName })
+        : null);
     if (!agent) return { status: "unmapped" as const, handlerId: args.handlerId };
 
     await upsertOrderCore(ctx, {

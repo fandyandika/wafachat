@@ -38,6 +38,7 @@ async function enrich(
     orgId: args.orgId,
     orderId: args.orderId,
     handlerId: handler.handlerId,
+    handlerName: handler.handlerName,
   });
 }
 
