@@ -63,3 +63,23 @@ test("CS Arena uses the canonical team Queen instead of crowning the signed-in C
   expect(html).toContain("Azelia");
   expect(html).not.toContain("Takhta masih milikmu, Aisyah");
 });
+
+test("excluded reward days keep the report but do not crown a daily Queen", () => {
+  state.viewer = { name: "Admin", role: "admin", email: "admin@wafachat", csName: undefined };
+  state.response = { overall: { firstReplyMedianMs: null, firstReplyCount: 0, slaBreaches: 0 }, cs: [] };
+  const report = {
+    totals: { leads: 10, closings: 7, cr: 70, revenue: 0, discount: 0, cpDiscount: 0 },
+    cs: [{ csName: "Aisyah", leads: 10, closings: 7, cr: 70, revenue: 0, discount: 0, cpDiscount: 0, duplicates: 0, products: [] }],
+  };
+  state.snapshots = [
+    { data: report, loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() },
+    { data: { winnerCsName: null, scores: [], sealed: true, excludedReason: "Ahad" }, loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() },
+    { data: undefined, loading: false, error: null, lastUpdatedAt: null, refresh: vi.fn() },
+  ];
+
+  const html = renderToStaticMarkup(<DailyReportDashboard />);
+
+  expect(html).toContain("Queen tidak dihitung · Ahad");
+  expect(html).not.toContain("Queen CS · juara umum");
+  expect(html).toContain("Aisyah");
+});

@@ -8,11 +8,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { PanelState } from '@/components/panel/panel-state';
 
-type Standing = { csKey: string; csName: string; wins: number };
+type Standing = { csKey: string; csName: string; wins: number; winningScoreTotal: number };
+type TieBreak = { applied: boolean; basis: 'winning_score_total'; contenders: Array<{ csName: string; score: number }> } | null;
 export type QueenRecapData = {
-  awards: Array<{ windowKey: string; status: 'won' | 'no_winner'; winnerCsName?: string; score?: number; leads?: number; closings?: number; cr?: number }>;
-  monthly: { winners: string[]; winCount: number; standings: Standing[] };
-  weekly: Array<{ week: number; startKey: string; endKey: string; status: 'complete' | 'running' | 'upcoming'; winners: string[]; winCount: number; standings: Standing[] }>;
+  awards: Array<{ windowKey: string; status: 'won' | 'no_winner'; winnerCsName?: string; score?: number; leads?: number; closings?: number; cr?: number; excludedReason?: string }>;
+  monthly: { winners: string[]; winCount: number; standings: Standing[]; tieBreak?: TieBreak };
+  weekly: Array<{ week: number; startKey: string; endKey: string; status: 'complete' | 'running' | 'upcoming'; winners: string[]; winCount: number; standings: Standing[]; tieBreak?: TieBreak }>;
   setupNeeded: boolean;
 };
 
@@ -45,7 +46,7 @@ function weekStatus(month: string, currentMonth: string) {
 const WEEK_STATUS = { complete: 'Selesai', running: 'Berjalan', upcoming: 'Akan datang' } as const;
 
 export function QueenRecapView({ recap, month, currentMonth, onBackfill, busy }: { recap: QueenRecapData; month: string; currentMonth: string; onBackfill: () => void; busy: boolean }) {
-  const status = weekStatus(month, currentMonth);
+  const status = recap.weekly.every((week) => week.status === 'complete') ? 'Selesai' : weekStatus(month, currentMonth);
   const canBackfill = recap.setupNeeded;
 
   return (
@@ -76,7 +77,7 @@ export function QueenRecapView({ recap, month, currentMonth, onBackfill, busy }:
               <div className="text-xs font-medium text-muted-foreground">Perolehan Queen</div>
               {recap.monthly.standings.length ? (
                 <div className="mt-2 space-y-1.5 text-sm">
-                  {recap.monthly.standings.slice(0, 3).map((row, index) => <div key={row.csKey} className="flex justify-between gap-3"><span>{index + 1}. {row.csName}</span><span className="font-medium">{row.wins}x</span></div>)}
+                  {recap.monthly.standings.map((row, index) => <div key={row.csKey} className="flex justify-between gap-3"><span>{index + 1}. {row.csName}</span><span className="font-medium">{row.wins}x</span></div>)}
                 </div>
               ) : <p className="mt-2 text-sm text-muted-foreground">Belum ada pemenang harian.</p>}
             </section>
@@ -85,14 +86,17 @@ export function QueenRecapView({ recap, month, currentMonth, onBackfill, busy }:
           <section aria-label="Pemenang Queen pekanan">
             <div className="mb-2 flex items-baseline justify-between gap-3"><h2 className="text-sm font-medium">Pemenang Queen pekanan</h2><p className="text-xs text-muted-foreground">4 pekan bonus</p></div>
             <div className="grid gap-2 sm:grid-cols-2">
-              {recap.weekly.map((week) => <div key={week.week} className="rounded-lg border border-border px-3 py-2.5 text-sm"><div className="flex items-center justify-between gap-2"><span className="font-medium">Pekan {week.week}</span><span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{WEEK_STATUS[week.status]}</span></div><div className="mt-1 text-muted-foreground">{formatDate(week.startKey)} – {formatDate(week.endKey)}</div><div className="mt-1 font-medium">{week.status === 'running' && !week.winners.length ? 'Menunggu penutupan 16:00' : week.status === 'upcoming' ? 'Belum dimulai' : winnerLabel(week.winners)}</div></div>)}
+              {recap.weekly.map((week) => {
+                const resolvedTieBreak = week.tieBreak?.applied && week.winners.length === 1;
+                return <div key={week.week} className="rounded-lg border border-border px-3 py-2.5 text-sm"><div className="flex items-center justify-between gap-2"><span className="font-medium">Pekan {week.week}</span><span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{WEEK_STATUS[week.status]}</span></div><div className="mt-1 text-muted-foreground">{formatDate(week.startKey)} – {formatDate(week.endKey)}</div><div className="mt-1 font-medium">{week.status === 'running' && !week.winners.length ? 'Menunggu penutupan 16:00' : week.status === 'upcoming' ? 'Belum dimulai' : winnerLabel(week.winners)}</div>{resolvedTieBreak && <div className="mt-1 text-xs text-muted-foreground">Menang tiebreak skor · {week.tieBreak!.contenders.map((row) => `${row.csName} ${row.score.toFixed(1)}`).join(' · ')}</div>}</div>;
+              })}
             </div>
           </section>
 
           <section aria-label="Riwayat Queen harian" className="overflow-x-auto">
             <h2 className="mb-2 text-sm font-medium">Riwayat Queen harian</h2>
             {recap.awards.length ? (
-              <table className="w-full min-w-[480px] text-left text-sm"><caption className="sr-only">Riwayat Queen harian untuk {formatMonth(month)}</caption><thead className="border-b text-xs text-muted-foreground"><tr><th className="pb-2 font-medium">Tanggal</th><th className="pb-2 font-medium">Queen</th><th className="pb-2 text-right font-medium">Skor</th><th className="pb-2 text-right font-medium">CR</th><th className="pb-2 text-right font-medium">Closing</th></tr></thead><tbody>{recap.awards.map((award) => <tr key={award.windowKey} className="border-b last:border-0"><td className="py-2.5">{formatDate(award.windowKey)}</td><td className="py-2.5 font-medium">{award.status === 'won' ? award.winnerCsName : 'Tidak ada Queen'}</td><td className="py-2.5 text-right">{award.score?.toFixed(1) ?? '–'}</td><td className="py-2.5 text-right">{award.cr == null ? '–' : `${award.cr}%`}</td><td className="py-2.5 text-right">{award.closings ?? '–'}</td></tr>)}</tbody></table>
+              <table className="w-full min-w-[480px] text-left text-sm"><caption className="sr-only">Riwayat Queen harian untuk {formatMonth(month)}</caption><thead className="border-b text-xs text-muted-foreground"><tr><th className="pb-2 font-medium">Tanggal</th><th className="pb-2 font-medium">Queen</th><th className="pb-2 text-right font-medium">Skor</th><th className="pb-2 text-right font-medium">CR</th><th className="pb-2 text-right font-medium">Closing</th></tr></thead><tbody>{recap.awards.map((award) => <tr key={award.windowKey} className="border-b last:border-0"><td className="py-2.5">{formatDate(award.windowKey)}</td><td className="py-2.5 font-medium">{award.excludedReason ? `Tidak dihitung · ${award.excludedReason}` : award.status === 'won' ? award.winnerCsName : 'Tidak ada Queen'}</td><td className="py-2.5 text-right">{award.excludedReason ? '–' : award.score?.toFixed(1) ?? '–'}</td><td className="py-2.5 text-right">{award.excludedReason || award.cr == null ? '–' : `${award.cr}%`}</td><td className="py-2.5 text-right">{award.excludedReason ? '–' : award.closings ?? '–'}</td></tr>)}</tbody></table>
             ) : <PanelState kind="empty" title="Belum ada rekap harian" description="Queen yang memenuhi syarat akan tampil di sini." />}
           </section>
         </CardContent>

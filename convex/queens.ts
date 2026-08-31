@@ -10,6 +10,7 @@ import {
 } from "./lib";
 import { responseTimesFromSamples } from "./rollupReaders";
 import { computeQueenCs, computeQueenScores } from "../lib/queen";
+import { queenExclusionForDate } from "../lib/queen-calendar";
 
 type Award = {
   windowKey: string;
@@ -21,6 +22,7 @@ type Award = {
   closings?: number;
   cr?: number;
   respMedianMs?: number;
+  excludedReason?: string;
 };
 
 async function computeWindowStanding(ctx: any, orgId: Id<"organizations">, windowKey: string) {
@@ -90,18 +92,53 @@ function monthWeeks(month: string) {
   }));
 }
 
-function standings(awards: Award[]) {
-  const byCs = new Map<string, { csKey: string; csName: string; wins: number }>();
+function standings(awards: Award[], participants: Array<{ csKey: string; csName: string }> = []) {
+  const byCs = new Map<string, { csKey: string; csName: string; wins: number; winningScoreTotal: number; scoredWins: number }>();
+  for (const participant of participants) {
+    byCs.set(participant.csKey, { ...participant, wins: 0, winningScoreTotal: 0, scoredWins: 0 });
+  }
   for (const award of awards) {
     if (award.status !== "won" || !award.winnerCsKey || !award.winnerCsName) continue;
-    const row = byCs.get(award.winnerCsKey) ?? { csKey: award.winnerCsKey, csName: award.winnerCsName, wins: 0 };
+    const row = byCs.get(award.winnerCsKey) ?? {
+      csKey: award.winnerCsKey, csName: award.winnerCsName, wins: 0, winningScoreTotal: 0, scoredWins: 0,
+    };
     row.csName = award.winnerCsName;
-    row.wins++;
     byCs.set(row.csKey, row);
+    if (award.excludedReason) continue;
+    row.wins++;
+    if (award.score != null) {
+      row.winningScoreTotal += award.score;
+      row.scoredWins++;
+    }
   }
-  const rows = Array.from(byCs.values()).sort((a, b) => b.wins - a.wins || a.csName.localeCompare(b.csName));
+  const internalRows = Array.from(byCs.values()).sort(
+    (a, b) => b.wins - a.wins || b.winningScoreTotal - a.winningScoreTotal || a.csName.localeCompare(b.csName),
+  );
+  const rows = internalRows.map(({ scoredWins: _scoredWins, ...row }) => ({
+    ...row,
+    winningScoreTotal: Math.round(row.winningScoreTotal * 10) / 10,
+  }));
   const winCount = rows[0]?.wins ?? 0;
-  return { standings: rows, winCount, winners: winCount ? rows.filter((row) => row.wins === winCount).map((row) => row.csName) : [] };
+  const leaders = winCount ? internalRows.filter((row) => row.wins === winCount) : [];
+  let winners = leaders.map((row) => row.csName);
+  let tieBreak: null | {
+    applied: boolean;
+    basis: "winning_score_total";
+    contenders: Array<{ csName: string; score: number }>;
+  } = null;
+  if (leaders.length > 1) {
+    const contenders = leaders.map((row) => ({
+      csName: row.csName,
+      score: Math.round(row.winningScoreTotal * 10) / 10,
+    }));
+    const canApply = leaders.every((row) => row.scoredWins === row.wins);
+    if (canApply) {
+      const bestScore = Math.max(...leaders.map((row) => row.winningScoreTotal));
+      winners = leaders.filter((row) => Math.abs(row.winningScoreTotal - bestScore) < 0.0001).map((row) => row.csName);
+    }
+    tieBreak = { applied: canApply, basis: "winning_score_total", contenders };
+  }
+  return { standings: rows, winCount, winners, tieBreak };
 }
 
 export const captureWindow = internalMutation({
@@ -151,6 +188,7 @@ export const getDailyStanding = query({
     winnerCsName: v.union(v.string(), v.null()),
     scores: v.array(queenScoreValidator),
     sealed: v.boolean(),
+    excludedReason: v.union(v.string(), v.null()),
   }),
   handler: async (ctx, args) => {
     if (!isBusinessDate(args.businessDate)) {
@@ -158,6 +196,7 @@ export const getDailyStanding = query({
     }
     const { orgId } = await requireMemberOrg(ctx, "queens.getDailyStanding");
     const windowKey = windowKeyForBusinessDate(args.businessDate);
+    const exclusion = queenExclusionForDate(args.businessDate);
     const [{ scores, queen }, award] = await Promise.all([
       computeWindowStanding(ctx, orgId, windowKey),
       ctx.db.query("queenAwards")
@@ -165,11 +204,14 @@ export const getDailyStanding = query({
         .unique(),
     ]);
     return {
-      winnerCsName: award
+      winnerCsName: exclusion
+        ? null
+        : award
         ? award.status === "won" ? award.winnerCsName ?? null : null
         : queen?.csName ?? null,
       scores,
       sealed: award !== null,
+      excludedReason: exclusion?.label ?? null,
     };
   },
 });
@@ -205,11 +247,23 @@ export const getMonth = query({
     const bounds = monthBounds(args.month);
     const sourceFirst = windowKeyForBusinessDate(bounds.first);
     const sourceAfterLast = windowKeyForBusinessDate(bounds.afterLast);
-    const rows = await ctx.db.query("queenAwards")
-      .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).gte("windowKey", sourceFirst).lt("windowKey", sourceAfterLast)).collect();
-    const awards = rows.map(({ windowKey, status, winnerCsKey, winnerCsName, score, leads, closings, cr, respMedianMs }) => (
-      { windowKey: businessDateKeyForWindowKey(windowKey), status, winnerCsKey, winnerCsName, score, leads, closings, cr, respMedianMs }
-    )).sort((a, b) => a.windowKey.localeCompare(b.windowKey));
+    const [rows, configs] = await Promise.all([
+      ctx.db.query("queenAwards")
+        .withIndex("by_org_windowKey", (q) => q.eq("orgId", orgId).gte("windowKey", sourceFirst).lt("windowKey", sourceAfterLast)).collect(),
+      ctx.db.query("csConfigs")
+        .withIndex("by_org_active", (q) => q.eq("orgId", orgId).eq("isActive", true)).collect(),
+    ]);
+    const awards = rows.map(({ windowKey, status, winnerCsKey, winnerCsName, score, leads, closings, cr, respMedianMs }) => {
+      const businessDate = businessDateKeyForWindowKey(windowKey);
+      return {
+        windowKey: businessDate, status, winnerCsKey, winnerCsName, score, leads, closings, cr, respMedianMs,
+        excludedReason: queenExclusionForDate(businessDate)?.label,
+      };
+    }).sort((a, b) => a.windowKey.localeCompare(b.windowKey));
+    const participants = configs.filter((config) => config.reportingEnabled).map((config) => ({
+      csKey: csKey(config.csName),
+      csName: config.csName,
+    }));
     const sourceLast = windowKeyFor(windowRangeForKey(sourceAfterLast).startAt - 1);
     const lastClosed = closedWindowKey();
     const expectedInMonth = keysInRange(sourceFirst, lastClosed < sourceLast ? lastClosed : sourceLast);
@@ -224,9 +278,9 @@ export const getMonth = query({
         : currentBusinessDate >= week.startKey && currentBusinessDate <= week.endKey
           ? "running" as const
           : "upcoming" as const,
-      ...standings(awards.filter((award) => award.windowKey >= week.startKey && award.windowKey <= week.endKey)),
+      ...standings(awards.filter((award) => award.windowKey >= week.startKey && award.windowKey <= week.endKey), participants),
     }));
-    return { awards, monthly: standings(awards), weekly, setupNeeded: expectedInMonth.some((key) => !knownSourceKeys.has(key)) };
+    return { awards, monthly: standings(awards, participants), weekly, setupNeeded: expectedInMonth.some((key) => !knownSourceKeys.has(key)) };
   },
 });
 

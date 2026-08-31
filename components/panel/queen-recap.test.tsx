@@ -6,8 +6,16 @@ import { QueenRecapView } from "./queen-recap";
 (globalThis as any).React = React;
 
 const recap = {
-  awards: [{ windowKey: "2026-07-20", status: "won" as const, winnerCsName: "Azelia", score: 82.5, leads: 10, closings: 8, cr: 80, respMedianMs: 60_000 }],
-  monthly: { winners: ["Azelia"], winCount: 3, standings: [{ csKey: "azelia", csName: "Azelia", wins: 3 }] },
+  awards: [
+    { windowKey: "2026-07-19", status: "won" as const, winnerCsName: "Aisyah", score: 80, leads: 10, closings: 8, cr: 80, respMedianMs: 60_000, excludedReason: "Ahad" },
+    { windowKey: "2026-07-20", status: "won" as const, winnerCsName: "Azelia", score: 82.5, leads: 10, closings: 8, cr: 80, respMedianMs: 60_000 },
+  ],
+  monthly: { winners: ["Azelia"], winCount: 3, standings: [
+    { csKey: "azelia", csName: "Azelia", wins: 3, winningScoreTotal: 247.5 },
+    { csKey: "nabila", csName: "Nabila", wins: 2, winningScoreTotal: 160 },
+    { csKey: "lila", csName: "Lila", wins: 1, winningScoreTotal: 80 },
+    { csKey: "aisyah", csName: "Aisyah", wins: 0, winningScoreTotal: 0 },
+  ] },
   weekly: [
     { week: 1, startKey: "2026-07-01", endKey: "2026-07-07", status: "complete" as const, winners: ["Azelia"], winCount: 2, standings: [] },
     { week: 2, startKey: "2026-07-08", endKey: "2026-07-14", status: "complete" as const, winners: ["Azelia", "Nabila"], winCount: 1, standings: [] },
@@ -38,4 +46,10 @@ test("shows a selected-month Queen with daily recap and an ongoing week", () => 
 test("marks historical weekly recap as complete", () => {
   const html = renderToStaticMarkup(<QueenRecapView recap={recap} month="2026-07" currentMonth="2026-08" onBackfill={() => undefined} busy={false} />);
   expect(html).toContain("Selesai");
+});
+
+test("shows every CS and labels excluded reward days", () => {
+  const html = renderToStaticMarkup(<QueenRecapView recap={recap} month="2026-07" currentMonth="2026-08" onBackfill={() => undefined} busy={false} />);
+  expect(html).toContain("4. Aisyah");
+  expect(html).toContain("Tidak dihitung · Ahad");
 });

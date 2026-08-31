@@ -96,6 +96,7 @@ export function DailyReportDashboard() {
     winnerCsName: string | null;
     scores: QueenScoreRow[];
     sealed: boolean;
+    excludedReason: string | null;
   }>(api.queens.getDailyStanding, { businessDate });
   const respData = useResponseTimes({ startAt, endAt, refreshKey: respRefreshKey });
   // Previous window (same 24h length, one day earlier) for ▲▼ deltas. Skipped when
@@ -328,6 +329,12 @@ export function DailyReportDashboard() {
         <ReportSkeleton />
       ) : (
         <div ref={boardRef} className="space-y-6">
+          {queenStanding?.excludedReason && (
+            <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm">
+              <span className="font-medium">Queen tidak dihitung · {queenStanding.excludedReason}</span>
+              <span className="text-muted-foreground"> · Data performa tetap ditampilkan.</span>
+            </div>
+          )}
           {scopedView && (
             <ArenaHero
               scores={queenScores}

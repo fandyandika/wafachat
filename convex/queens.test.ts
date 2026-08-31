@@ -58,7 +58,7 @@ test("captureWindow stores one daily Queen snapshot and stays idempotent", async
 test("every CS account sees the same organization-wide daily Queen", async () => {
   const t = convexTest(schema, modules);
   const orgId = await seedOrg(t);
-  const windowKey = "2026-08-01";
+  const windowKey = "2026-08-02";
   const { startAt } = windowRangeForKey(windowKey);
   const identities = await t.run(async (ctx: any) => {
     const userIds: Record<string, string> = {};
@@ -94,7 +94,7 @@ test("every CS account sees the same organization-wide daily Queen", async () =>
 
   const aisyah = t.withIdentity({ subject: identities.aisyah, role: "cs", name: "Aisyah", email: "aisyah@wafachat" });
   const azelia = t.withIdentity({ subject: identities.azelia, role: "cs", name: "Azelia", email: "azelia@wafachat" });
-  const args = { businessDate: "2026-08-02" };
+  const args = { businessDate: "2026-08-03" };
 
   const [seenByAisyah, seenByAzelia] = await Promise.all([
     aisyah.query((api as any).queens.getDailyStanding, args),
@@ -172,7 +172,7 @@ test("month recap maps source windows to closing dates and always returns four f
   });
 
   const recap = await admin.query((api as any).queens.getMonth, { month: "2026-08" });
-  expect(recap.monthly.winners).toEqual(["Azelia", "Nabila"]);
+  expect(recap.monthly.winners).toEqual(["Azelia"]);
   expect(recap.awards.map((row: any) => row.windowKey)).toEqual(["2026-08-01", "2026-08-02"]);
   expect(recap.weekly).toHaveLength(4);
   expect(recap.weekly[0].weekStart).toBe("2026-08-01");
@@ -180,8 +180,61 @@ test("month recap maps source windows to closing dates and always returns four f
     ["2026-08-01", "2026-08-07"], ["2026-08-08", "2026-08-14"],
     ["2026-08-15", "2026-08-21"], ["2026-08-22", "2026-08-31"],
   ]);
-  expect(recap.weekly[0].winners).toEqual(["Azelia", "Nabila"]);
+  expect(recap.weekly[0].winners).toEqual(["Azelia"]);
   expect(recap.weekly.map((week: any) => week.status)).toEqual(["complete", "running", "upcoming", "upcoming"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("daily Queen keeps performance scores but does not crown an excluded Sunday", async () => {
+  const t = convexTest(schema, modules);
+  const orgId = await seedOrg(t);
+  await seedEligibleDay(t, orgId, "2026-08-01");
+  const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
+
+  const result = await admin.query((api as any).queens.getDailyStanding, { businessDate: "2026-08-02" });
+
+  expect(result.winnerCsName).toBeNull();
+  expect(result.excludedReason).toBe("Ahad");
+  expect(result.scores.length).toBeGreaterThan(0);
+});
+
+test("month recap excludes reward holidays and resolves equal daily wins by winning-score total", async () => {
+  vi.useFakeTimers({ now: new Date("2026-09-01T03:00:00.000Z") });
+  try {
+    const t = convexTest(schema, modules);
+    const admin = t.withIdentity({ subject: "admin", role: "admin", name: "Admin", email: "admin@wafachat" });
+    const orgId = await seedOrg(t);
+    await t.run(async (ctx: any) => {
+      const rows = [
+        // Business dates 23, 25, and 30 August are excluded (Ahad/holiday).
+        ["2026-08-21", "azelia", "Azelia", 87.8],
+        ["2026-08-22", "lila", "Lila", 71.6],
+        ["2026-08-23", "lila", "Lila", 84.8],
+        ["2026-08-24", "nabila", "Nabila", 81.5],
+        ["2026-08-25", "lila", "Lila", 82.9],
+        ["2026-08-26", "lila", "Lila", 90.8],
+        ["2026-08-27", "nabila", "Nabila", 87.6],
+        ["2026-08-28", "nabila", "Nabila", 97.4],
+        ["2026-08-29", "azelia", "Azelia", 91.9],
+        ["2026-08-30", "nabila", "Nabila", 100],
+      ] as const;
+      for (const [windowKey, winnerCsKey, winnerCsName, score] of rows) {
+        await ctx.db.insert("queenAwards", {
+          orgId, windowKey, status: "won", winnerCsKey, winnerCsName, score,
+          leads: 10, closings: 8, cr: 80, respMedianMs: 60_000, sealedAt: 1,
+        });
+      }
+    });
+
+    const recap = await admin.query((api as any).queens.getMonth, { month: "2026-08" });
+    expect(recap.awards.find((row: any) => row.windowKey === "2026-08-23").excludedReason).toBe("Ahad");
+    expect(recap.awards.find((row: any) => row.windowKey === "2026-08-25").excludedReason).toBe("Maulid Nabi Muhammad SAW");
+    expect(recap.awards.find((row: any) => row.windowKey === "2026-08-30").excludedReason).toBe("Ahad");
+    expect(recap.weekly[3].winCount).toBe(3);
+    expect(recap.weekly[3].winners).toEqual(["Nabila"]);
+    expect(recap.weekly[3].tieBreak).toMatchObject({ applied: true, basis: "winning_score_total" });
   } finally {
     vi.useRealTimers();
   }
