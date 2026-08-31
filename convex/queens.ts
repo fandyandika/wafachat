@@ -85,7 +85,28 @@ function monthWeeks(month: string) {
   const [year, monthNumber] = month.split("-").map(Number);
   const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
   const key = (day: number) => `${month}-${String(day).padStart(2, "0")}`;
-  return [[1, 7], [8, 14], [15, 21], [22, lastDay]].map(([start, end], index) => ({
+  const calendarWeeks: Array<[number, number]> = [];
+  let start = 1;
+  const firstDayOfWeek = new Date(Date.UTC(year, monthNumber - 1, 1)).getUTCDay();
+  let end = Math.min(lastDay, 1 + ((7 - firstDayOfWeek) % 7));
+  while (start <= lastDay) {
+    calendarWeeks.push([start, end]);
+    start = end + 1;
+    end = Math.min(lastDay, start + 6);
+  }
+  while (calendarWeeks.length > 4) {
+    const firstLength = calendarWeeks[0][1] - calendarWeeks[0][0] + 1;
+    const lastIndex = calendarWeeks.length - 1;
+    const lastLength = calendarWeeks[lastIndex][1] - calendarWeeks[lastIndex][0] + 1;
+    if (firstLength <= lastLength) {
+      calendarWeeks[1][0] = calendarWeeks[0][0];
+      calendarWeeks.shift();
+    } else {
+      calendarWeeks[lastIndex - 1][1] = calendarWeeks[lastIndex][1];
+      calendarWeeks.pop();
+    }
+  }
+  return calendarWeeks.map(([start, end], index) => ({
     week: index + 1,
     startKey: key(start),
     endKey: key(end),

@@ -177,8 +177,8 @@ test("month recap maps source windows to closing dates and always returns four f
   expect(recap.weekly).toHaveLength(4);
   expect(recap.weekly[0].weekStart).toBe("2026-08-01");
   expect(recap.weekly.map((week: any) => [week.startKey, week.endKey])).toEqual([
-    ["2026-08-01", "2026-08-07"], ["2026-08-08", "2026-08-14"],
-    ["2026-08-15", "2026-08-21"], ["2026-08-22", "2026-08-31"],
+    ["2026-08-01", "2026-08-09"], ["2026-08-10", "2026-08-16"],
+    ["2026-08-17", "2026-08-23"], ["2026-08-24", "2026-08-31"],
   ]);
   expect(recap.weekly[0].winners).toEqual(["Azelia"]);
   expect(recap.weekly.map((week: any) => week.status)).toEqual(["complete", "running", "upcoming", "upcoming"]);
@@ -212,13 +212,14 @@ test("month recap excludes reward holidays and preserves equal daily wins as a s
         ["2026-08-21", "azelia", "Azelia", 87.8],
         ["2026-08-22", "lila", "Lila", 71.6],
         ["2026-08-23", "lila", "Lila", 84.8],
-        ["2026-08-24", "nabila", "Nabila", 81.5],
+        ["2026-08-24", "lila", "Lila", 81.5],
         ["2026-08-25", "lila", "Lila", 82.9],
         ["2026-08-26", "lila", "Lila", 90.8],
         ["2026-08-27", "nabila", "Nabila", 87.6],
         ["2026-08-28", "nabila", "Nabila", 97.4],
-        ["2026-08-29", "azelia", "Azelia", 91.9],
+        ["2026-08-29", "lila", "Lila", 91.9],
         ["2026-08-30", "nabila", "Nabila", 100],
+        ["2026-08-31", "nabila", "Nabila", 92.1],
       ] as const;
       for (const [windowKey, winnerCsKey, winnerCsName, score] of rows) {
         await ctx.db.insert("queenAwards", {
