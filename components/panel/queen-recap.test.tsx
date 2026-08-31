@@ -11,10 +11,10 @@ const recap = {
     { windowKey: "2026-07-20", status: "won" as const, winnerCsName: "Azelia", score: 82.5, leads: 10, closings: 8, cr: 80, respMedianMs: 60_000 },
   ],
   monthly: { winners: ["Azelia"], winCount: 3, standings: [
-    { csKey: "azelia", csName: "Azelia", wins: 3, winningScoreTotal: 247.5 },
-    { csKey: "nabila", csName: "Nabila", wins: 2, winningScoreTotal: 160 },
-    { csKey: "lila", csName: "Lila", wins: 1, winningScoreTotal: 80 },
-    { csKey: "aisyah", csName: "Aisyah", wins: 0, winningScoreTotal: 0 },
+    { csKey: "azelia", csName: "Azelia", wins: 3 },
+    { csKey: "nabila", csName: "Nabila", wins: 2 },
+    { csKey: "lila", csName: "Lila", wins: 1 },
+    { csKey: "aisyah", csName: "Aisyah", wins: 0 },
   ] },
   weekly: [
     { week: 1, startKey: "2026-07-01", endKey: "2026-07-07", status: "complete" as const, winners: ["Azelia"], winCount: 2, standings: [] },
@@ -30,6 +30,7 @@ test("shows a selected-month Queen with daily recap and an ongoing week", () => 
   expect(html).toContain("Queen Bulan Terpilih");
   expect(html).toContain("Azelia");
   expect(html).toContain("Seri");
+  expect(html).toContain("Bonus dibagi rata");
   expect(html).toContain("20 Jul 2026");
   expect(html).toContain("Berjalan");
   expect(html).toContain("Selesai");

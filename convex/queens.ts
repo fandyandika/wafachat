@@ -93,52 +93,22 @@ function monthWeeks(month: string) {
 }
 
 function standings(awards: Award[], participants: Array<{ csKey: string; csName: string }> = []) {
-  const byCs = new Map<string, { csKey: string; csName: string; wins: number; winningScoreTotal: number; scoredWins: number }>();
+  const byCs = new Map<string, { csKey: string; csName: string; wins: number }>();
   for (const participant of participants) {
-    byCs.set(participant.csKey, { ...participant, wins: 0, winningScoreTotal: 0, scoredWins: 0 });
+    byCs.set(participant.csKey, { ...participant, wins: 0 });
   }
   for (const award of awards) {
     if (award.status !== "won" || !award.winnerCsKey || !award.winnerCsName) continue;
-    const row = byCs.get(award.winnerCsKey) ?? {
-      csKey: award.winnerCsKey, csName: award.winnerCsName, wins: 0, winningScoreTotal: 0, scoredWins: 0,
-    };
+    const row = byCs.get(award.winnerCsKey) ?? { csKey: award.winnerCsKey, csName: award.winnerCsName, wins: 0 };
     row.csName = award.winnerCsName;
     byCs.set(row.csKey, row);
     if (award.excludedReason) continue;
     row.wins++;
-    if (award.score != null) {
-      row.winningScoreTotal += award.score;
-      row.scoredWins++;
-    }
   }
-  const internalRows = Array.from(byCs.values()).sort(
-    (a, b) => b.wins - a.wins || b.winningScoreTotal - a.winningScoreTotal || a.csName.localeCompare(b.csName),
-  );
-  const rows = internalRows.map(({ scoredWins: _scoredWins, ...row }) => ({
-    ...row,
-    winningScoreTotal: Math.round(row.winningScoreTotal * 10) / 10,
-  }));
+  const rows = Array.from(byCs.values()).sort((a, b) => b.wins - a.wins || a.csName.localeCompare(b.csName));
   const winCount = rows[0]?.wins ?? 0;
-  const leaders = winCount ? internalRows.filter((row) => row.wins === winCount) : [];
-  let winners = leaders.map((row) => row.csName);
-  let tieBreak: null | {
-    applied: boolean;
-    basis: "winning_score_total";
-    contenders: Array<{ csName: string; score: number }>;
-  } = null;
-  if (leaders.length > 1) {
-    const contenders = leaders.map((row) => ({
-      csName: row.csName,
-      score: Math.round(row.winningScoreTotal * 10) / 10,
-    }));
-    const canApply = leaders.every((row) => row.scoredWins === row.wins);
-    if (canApply) {
-      const bestScore = Math.max(...leaders.map((row) => row.winningScoreTotal));
-      winners = leaders.filter((row) => Math.abs(row.winningScoreTotal - bestScore) < 0.0001).map((row) => row.csName);
-    }
-    tieBreak = { applied: canApply, basis: "winning_score_total", contenders };
-  }
-  return { standings: rows, winCount, winners, tieBreak };
+  const winners = winCount ? rows.filter((row) => row.wins === winCount).map((row) => row.csName) : [];
+  return { standings: rows, winCount, winners };
 }
 
 export const captureWindow = internalMutation({

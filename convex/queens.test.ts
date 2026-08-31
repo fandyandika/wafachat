@@ -200,7 +200,7 @@ test("daily Queen keeps performance scores but does not crown an excluded Sunday
   expect(result.scores.length).toBeGreaterThan(0);
 });
 
-test("month recap excludes reward holidays and resolves equal daily wins by winning-score total", async () => {
+test("month recap excludes reward holidays and preserves equal daily wins as a shared bonus", async () => {
   vi.useFakeTimers({ now: new Date("2026-09-01T03:00:00.000Z") });
   try {
     const t = convexTest(schema, modules);
@@ -233,8 +233,8 @@ test("month recap excludes reward holidays and resolves equal daily wins by winn
     expect(recap.awards.find((row: any) => row.windowKey === "2026-08-25").excludedReason).toBe("Maulid Nabi Muhammad SAW");
     expect(recap.awards.find((row: any) => row.windowKey === "2026-08-30").excludedReason).toBe("Ahad");
     expect(recap.weekly[3].winCount).toBe(3);
-    expect(recap.weekly[3].winners).toEqual(["Nabila"]);
-    expect(recap.weekly[3].tieBreak).toMatchObject({ applied: true, basis: "winning_score_total" });
+    expect(recap.weekly[3].winners).toEqual(["Lila", "Nabila"]);
+    expect(recap.weekly[3].tieBreak).toBeUndefined();
   } finally {
     vi.useRealTimers();
   }

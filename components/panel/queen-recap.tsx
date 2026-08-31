@@ -8,12 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { PanelState } from '@/components/panel/panel-state';
 
-type Standing = { csKey: string; csName: string; wins: number; winningScoreTotal: number };
-type TieBreak = { applied: boolean; basis: 'winning_score_total'; contenders: Array<{ csName: string; score: number }> } | null;
+type Standing = { csKey: string; csName: string; wins: number };
 export type QueenRecapData = {
   awards: Array<{ windowKey: string; status: 'won' | 'no_winner'; winnerCsName?: string; score?: number; leads?: number; closings?: number; cr?: number; excludedReason?: string }>;
-  monthly: { winners: string[]; winCount: number; standings: Standing[]; tieBreak?: TieBreak };
-  weekly: Array<{ week: number; startKey: string; endKey: string; status: 'complete' | 'running' | 'upcoming'; winners: string[]; winCount: number; standings: Standing[]; tieBreak?: TieBreak }>;
+  monthly: { winners: string[]; winCount: number; standings: Standing[] };
+  weekly: Array<{ week: number; startKey: string; endKey: string; status: 'complete' | 'running' | 'upcoming'; winners: string[]; winCount: number; standings: Standing[] }>;
   setupNeeded: boolean;
 };
 
@@ -72,6 +71,7 @@ export function QueenRecapView({ recap, month, currentMonth, onBackfill, busy }:
               </div>
               <div className="mt-1 text-lg font-semibold text-foreground">{winnerLabel(recap.monthly.winners)}</div>
               <div className="mt-1 text-xs text-muted-foreground">{recap.monthly.winCount ? `${recap.monthly.winCount} kemenangan harian` : 'Menunggu penobatan harian'}</div>
+              {recap.monthly.winners.length > 1 && <div className="mt-1 text-xs font-medium text-gold-foreground">Bonus dibagi rata</div>}
             </section>
             <section aria-label="Klasemen Queen bulanan" className="rounded-xl border border-border bg-muted/20 p-4">
               <div className="text-xs font-medium text-muted-foreground">Perolehan Queen</div>
@@ -86,10 +86,7 @@ export function QueenRecapView({ recap, month, currentMonth, onBackfill, busy }:
           <section aria-label="Pemenang Queen pekanan">
             <div className="mb-2 flex items-baseline justify-between gap-3"><h2 className="text-sm font-medium">Pemenang Queen pekanan</h2><p className="text-xs text-muted-foreground">4 pekan bonus</p></div>
             <div className="grid gap-2 sm:grid-cols-2">
-              {recap.weekly.map((week) => {
-                const resolvedTieBreak = week.tieBreak?.applied && week.winners.length === 1;
-                return <div key={week.week} className="rounded-lg border border-border px-3 py-2.5 text-sm"><div className="flex items-center justify-between gap-2"><span className="font-medium">Pekan {week.week}</span><span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{WEEK_STATUS[week.status]}</span></div><div className="mt-1 text-muted-foreground">{formatDate(week.startKey)} – {formatDate(week.endKey)}</div><div className="mt-1 font-medium">{week.status === 'running' && !week.winners.length ? 'Menunggu penutupan 16:00' : week.status === 'upcoming' ? 'Belum dimulai' : winnerLabel(week.winners)}</div>{resolvedTieBreak && <div className="mt-1 text-xs text-muted-foreground">Menang tiebreak skor · {week.tieBreak!.contenders.map((row) => `${row.csName} ${row.score.toFixed(1)}`).join(' · ')}</div>}</div>;
-              })}
+              {recap.weekly.map((week) => <div key={week.week} className="rounded-lg border border-border px-3 py-2.5 text-sm"><div className="flex items-center justify-between gap-2"><span className="font-medium">Pekan {week.week}</span><span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">{WEEK_STATUS[week.status]}</span></div><div className="mt-1 text-muted-foreground">{formatDate(week.startKey)} – {formatDate(week.endKey)}</div><div className="mt-1 font-medium">{week.status === 'running' && !week.winners.length ? 'Menunggu penutupan 16:00' : week.status === 'upcoming' ? 'Belum dimulai' : winnerLabel(week.winners)}</div>{week.winners.length > 1 && week.status !== 'upcoming' && <div className="mt-1 text-xs font-medium text-gold-foreground">Bonus dibagi rata</div>}</div>)}
             </div>
           </section>
 
