@@ -231,7 +231,7 @@ test("month recap excludes reward holidays and preserves equal daily wins as a s
 
     const recap = await admin.query((api as any).queens.getMonth, { month: "2026-08" });
     expect(recap.awards.find((row: any) => row.windowKey === "2026-08-23").excludedReason).toBe("Ahad");
-    expect(recap.awards.find((row: any) => row.windowKey === "2026-08-25").excludedReason).toBe("Maulid Nabi Muhammad SAW");
+    expect(recap.awards.find((row: any) => row.windowKey === "2026-08-25").excludedReason).toBe("Maulid Nabi Muhammad ﷺ");
     expect(recap.awards.find((row: any) => row.windowKey === "2026-08-30").excludedReason).toBe("Ahad");
     expect(recap.weekly[3].winCount).toBe(3);
     expect(recap.weekly[3].winners).toEqual(["Lila", "Nabila"]);
