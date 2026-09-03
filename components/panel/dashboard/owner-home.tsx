@@ -29,6 +29,7 @@ import {
 import { DashboardMobileCommandBar } from './dashboard-mobile-command-bar';
 import { resolveDashboardDay } from '@/lib/history-period';
 import { windowKeyToday } from '@/lib/report-window-core';
+import { visibleProductRows, type ProductSourceFilter } from './product-ranking-model';
 
 function jakartaDate(now: number): string {
   return new Intl.DateTimeFormat('en-CA', {
@@ -158,7 +159,13 @@ export function OwnerHome({
 
       <div className="grid gap-4 lg:grid-cols-2">
         <CsRanking rows={data.topCs} avatarByKey={avatarByKey} periodLabel={data.periodLabel} />
-        <ProductRanking rows={data.topProducts} periodLabel={data.periodLabel} />
+        <ProductRanking
+          rows={data.topProducts}
+          productSources={data.productSources}
+          sources={data.sourceBreakdown}
+          overall={{ leads: data.stats.orders, closings: data.totalClosing }}
+          periodLabel={data.periodLabel}
+        />
       </div>
 
       {!historical ? <DuplicateSheet open={duplicatesOpen} onOpenChange={setDuplicatesOpen} rows={data.duplicateOrders} /> : null}
@@ -234,11 +241,48 @@ function CsRanking({ rows, avatarByKey, periodLabel }: {
   );
 }
 
-function ProductRanking({ rows, periodLabel }: { rows: PerformanceData['products']; periodLabel: string }) {
+function ProductRanking({ rows, productSources, sources, overall, periodLabel }: {
+  rows: PerformanceData['products'];
+  productSources: NonNullable<PerformanceData['productSources']>;
+  sources: NonNullable<PerformanceData['sources']>;
+  overall: { leads: number; closings: number };
+  periodLabel: string;
+}) {
+  const [source, setSource] = useState<ProductSourceFilter>('all');
+  const [expanded, setExpanded] = useState(false);
+  const rowsForSource = source === 'all' ? rows : productSources;
+  const filteredCount = source === 'all'
+    ? rows.length
+    : productSources.filter((row) => row.source === source).length;
+  const visibleRows = visibleProductRows(rowsForSource, expanded, source);
+  const sourceMetrics = new Map(sources.map((row) => [row.source, row]));
+  const filters: Array<{ value: ProductSourceFilter; label: string; leads: number; closings: number }> = [
+    { value: 'all', label: 'Semua sumber', ...overall },
+    { value: 'berdu', label: 'Berdu', leads: sourceMetrics.get('berdu')?.leads ?? 0, closings: sourceMetrics.get('berdu')?.closings ?? 0 },
+    { value: 'scalev', label: 'Scalev', leads: sourceMetrics.get('scalev')?.leads ?? 0, closings: sourceMetrics.get('scalev')?.closings ?? 0 },
+  ];
+
   return (
     <LedgerSection title="Top Produk" description={`Leads, closing, dan CR · ${periodLabel}`}>
+      <div className="grid grid-cols-1 border-b border-ledger-rule sm:grid-cols-3" aria-label="Filter sumber produk">
+        {filters.map((filter) => (
+          <button
+            key={filter.value}
+            type="button"
+            aria-pressed={source === filter.value}
+            onClick={() => { setSource(filter.value); setExpanded(false); }}
+            className={cn(
+              'min-h-14 border-b border-ledger-rule px-4 py-2 text-left transition-colors last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0',
+              source === filter.value ? 'bg-secondary text-ledger-ink' : 'bg-card text-muted-foreground hover:bg-muted',
+            )}
+          >
+            <span className="block text-sm font-semibold">{filter.label}</span>
+            <span className="block text-xs tabular-nums">{filter.leads} leads · {filter.closings} closing</span>
+          </button>
+        ))}
+      </div>
       <div className="divide-y divide-ledger-rule px-4">
-        {rows.length ? rows.map((row) => (
+        {visibleRows.length ? visibleRows.map((row) => (
           <div key={row.product} className="py-3">
             <div className="flex justify-between gap-3 text-sm">
               <span className="truncate font-medium">{row.product}</span>
@@ -248,8 +292,19 @@ function ProductRanking({ rows, periodLabel }: { rows: PerformanceData['products
             </div>
             <div className="mt-2 h-1 bg-muted"><div className={cn('h-full', crBarClass(row.cr))} style={{ width: `${Math.min(Math.max(row.cr, 0), 100)}%` }} /></div>
           </div>
-        )) : <p className="py-5 text-sm text-muted-foreground">Belum ada data pada periode ini.</p>}
+        )) : <p className="py-5 text-sm text-muted-foreground">Belum ada produk dari sumber ini pada periode terpilih.</p>}
       </div>
+      {filteredCount > 5 ? (
+        <div className="border-t border-ledger-rule px-4 py-2">
+          <button
+            type="button"
+            onClick={() => setExpanded((value) => !value)}
+            className="min-h-11 text-sm font-semibold text-primary underline-offset-4 hover:underline"
+          >
+            {expanded ? 'Tampilkan 5 produk teratas' : `Lihat semua ${filteredCount} produk`}
+          </button>
+        </div>
+      ) : null}
     </LedgerSection>
   );
 }

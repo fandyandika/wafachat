@@ -442,6 +442,25 @@ export async function performanceFromRaw(
   for (const { phone, order } of fbResults) if (order) fallbackOrderByPhone.set(phone, order);
 
   const productMap = new Map<string, { product: string; leads: number; closing: number; revenue: number; discount: number; cod: number; transfer: number }>();
+  const productSourceMap = new Map<string, {
+    source: "berdu" | "scalev";
+    product: string;
+    leadPhones: Set<string>;
+    closing: number;
+    revenue: number;
+    discount: number;
+    cod: number;
+    transfer: number;
+  }>();
+  const getProductSource = (source: "berdu" | "scalev", product: string) => {
+    const mapKey = `${source}\u0000${product}`;
+    const row = productSourceMap.get(mapKey) ?? {
+      source, product, leadPhones: new Set<string>(), closing: 0,
+      revenue: 0, discount: 0, cod: 0, transfer: 0,
+    };
+    productSourceMap.set(mapKey, row);
+    return row;
+  };
   const csMap = new Map<string, { csName: string; phones: Set<string>; closing: number; revenue: number; discount: number; cod: number; transfer: number }>();
   const getCs = (name: string) => {
     const ck = csKeyOf(name);
@@ -483,6 +502,8 @@ export async function performanceFromRaw(
 
   for (const order of realOrders) {
     getSource(order.source).leads.add(normalizePhone(order.customerPhone));
+    getProductSource(order.source, canonicalizeProduct(order.productName || order.products))
+      .leadPhones.add(normalizePhone(order.customerPhone));
   }
 
   for (const o of uniqueOrders) {
@@ -523,6 +544,14 @@ export async function performanceFromRaw(
     if (r.paymentMethod === "cod") sourceRow.cod += 1;
     if (r.paymentMethod === "transfer") sourceRow.transfer += 1;
     if (r.status === "delivered") sourceRow.delivered += 1;
+    if (source !== "unknown") {
+      const sourceProduct = getProductSource(source, product);
+      sourceProduct.closing += 1;
+      sourceProduct.revenue += revenue;
+      sourceProduct.discount += discount;
+      if (r.paymentMethod === "cod") sourceProduct.cod += 1;
+      if (r.paymentMethod === "transfer") sourceProduct.transfer += 1;
+    }
   }
 
   for (const r of visibleRecaps) {
@@ -554,6 +583,16 @@ export async function performanceFromRaw(
       codPct: cr(row.cod, row.cod + row.transfer),
       transferPct: cr(row.transfer, row.cod + row.transfer),
     })),
+    productSources: Array.from(productSourceMap.values())
+      .map(({ leadPhones, ...row }) => ({
+        ...row,
+        leads: leadPhones.size,
+        cr: cr(row.closing, leadPhones.size),
+        codPct: cr(row.cod, row.cod + row.transfer),
+        transferPct: cr(row.transfer, row.cod + row.transfer),
+      }))
+      .sort((a, b) => ({ berdu: 0, scalev: 1 })[a.source] - ({ berdu: 0, scalev: 1 })[b.source]
+        || b.closing - a.closing || b.leads - a.leads || a.product.localeCompare(b.product)),
     sources: Array.from(sourceMap.values())
       .map((row) => ({
         source: row.source,

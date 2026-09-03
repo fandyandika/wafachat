@@ -72,6 +72,34 @@ test("puts business metrics before operational attention on the mobile reading p
   expect(html).toContain("66,7% CR");
 });
 
+test("makes Berdu and Scalev traffic discoverable from Top Produk", () => {
+  snapshots.mockReset();
+  snapshots
+    .mockReturnValueOnce({ data: { leads: 12, closings: 8, manualClosings: 8, cancelled: 0, handovers: 0, revenue: 1_500_000 }, loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() })
+    .mockReturnValueOnce({ data: [], loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() })
+    .mockReturnValueOnce({ data: {
+      totalClosing: 8, overallCr: 66.7, cancelled: 0, cs: [],
+      products: Array.from({ length: 6 }, (_, index) => ({ product: `Produk ${index + 1}`, leads: 12 - index, closing: 8 - index, cr: 60, revenue: 0, discount: 0 })),
+      productSources: [
+        { product: "Produk Berdu", source: "berdu", leads: 7, closing: 5, cr: 71.4, revenue: 0, discount: 0 },
+        { product: "Produk Scalev", source: "scalev", leads: 5, closing: 3, cr: 60, revenue: 0, discount: 0 },
+      ],
+      sources: [
+        { source: "berdu", label: "Berdu", leads: 7, closings: 5, cr: 71.4 },
+        { source: "scalev", label: "Scalev", leads: 5, closings: 3, cr: 60 },
+      ],
+    }, loading: false, error: null, lastUpdatedAt: 1, refresh: vi.fn() });
+
+  const html = renderToStaticMarkup(<OwnerHome now={Date.parse("2026-08-08T11:00:00+07:00")} />);
+
+  expect(html).toContain("Semua sumber");
+  expect(html).toContain("Berdu");
+  expect(html).toContain("7 leads · 5 closing");
+  expect(html).toContain("Scalev");
+  expect(html).toContain("5 leads · 3 closing");
+  expect(html).toContain("Lihat semua 6 produk");
+});
+
 test("presents duplicate orders as a readable structured list", () => {
   const html = renderToStaticMarkup(
     <DuplicateSheet

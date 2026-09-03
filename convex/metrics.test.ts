@@ -48,6 +48,37 @@ test("getPerformance: leads=distinct customer, closing=distinct order, CR, cance
   expect(perf.overallCr).toBe(100);     // 1/1
 });
 
+test("getPerformance exposes per-source product metrics for Dashboard filtering", async () => {
+  const t = convexTest(schema);
+  const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });
+  const orgId = await seedOrg(t);
+  await t.run(async (ctx) => {
+    for (const [index, source] of (["berdu", "scalev"] as const).entries()) {
+      const phone = `62812000000${index}`;
+      const orderId = source === "scalev" ? "scalev:order-1" : "O-1";
+      await ctx.db.insert("orders", {
+        orgId, orderId, customerPhone: phone, customerName: `Customer ${index}`, assignedCsName: "Aisyah",
+        productName: source === "scalev" ? "Produk Scalev" : "Produk Berdu", products: "",
+        productsSubtotal: "100000", shippingCost: "0", total: "100000", shippingAddress: "",
+        shippingDistrict: "", shippingCity: "", source, aiEligible: false, createdAt: t0 + index, updatedAt: t0 + index,
+      });
+      await ctx.db.insert("shippingRecaps", {
+        orgId, orderIdBerdu: orderId, orderSource: source, customerPhone: phone, customerName: `Customer ${index}`,
+        csName: "Aisyah", closedAt: t0 + index, recipientName: `Customer ${index}`, recipientPhone: phone,
+        recipientAddress: "", recipientDistrict: "", recipientCity: "", packageContent: "Fallback",
+        paymentMethod: "cod", total: 100000, status: "ready", flags: [], sourceMessageText: "", version: 1,
+        createdAt: t0 + index, updatedAt: t0 + index,
+      });
+    }
+  });
+
+  const perf = await asAdmin.query(api.shippingRecaps.getPerformance, { startAt: t0 - DAY, endAt: t0 + DAY });
+  expect(perf.productSources).toEqual([
+    expect.objectContaining({ source: "berdu", product: "Produk Berdu", leads: 1, closing: 1 }),
+    expect.objectContaining({ source: "scalev", product: "Produk Scalev", leads: 1, closing: 1 }),
+  ]);
+});
+
 test("getDashboardSummary: leads/closings/cr from records, handovers from events", async () => {
   const t = convexTest(schema);
   const asAdmin = t.withIdentity({ subject: "test-admin", role: "admin", name: "Test Admin", email: "test@wafachat" });

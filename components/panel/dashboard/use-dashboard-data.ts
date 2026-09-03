@@ -68,7 +68,9 @@ export function useDashboardData({ range, csName, includeDuplicates, includePerf
       ? formatDuration(responseTimes.data.overall.firstReplyMedianMs)
       : responseTimes.loading ? 'Memuat…' : '—',
     topCs: [...(performanceValue?.cs ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5),
-    topProducts: [...(performanceValue?.products ?? [])].sort((a, b) => b.closing - a.closing).slice(0, 5),
+    topProducts: [...(performanceValue?.products ?? [])].sort((a, b) => b.closing - a.closing || b.leads - a.leads),
+    productSources: performanceValue?.productSources ?? [],
+    sourceBreakdown: performanceValue?.sources ?? [],
     duplicateOrders: duplicates.data ?? [],
     loading: summary.loading || (includePerformance && performance.loading) || (includeDuplicates && duplicates.loading),
     hasData: summary.data !== undefined || performance.data !== undefined,

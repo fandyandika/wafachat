@@ -89,6 +89,8 @@ export interface PerformanceData {
   delivered: number;
   cancelled: number;
   products: Array<{ product: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
+  productSources?: Array<{ source: "berdu" | "scalev"; product: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
+  sources?: Array<{ source: "berdu" | "scalev" | "unknown"; label: string; leads: number; closings: number; cr: number }>;
   cs: Array<{ csName: string; leads: number; closing: number; cr: number; revenue: number; discount: number }>;
 }
 
