@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { internal } from "../_generated/api";
-import { internalAction } from "../_generated/server";
+import { action, internalAction } from "../_generated/server";
 import type { Id } from "../_generated/dataModel";
 import { parseScalevOrderHandler } from "./scalevAdapter";
 
@@ -68,10 +68,14 @@ export const enrichOrder = internalAction({
   },
 });
 
-export const backfillUnassigned = internalAction({
-  args: { orgId: v.optional(v.id("organizations")), limit: v.optional(v.number()) },
-  returns: v.object({ scanned: v.number(), updated: v.number(), unassigned: v.number(), unmapped: v.number(), missing: v.number() }),
-  handler: async (ctx, args): Promise<{ scanned: number; updated: number; unassigned: number; unmapped: number; missing: number }> => {
+const backfillResultValidator = v.object({
+  scanned: v.number(), updated: v.number(), unassigned: v.number(), unmapped: v.number(), missing: v.number(),
+});
+
+async function backfill(
+  ctx: any,
+  args: { orgId?: Id<"organizations">; limit?: number },
+): Promise<{ scanned: number; updated: number; unassigned: number; unmapped: number; missing: number }> {
     const limit = args.limit ?? 50;
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("limit must be an integer between 1 and 100");
     const orgId = args.orgId ?? await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
@@ -86,5 +90,25 @@ export const backfillUnassigned = internalAction({
       counts[result.status] += 1;
     }
     return counts;
+}
+
+export const backfillUnassigned = internalAction({
+  args: { orgId: v.optional(v.id("organizations")), limit: v.optional(v.number()) },
+  returns: backfillResultValidator,
+  handler: backfill,
+});
+
+export const backfillUnassignedAdmin = action({
+  args: {
+    authSecret: v.string(),
+    orgId: v.optional(v.id("organizations")),
+    limit: v.optional(v.number()),
+  },
+  returns: backfillResultValidator,
+  handler: async (ctx, args) => {
+    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
+      throw new Error("unauthorized");
+    }
+    return backfill(ctx, { orgId: args.orgId, limit: args.limit });
   },
 });

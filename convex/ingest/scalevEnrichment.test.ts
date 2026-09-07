@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { afterEach, expect, test, vi } from "vitest";
 import schema from "../schema";
-import { internal } from "../_generated/api";
+import { api, internal } from "../_generated/api";
 
 const modules = (import.meta as any).glob("/convex/**/*.{ts,js}");
 
@@ -9,6 +9,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   delete process.env.SCALEV_API_KEY;
+  delete process.env.PANEL_AUTH_SECRET;
 });
 
 test("enrichment retries when Scalev has not attached the handler yet", async () => {
@@ -56,6 +57,45 @@ test("enrichment retries when Scalev has not attached the handler yet", async ()
     .unique());
   expect(request).toHaveBeenCalledTimes(2);
   expect(order).toMatchObject({ assignedCsName: "Aisyah", csKey: "aisyah" });
+});
+
+test("authorized maintenance action backfills existing unassigned orders", async () => {
+  process.env.PANEL_AUTH_SECRET = "maintenance-secret";
+  process.env.SCALEV_API_KEY = "test-key";
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    id: "order-backfill",
+    handler: { id: 104794, fullname: "Aisyah" },
+  }), { status: 200 })));
+
+  const t = convexTest(schema, modules);
+  const orgId = await t.run(async (ctx: any) => {
+    const id = await ctx.db.insert("organizations", {
+      slug: "pustakaislam", name: "Pustaka Islam", createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("csConfigs", {
+      orgId: id, normalizedName: "aisyah", csName: "Aisyah", key: "aisyah",
+      scalevHandlerIds: ["104794"], orderAutomationEnabled: true, aiAssistantEnabled: false,
+      reportingEnabled: true, isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("orders", {
+      orgId: id, orderId: "scalev:order-backfill", providerRecordId: "order-backfill",
+      customerPhone: "6285550000088", customerName: "Customer", assignedCsName: "Scalev Unassigned",
+      csKey: "scalevunassigned", productName: "Paket Lengkap Seri Aduh!", products: "Paket Lengkap Seri Aduh! (1x)",
+      productsSubtotal: "Rp179.000", shippingCost: "Rp10.000", total: "Rp189.000",
+      shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "scalev",
+      aiEligible: false, createdAt: 1, updatedAt: 1,
+    });
+    return id;
+  });
+
+  await expect(t.action((api as any).ingest.scalevEnrichmentActions.backfillUnassignedAdmin, {
+    authSecret: "wrong", orgId, limit: 10,
+  })).rejects.toThrow("unauthorized");
+
+  const result = await t.action((api as any).ingest.scalevEnrichmentActions.backfillUnassignedAdmin, {
+    authSecret: "maintenance-secret", orgId, limit: 10,
+  });
+  expect(result).toMatchObject({ scanned: 1, updated: 1 });
 });
 
 test("enrichment falls back to the Scalev handler name when its API id is not mapped", async () => {
