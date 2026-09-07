@@ -10,6 +10,10 @@ type EnrichmentResult = {
   csName?: string;
 };
 
+// Scalev can emit order.created before its async handler assignment is visible
+// through the order-detail API. Retry long enough to cover that propagation lag.
+const HANDLER_RETRY_DELAYS_MS = [30_000, 5 * 60_000, 30 * 60_000] as const;
+
 const enrichmentResultValidator = v.object({
   status: v.union(v.literal("updated"), v.literal("missing"), v.literal("unassigned"), v.literal("unmapped")),
   handlerId: v.optional(v.string()),
@@ -43,9 +47,25 @@ async function enrich(
 }
 
 export const enrichOrder = internalAction({
-  args: { orgId: v.id("organizations"), orderId: v.string(), providerRecordId: v.string() },
+  args: {
+    orgId: v.id("organizations"),
+    orderId: v.string(),
+    providerRecordId: v.string(),
+    attempt: v.optional(v.number()),
+  },
   returns: enrichmentResultValidator,
-  handler: enrich,
+  handler: async (ctx, args): Promise<EnrichmentResult> => {
+    const result = await enrich(ctx, args);
+    const attempt = args.attempt ?? 0;
+    if (result.status === "unassigned" && attempt < HANDLER_RETRY_DELAYS_MS.length) {
+      await ctx.scheduler.runAfter(
+        HANDLER_RETRY_DELAYS_MS[attempt],
+        internal.ingest.scalevEnrichmentActions.enrichOrder,
+        { ...args, attempt: attempt + 1 },
+      );
+    }
+    return result;
+  },
 });
 
 export const backfillUnassigned = internalAction({

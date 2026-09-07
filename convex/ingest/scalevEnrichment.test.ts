@@ -1,9 +1,62 @@
 import { convexTest } from "convex-test";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import schema from "../schema";
 import { internal } from "../_generated/api";
 
 const modules = (import.meta as any).glob("/convex/**/*.{ts,js}");
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  delete process.env.SCALEV_API_KEY;
+});
+
+test("enrichment retries when Scalev has not attached the handler yet", async () => {
+  vi.useFakeTimers();
+  process.env.SCALEV_API_KEY = "test-key";
+  const request = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ id: "order-retry", handler: null }), { status: 200 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({
+      id: "order-retry",
+      handler: { id: 104794, fullname: "Aisyah" },
+    }), { status: 200 }));
+  vi.stubGlobal("fetch", request);
+
+  const t = convexTest(schema, modules);
+  const orgId = await t.run(async (ctx: any) => {
+    const id = await ctx.db.insert("organizations", {
+      slug: "pustakaislam", name: "Pustaka Islam", createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("csConfigs", {
+      orgId: id, normalizedName: "aisyah", csName: "Aisyah", key: "aisyah",
+      scalevHandlerIds: ["104794"], orderAutomationEnabled: true, aiAssistantEnabled: false,
+      reportingEnabled: true, isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("orders", {
+      orgId: id, orderId: "scalev:order-retry", externalOrderId: "260907001", providerRecordId: "order-retry",
+      customerPhone: "6285550000099", customerName: "Customer", assignedCsName: "Scalev Unassigned",
+      csKey: "scalevunassigned", productName: "Paket Lengkap Seri Aduh!", products: "Paket Lengkap Seri Aduh! (1x)",
+      productsSubtotal: "Rp179.000", shippingCost: "Rp10.000", total: "Rp189.000",
+      shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "scalev",
+      aiEligible: false, createdAt: 1, updatedAt: 1,
+    });
+    return id;
+  });
+
+  const first = await t.action((internal as any).ingest.scalevEnrichmentActions.enrichOrder, {
+    orgId, orderId: "scalev:order-retry", providerRecordId: "order-retry",
+  });
+  expect(first.status).toBe("unassigned");
+
+  await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+  const order = await t.run((ctx: any) => ctx.db
+    .query("orders")
+    .withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "scalev:order-retry"))
+    .unique());
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(order).toMatchObject({ assignedCsName: "Aisyah", csKey: "aisyah" });
+});
 
 test("enrichment falls back to the Scalev handler name when its API id is not mapped", async () => {
   const t = convexTest(schema, modules);

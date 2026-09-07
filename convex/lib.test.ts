@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { isInternalTestPhone, csKey } from "./lib";
+import { canonicalizeProduct, isInternalTestPhone, csKey } from "./lib";
 import { DEFAULT_INTERNAL_PHONES } from "./orgSettings";
 
 const PHONES: ReadonlySet<string> = new Set(DEFAULT_INTERNAL_PHONES);
@@ -35,6 +35,12 @@ test("csKey collapses the 'CS ' prefix so config and data names match", () => {
   expect(csKey("")).toBe("");
   // does not over-strip a name that legitimately starts with "cs"
   expect(csKey("Cynthia Sari")).toBe("cynthiasari");
+});
+
+test("canonicalizeProduct merges the Scalev Seri Aduh SKU into its catalog product", () => {
+  const canonical = "Paket Lengkap Seri Aduh! — 12 Buku Cerita untuk Masalah Sehari-hari Anak";
+  expect(canonicalizeProduct(canonical)).toBe(canonical);
+  expect(canonicalizeProduct("PAKET LENGKAP SERI ADUH 1 PCS")).toBe(canonical);
 });
 
 import { describe } from "vitest";

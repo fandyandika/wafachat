@@ -115,6 +115,10 @@ const PRODUCT_ALIASES: Array<{ canonical: string; match: RegExp }> = [
   { canonical: "Sound Book: Learning How To Do Shalat", match: /sound book|learning.*shalat/i },
   { canonical: "Alquran Tulis Tazyin 1 Jilid", match: /tazyin/i },
   { canonical: "Kumpulan Doa Berbagai Acara & Keperluan", match: /kumpulan doa|doa acara/i },
+  {
+    canonical: "Paket Lengkap Seri Aduh! — 12 Buku Cerita untuk Masalah Sehari-hari Anak",
+    match: /seri\s+aduh/i,
+  },
 ];
 
 export function canonicalizeProduct(value: string | undefined): string {
