@@ -41,6 +41,7 @@ test("canonicalizeProduct merges the Scalev Seri Aduh SKU into its catalog produ
   const canonical = "Paket Lengkap Seri Aduh! — 12 Buku Cerita untuk Masalah Sehari-hari Anak";
   expect(canonicalizeProduct(canonical)).toBe(canonical);
   expect(canonicalizeProduct("PAKET LENGKAP SERI ADUH 1 PCS")).toBe(canonical);
+  expect(canonicalizeProduct("PAKET LENGKAP SERI ADUU 1 PCS")).toBe(canonical);
 });
 
 import { describe } from "vitest";
