@@ -3,6 +3,7 @@ import { expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { startOfJakartaDayMs, csKey } from "./lib";
+import { upsertOrderCore } from "./state";
 
 const modules = (import.meta as any).glob("./**/*.{ts,js}");
 
@@ -11,6 +12,24 @@ async function seedOrg(t: any) {
 }
 
 const DAY = 86_400_000;
+
+test("Scalev handlerless update preserves assigned CS on order and conversation", async () => {
+  const t = convexTest(schema);
+  const orgId = await seedOrg(t);
+  const args = { orgId, phone: "6285550000077", order_id: "scalev:preserve", source: "scalev" as const,
+    productName: "Seri Aduh", createdAt: 1 };
+  await t.run((ctx) => upsertOrderCore(ctx, { ...args, csName: "Aisyah" }));
+  await t.run((ctx) => upsertOrderCore(ctx, { ...args, csName: "Scalev Unassigned", orderStatus: "processing" }));
+  const state = await t.run(async (ctx) => ({
+    order: await ctx.db.query("orders").withIndex("by_org_orderId", q => q.eq("orgId", orgId).eq("orderId", args.order_id)).unique(),
+    conversation: await ctx.db.query("conversations").withIndex("by_org_orderId", q => q.eq("orgId", orgId).eq("orderId", args.order_id)).unique(),
+  }));
+  expect(state.order).toMatchObject({ assignedCsName: "Aisyah", csKey: "aisyah", orderStatus: "processing" });
+  expect(state.conversation?.assignedCsName).toBe("Aisyah");
+  await t.run((ctx) => upsertOrderCore(ctx, { ...args, csName: "Nabila" }));
+  const reassigned = await t.run(ctx => ctx.db.query("orders").withIndex("by_org_orderId", q => q.eq("orgId", orgId).eq("orderId", args.order_id)).unique());
+  expect(reassigned?.assignedCsName).toBe("Nabila");
+});
 
 test("startOfJakartaDayMs: Jakarta midnight <= now and within today", () => {
   const now = Date.now();

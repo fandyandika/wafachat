@@ -12,12 +12,16 @@ afterEach(() => {
   delete process.env.PANEL_AUTH_SECRET;
 });
 
-test("enrichment retries when Scalev has not attached the handler yet", async () => {
+test.each(["missing-handler", "rate-limit", "server-error", "network-error", "timeout"])("enrichment recovers from %s", async (failure) => {
   vi.useFakeTimers();
   process.env.SCALEV_API_KEY = "test-key";
-  const request = vi.fn()
-    .mockResolvedValueOnce(new Response(JSON.stringify({ id: "order-retry", handler: null }), { status: 200 }))
-    .mockResolvedValueOnce(new Response(JSON.stringify({
+  const request = vi.fn();
+  if (failure === "network-error") request.mockRejectedValueOnce(new TypeError("fetch failed"));
+  else if (failure === "timeout") request.mockRejectedValueOnce(new DOMException("timeout", "TimeoutError"));
+  else request.mockResolvedValueOnce(new Response(JSON.stringify({ id: "order-retry", handler: null }), {
+    status: failure === "rate-limit" ? 429 : failure === "server-error" ? 503 : 200,
+  }));
+  request.mockResolvedValueOnce(new Response(JSON.stringify({
       id: "order-retry",
       handler: { id: 104794, fullname: "Aisyah" },
     }), { status: 200 }));
@@ -47,7 +51,7 @@ test("enrichment retries when Scalev has not attached the handler yet", async ()
   const first = await t.action((internal as any).ingest.scalevEnrichmentActions.enrichOrder, {
     orgId, orderId: "scalev:order-retry", providerRecordId: "order-retry",
   });
-  expect(first.status).toBe("unassigned");
+  expect(first.status).toBe(failure === "missing-handler" ? "unassigned" : "retrying");
 
   await t.finishAllScheduledFunctions(vi.runAllTimers);
 

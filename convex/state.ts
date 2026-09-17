@@ -255,10 +255,21 @@ export async function upsertOrderCore(
   },
 ) {
   await assertFollowUpCutoverUnlocked(ctx, args.orgId);
-  const canon = await canonicalizeCs(ctx, args.orgId, args.csName);
   const now = Date.now();
   const phone = normalizePhone(args.phone);
   const orderId = args.order_id || makeOrderKey({ phone, productName: args.productName });
+  const existingOrder = await ctx.db
+    .query("orders")
+    .withIndex("by_org_orderId", (q: any) => q.eq("orgId", args.orgId).eq("orderId", orderId))
+    .unique();
+  // A handlerless status/payment webhook is incomplete attribution, not a CS reassignment.
+  if (args.source === "scalev" && csKey(args.csName) === "scalevunassigned"
+    && existingOrder?.source === "scalev" && existingOrder.assignedCsName
+    && csKey(existingOrder.assignedCsName) !== "scalevunassigned") {
+    args = { ...args, csName: existingOrder.assignedCsName,
+      csNumber: args.csNumber ?? existingOrder.assignedCsNumber };
+  }
+  const canon = await canonicalizeCs(ctx, args.orgId, args.csName);
   const customerName = args.customerName || "";
   const csConfig = await getCsFeatureConfig(ctx, args.orgId, args.csName);
   const reportable = csConfig.isActive && csConfig.reportingEnabled;
@@ -308,11 +319,6 @@ export async function upsertOrderCore(
     aiEligible,
     updatedAt: now,
   };
-
-  const existingOrder = await ctx.db
-    .query("orders")
-    .withIndex("by_org_orderId", (q: any) => q.eq("orgId", args.orgId).eq("orderId", orderId))
-    .unique();
 
   if (existingOrder) {
     const before = existingOrder;

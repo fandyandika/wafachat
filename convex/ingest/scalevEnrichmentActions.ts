@@ -5,7 +5,7 @@ import type { Id } from "../_generated/dataModel";
 import { parseScalevOrderHandler } from "./scalevAdapter";
 
 type EnrichmentResult = {
-  status: "updated" | "missing" | "unassigned" | "unmapped";
+  status: "updated" | "missing" | "unassigned" | "unmapped" | "retrying";
   handlerId?: string;
   csName?: string;
 };
@@ -15,18 +15,33 @@ type EnrichmentResult = {
 const HANDLER_RETRY_DELAYS_MS = [30_000, 5 * 60_000, 30 * 60_000] as const;
 
 const enrichmentResultValidator = v.object({
-  status: v.union(v.literal("updated"), v.literal("missing"), v.literal("unassigned"), v.literal("unmapped")),
+  status: v.union(v.literal("updated"), v.literal("missing"), v.literal("unassigned"), v.literal("unmapped"), v.literal("retrying")),
   handlerId: v.optional(v.string()),
   csName: v.optional(v.string()),
 });
+
+class RetryableScalevError extends Error {}
 
 async function fetchScalevOrder(providerRecordId: string): Promise<unknown> {
   const apiKey = process.env.SCALEV_API_KEY;
   if (!apiKey) throw new Error("SCALEV_API_KEY is not configured");
   const baseUrl = (process.env.SCALEV_API_BASE_URL ?? "https://api.scalev.com").replace(/\/$/, "");
-  const response = await fetch(`${baseUrl}/v3/orders/${encodeURIComponent(providerRecordId)}`, {
-    headers: { accept: "application/json", authorization: `Bearer ${apiKey}` },
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/v3/orders/${encodeURIComponent(providerRecordId)}`, {
+      headers: { accept: "application/json", authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+  } catch {
+    throw new RetryableScalevError("Scalev order enrichment network error or timeout");
+  } finally {
+    clearTimeout(timer);
+  }
+  if (response.status === 408 || response.status === 429 || response.status >= 500) {
+    throw new RetryableScalevError(`Scalev order enrichment failed (${response.status})`);
+  }
   if (!response.ok) throw new Error(`Scalev order enrichment failed (${response.status})`);
   return response.json();
 }
@@ -55,9 +70,18 @@ export const enrichOrder = internalAction({
   },
   returns: enrichmentResultValidator,
   handler: async (ctx, args): Promise<EnrichmentResult> => {
-    const result = await enrich(ctx, args);
     const attempt = args.attempt ?? 0;
-    if (result.status === "unassigned" && attempt < HANDLER_RETRY_DELAYS_MS.length) {
+    if (!Number.isInteger(attempt) || attempt < 0 || attempt > HANDLER_RETRY_DELAYS_MS.length) {
+      throw new Error("invalid enrichment attempt");
+    }
+    let result: EnrichmentResult;
+    try {
+      result = await enrich(ctx, args);
+    } catch (error) {
+      if (!(error instanceof RetryableScalevError) || attempt === HANDLER_RETRY_DELAYS_MS.length) throw error;
+      result = { status: "retrying" };
+    }
+    if ((result.status === "unassigned" || result.status === "retrying") && attempt < HANDLER_RETRY_DELAYS_MS.length) {
       await ctx.scheduler.runAfter(
         HANDLER_RETRY_DELAYS_MS[attempt],
         internal.ingest.scalevEnrichmentActions.enrichOrder,
@@ -87,7 +111,7 @@ async function backfill(
     const counts = { scanned: rows.length, updated: 0, unassigned: 0, unmapped: 0, missing: 0 };
     for (const row of rows) {
       const result = await enrich(ctx, { orgId, ...row });
-      counts[result.status] += 1;
+      if (result.status !== "retrying") counts[result.status] += 1;
     }
     return counts;
 }
