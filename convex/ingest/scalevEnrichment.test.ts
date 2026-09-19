@@ -102,6 +102,61 @@ test("authorized maintenance action backfills existing unassigned orders", async
   expect(result).toMatchObject({ scanned: 1, updated: 1 });
 });
 
+test("authorized maintenance action renames an agent, preserves its identity, maps the new handler, and backfills", async () => {
+  process.env.PANEL_AUTH_SECRET = "maintenance-secret";
+  process.env.SCALEV_API_KEY = "test-key";
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+    id: "order-safa",
+    handler: { id: 581746, fullname: "Safa" },
+  }), { status: 200 })));
+
+  const t = convexTest(schema, modules);
+  const orgId = await t.run(async (ctx: any) => {
+    const id = await ctx.db.insert("organizations", {
+      slug: "pustakaislam", name: "Pustaka Islam", createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("csConfigs", {
+      orgId: id, normalizedName: "aisyah", csName: "Aisyah", key: "aisyah", nameAliases: [],
+      scalevHandlerIds: ["104794"], orderAutomationEnabled: true, aiAssistantEnabled: false,
+      reportingEnabled: true, isActive: true, createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("orders", {
+      orgId: id, orderId: "scalev:order-safa", providerRecordId: "order-safa",
+      customerPhone: "6285550000077", customerName: "Customer", assignedCsName: "Scalev Unassigned",
+      csKey: "scalevunassigned", productName: "Quran Mapping", products: "Quran Mapping (1x)",
+      productsSubtotal: "Rp179.000", shippingCost: "Rp10.000", total: "Rp189.000",
+      shippingAddress: "", shippingDistrict: "", shippingCity: "", source: "scalev",
+      aiEligible: false, createdAt: 1, updatedAt: 1,
+    });
+    await ctx.db.insert("shippingRecaps", {
+      orgId: id, orderIdBerdu: "scalev:order-safa", customerPhone: "6285550000077", customerName: "Customer",
+      csName: "Scalev Unassigned", csKey: "scalevunassigned", closedAt: 2,
+      recipientName: "Customer", recipientPhone: "6285550000077", recipientAddress: "",
+      recipientDistrict: "", recipientCity: "", packageContent: "Quran Mapping", paymentMethod: "cod",
+      total: 189000, status: "ready", closingBucket: "counted", flags: [], sourceMessageText: "",
+      version: 1, createdAt: 2, updatedAt: 2,
+    });
+    return id;
+  });
+
+  const result = await t.action((api as any).ingest.scalevEnrichmentActions.configureAgentAndBackfillAdmin, {
+    authSecret: "maintenance-secret", orgId, fromCsName: "Aisyah", toCsName: "Safa",
+    scalevHandlerIds: ["104794", "581746"], limit: 100,
+  });
+  expect(result).toMatchObject({ csName: "Safa", stableKey: "aisyah", scanned: 1, updated: 1 });
+
+  const state = await t.run(async (ctx: any) => ({
+    config: await ctx.db.query("csConfigs").withIndex("by_org_normalizedName", (q: any) => q.eq("orgId", orgId).eq("normalizedName", "safa")).unique(),
+    order: await ctx.db.query("orders").withIndex("by_org_orderId", (q: any) => q.eq("orgId", orgId).eq("orderId", "scalev:order-safa")).unique(),
+    recap: await ctx.db.query("shippingRecaps").withIndex("by_org_orderIdBerdu", (q: any) => q.eq("orgId", orgId).eq("orderIdBerdu", "scalev:order-safa")).unique(),
+  }));
+  expect(state.config).toMatchObject({
+    csName: "Safa", key: "aisyah", nameAliases: ["Aisyah"], scalevHandlerIds: ["104794", "581746"],
+  });
+  expect(state.order).toMatchObject({ assignedCsName: "Safa", csKey: "aisyah" });
+  expect(state.recap).toMatchObject({ csName: "Safa", csKey: "aisyah" });
+});
+
 test("enrichment falls back to the Scalev handler name when its API id is not mapped", async () => {
   const t = convexTest(schema, modules);
   const at = Date.parse("2026-08-30T09:00:00+07:00");

@@ -10,6 +10,17 @@ type EnrichmentResult = {
   csName?: string;
 };
 
+type ConfigureBackfillResult = {
+  csName: string;
+  stableKey: string;
+  scalevHandlerIds: string[];
+  scanned: number;
+  updated: number;
+  unassigned: number;
+  unmapped: number;
+  missing: number;
+};
+
 // Scalev can emit order.created before its async handler assignment is visible
 // through the order-detail API. Retry long enough to cover that propagation lag.
 const HANDLER_RETRY_DELAYS_MS = [30_000, 5 * 60_000, 30 * 60_000] as const;
@@ -129,10 +140,42 @@ export const backfillUnassignedAdmin = action({
     limit: v.optional(v.number()),
   },
   returns: backfillResultValidator,
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ scanned: number; updated: number; unassigned: number; unmapped: number; missing: number }> => {
     if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
       throw new Error("unauthorized");
     }
     return backfill(ctx, { orgId: args.orgId, limit: args.limit });
+  },
+});
+
+export const configureAgentAndBackfillAdmin = action({
+  args: {
+    authSecret: v.string(),
+    orgId: v.optional(v.id("organizations")),
+    fromCsName: v.string(),
+    toCsName: v.string(),
+    scalevHandlerIds: v.array(v.string()),
+    limit: v.optional(v.number()),
+  },
+  returns: v.object({
+    csName: v.string(), stableKey: v.string(), scalevHandlerIds: v.array(v.string()),
+    scanned: v.number(), updated: v.number(), unassigned: v.number(), unmapped: v.number(), missing: v.number(),
+  }),
+  handler: async (ctx, args): Promise<ConfigureBackfillResult> => {
+    if (!process.env.PANEL_AUTH_SECRET || args.authSecret !== process.env.PANEL_AUTH_SECRET) {
+      throw new Error("unauthorized");
+    }
+    const orgId: Id<"organizations"> | null = args.orgId ?? await ctx.runQuery(internal.orgs.defaultOrgIdInternal, {});
+    if (!orgId) throw new Error("Default organization is not configured");
+    const configured: { csName: string; stableKey: string; scalevHandlerIds: string[] } = await ctx.runMutation(
+      internal.ingest.scalevEnrichment.configureAgentIdentity, {
+      orgId,
+      fromCsName: args.fromCsName,
+      toCsName: args.toCsName,
+      scalevHandlerIds: args.scalevHandlerIds,
+      },
+    );
+    const repaired = await backfill(ctx, { orgId, limit: args.limit });
+    return { ...configured, ...repaired };
   },
 });

@@ -1,13 +1,60 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "../_generated/server";
-import { resolveAgent } from "../agents";
+import { getBoundedActiveAgentRegistry, resolveAgent } from "../agents";
 import { upsertOrderCore } from "../state";
 import { bumpForRecapDoc } from "../rollups";
+import { csKey, normalizeCsName } from "../lib";
 
 const enrichmentResultValidator = v.object({
   status: v.union(v.literal("updated"), v.literal("missing"), v.literal("unassigned"), v.literal("unmapped")),
   handlerId: v.optional(v.string()),
   csName: v.optional(v.string()),
+});
+
+export const configureAgentIdentity = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    fromCsName: v.string(),
+    toCsName: v.string(),
+    scalevHandlerIds: v.array(v.string()),
+  },
+  returns: v.object({ csName: v.string(), stableKey: v.string(), scalevHandlerIds: v.array(v.string()) }),
+  handler: async (ctx, args) => {
+    const toCsName = args.toCsName.trim();
+    if (!toCsName) throw new Error("new CS name is empty");
+    const fromNorm = normalizeCsName(args.fromCsName);
+    const toNorm = normalizeCsName(toCsName);
+    const stored = await ctx.db.query("csConfigs")
+      .withIndex("by_org_normalizedName", (q) => q.eq("orgId", args.orgId).eq("normalizedName", fromNorm))
+      .unique();
+    if (!stored) throw new Error(`csConfig not found: ${args.fromCsName}`);
+    if (toNorm !== fromNorm) {
+      const clash = await ctx.db.query("csConfigs")
+        .withIndex("by_org_normalizedName", (q) => q.eq("orgId", args.orgId).eq("normalizedName", toNorm))
+        .unique();
+      if (clash) throw new Error(`CS already exists: ${toCsName}`);
+    }
+    const scalevHandlerIds = Array.from(new Set(args.scalevHandlerIds.map((id) => id.trim()).filter(Boolean)));
+    if (scalevHandlerIds.length > 20) throw new Error("Scalev handler IDs exceeds 20");
+    const activeRows = await getBoundedActiveAgentRegistry(ctx, args.orgId);
+    if (!activeRows) throw new Error("active agent registry exceeds supported Scalev mapping limit");
+    for (const handlerId of scalevHandlerIds) {
+      const collision = activeRows.find((row) => row._id !== stored._id && (row.scalevHandlerIds ?? []).includes(handlerId));
+      if (collision) throw new Error(`Scalev handler ID already assigned: ${handlerId}`);
+    }
+    const stableKey = stored.key ?? csKey(stored.csName);
+    const nameAliases = Array.from(new Set([...(stored.nameAliases ?? []), stored.csName]
+      .map((name) => name.trim()).filter((name) => name && normalizeCsName(name) !== toNorm)));
+    await ctx.db.patch(stored._id, {
+      csName: toCsName,
+      normalizedName: toNorm,
+      key: stableKey,
+      nameAliases,
+      scalevHandlerIds,
+      updatedAt: Date.now(),
+    });
+    return { csName: toCsName, stableKey, scalevHandlerIds };
+  },
 });
 
 export const applyEnrichedHandler = internalMutation({
